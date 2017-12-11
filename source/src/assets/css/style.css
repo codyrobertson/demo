@@ -1,0 +1,110 @@
+        @import ('fonts.css');
+        .thesaas-sections-split .section,
+        .thesaas-sections-split .main-content .topbar,
+        .thesaas-sections-split .main-content .site-footer {
+            margin: 30px 50px 100px;
+            box-shadow: 0 0 35px rgba(0, 0, 0, 0.1);
+            border: 1px solid #ebebeb;
+        }
+        
+        .thesaas-sections-split .main-content .topbar {
+            position: static;
+        }
+        
+        .thesaas-sections-split .main-content .topbar .topbar-toggler {
+            display: none;
+        }
+        
+        .thesaas-sections-split .section-info {
+            text-align: center;
+            text-transform: uppercase;
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 1px;
+            padding-top: 60px;
+        }
+        
+        .thesaas-sections-split.topbar-reveal .main-content .topbar-nav {
+            display: none;
+        }
+        
+        .city_img {
+            position: relative;
+            max-height: 30%;
+        }
+        
+        @media (max-width: 768px) {
+            .thesaas-sections-split .section,
+            .thesaas-sections-split .main-content .site-footer {
+                margin: 30px 0 100px;
+                box-shadow: 0 0 5px rgba(0, 0, 0, 0.1);
+            }
+            .hero_gradient {
+                background: linear-gradient(to bottom, #ffffff 0%, #ffffff 94%, #3883f6 94%, #3883f6 100%) !important;
+            }
+            .img_city {
+                margin-bottom: -180px;
+            }
+            #f2 {
+                margin-right: 0px !important;
+            }
+            .hero_gradient::before {
+                content: none;
+            }
+            #hero_content {
+                padding-top: 128px;
+            }
+            #demo {
+                font-size: 43px !important;
+            }
+        }
+        
+        .home_fill {
+            width: 1400px;
+        }
+        
+        @media (max-width: 500px) {
+            .hide-m {
+                display: none;
+            }
+        }
+        
+        @media (max-width: 1400px) {
+            .hide-l {
+                display: visible;
+            }
+        }
+        
+        .hero_gradient {
+            background-image: linear-gradient(to bottom, #ffffff 0%, #ffffff 95%, #3883f6 90%, #3883f6 100%);
+        }
+        
+        div .partner.grayscale {
+            filter: grayscale(100%);
+        }
+        
+        div>div.col-12.col-md-6.col-lg-3.team-1>small {
+            font-size: 15px;
+        }
+        
+        .intro {
+            height: 100%
+        }
+        
+        .left {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #3d231b;
+            height: 100%;
+            color: #FFF;
+        }
+        
+        .right {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #FFF;
+            height: 100%;
+            color: #3d231b;
+        }
