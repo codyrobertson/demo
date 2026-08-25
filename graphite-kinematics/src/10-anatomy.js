@@ -46,19 +46,14 @@
     // roughly the same proximodistal level as CMC2 (index), not behind it;
     // it is far radial and palmar, and rolled ~63 deg out of the palm plane
     // so the nail faces radially and a little dorsally at rest, not palmar.
-    // Measured, the nail comes out radial and a little PALMAR, and the pad
-    // ends up near enough edge-on that a palmar view of the hand shows the
-    // thumb's flank instead of its print and creases. Rolling to about -48
-    // fixes both, and the thenar now follows: its offset is resolved out of
-    // the hand's frame, so it no longer slides off the metacarpal when this
-    // angle moves. What still stops it is the four opposition presets, whose
-    // chains were authored against this set. Refitting them by inverse
-    // kinematics does hit its targets - pads in contact, each facing the
-    // other, every measurement in range - and still draws worse: pinch, ok,
-    // tripod and grip all come out cramped and lumpy where the authored
-    // poses read cleanly. That trade is a loss, so the pad stays edge-on.
-    // Whoever takes this on should plan to author the four by hand.
-    { pos: [17.5, -20.0, 10.0], fan: -42 * DEG, tilt: 20 * DEG, roll: -63 * DEG },
+    // At 63 degrees the nail came out radial and a little PALMAR, which is
+    // the wrong side of the textbook line, and it left the pad near enough
+    // edge-on that a palmar view of the hand showed the thumb's flank rather
+    // than its print and creases. Two things had to be fixed before this
+    // angle could move: the thenar's offset, which used to be tied to the
+    // bone and slid off it as soon as this rotated, and the four opposition
+    // presets, whose chains leaned on the old set.
+    { pos: [17.5, -20.0, 10.0], fan: -42 * DEG, tilt: 20 * DEG, roll: -48 * DEG },
     { pos: [20.0, -11.5, -2.5], fan: -9.5 * DEG, tilt: 4 * DEG, roll: -8 * DEG },
     { pos: [21.0, -1.5, -3.5], fan: -0.5 * DEG, tilt: 0 * DEG, roll: 0 * DEG },
     { pos: [18.5, 7.5, -1.5], fan: 8.0 * DEG, tilt: 5 * DEG, roll: 9 * DEG },
