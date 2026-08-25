@@ -170,7 +170,12 @@
         // the thumb's metacarpophalangeal, which is the joint that does the
         // same work in a ray with one fewer bone.
         const twin = (jn === 'PIP') || (isThumb && jn === 'MCP');
-        const span = lerp(1.02, 1.30, f) * (isMCP ? 1.16 : 1.0);
+        // The thumb's creases wrap further round than a finger's. Its palmar
+        // surface is broad and flat where a finger's is round, and it is the
+        // one digit whose pad never squarely faces a palmar view, so a crease
+        // cut to a finger's arc shows only its middle few degrees and the
+        // thumb comes out bare.
+        const span = lerp(1.02, 1.30, f) * (isMCP ? 1.16 : 1.0) * (isThumb ? 1.34 : 1.0);
         const bow = (isMCP ? 0.030 : 0.016) * lerp(1, 1.5, f);
         const mainTone = lerp(0.60, 1.0, Math.pow(f, 0.72)) * (isMCP ? 0.94 : 1.0);
         const sJit = () => rng.sym(0.008);
