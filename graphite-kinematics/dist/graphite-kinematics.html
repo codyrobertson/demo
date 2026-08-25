@@ -575,6 +575,23 @@
     return stops[n - 1][1];
   }
 
+  /**
+   * Closest approach between two 3-D segments. Returns the parameters on each
+   * and the distance. Degenerate cases fall back to a point-on-segment solve.
+   */
+  function closestSeg(p1, q1, p2, q2) {
+    const d1 = vsub(q1, p1), d2 = vsub(q2, p2), r = vsub(p1, p2);
+    const a = vdot(d1, d1), e = vdot(d2, d2), f = vdot(d2, r), c = vdot(d1, r), b = vdot(d1, d2);
+    let s = 0, t = 0;
+    const den = a * e - b * b;
+    if (den > 1e-9) s = clamp((b * f - c * e) / den, 0, 1);
+    t = (b * s + f) / (e || 1);
+    if (t < 0) { t = 0; s = clamp(-c / (a || 1), 0, 1); }
+    else if (t > 1) { t = 1; s = clamp((b - c) / (a || 1), 0, 1); }
+    const P1 = vmad(p1, d1, s), P2 = vmad(p2, d2, t);
+    return { s, t, P1, P2, d: vdist(P1, P2) };
+  }
+
   // -------------------------------------------------------------- 2-D polyline
   /** total length of a 2-D polyline */
   function polyLen(pts) {
@@ -645,7 +662,7 @@
     mulberry32, Rng, Noise,
     v3, vadd, vsub, vmul, vmad, vdot, vcross, vlen, vdist, vnorm, vlerp, vcopy, vframe,
     IDENT, mApply, mMul, rotX, rotY, rotZ, mOrtho,
-    crS, crV, splineAt, splineAtS, knotIndex, profile,
+    crS, crV, splineAt, splineAtS, knotIndex, profile, closestSeg,
     polyLen, resample, chaikin, pointInPoly, bounds2
   };
 })(window.GK = window.GK || {});
@@ -715,7 +732,11 @@
     wrist: { flex: 80, ext: 70, ulnar: 33, radial: 19, pron: 85, sup: 85 },
     digits: [
       { // thumb: cmc(flex,abd,opp) mcp(flex) ip(flex,ext)
-        cmc: { flex: 52, ext: 24, abd: 62, add: 8, opp: 92, rep: 12 },
+        // In-plane radial abduction is the thumb's largest excursion — it is
+        // what opens the hand flat — and it was being given less range than
+        // adduction across the palm, so a spread hand threw the thumb forward
+        // out of the plane instead of out to the side.
+        cmc: { flex: 55, ext: 30, abd: 68, add: 10, opp: 92, rep: 15 },
         mcp: { flex: 58, ext: 12, abd: 9 },
         ip: { flex: 82, ext: 24 }
       },
@@ -940,9 +961,9 @@
         // The thumb's metacarpal is not buried: it is the thenar eminence,
         // a muscular mass that swells at mid-shaft and narrows to the knuckle.
         const a = W * M.profile(
-          [[0, 1.02], [0.24, 1.34 * A.palm.thenar], [0.58, 1.36 * A.palm.thenar],
-           [0.84, 1.18], [1, bone.jw[0]]], s) * A.palm.padding;
-        return [a, a * lerp(0.72, 0.92, s)];
+          [[0, 1.05], [0.26, 1.62 * A.palm.thenar], [0.56, 1.58 * A.palm.thenar],
+           [0.82, 1.22], [1, bone.jw[0]]], s) * A.palm.padding;
+        return [a, a * lerp(0.70, 0.92, s)];
       }
       // finger metacarpals are buried in the palm; only the head reads as form
       const a = W * lerp(1.18, bone.jw[0], s);
@@ -1155,7 +1176,12 @@
         tilt += mob + (P.cmcFlex || 0);
         roll += mob * 0.45;          // ulnar metacarpals supinate as the palm cups
       }
-      let frame = mOrtho(mMul(rig.root, mMul(ABD(fan), mMul(FLEX(tilt), TWIST(roll)))));
+      const cmcAxA = rig.root[2];                       // in-plane swing
+      const afterFan = mMul(rig.root, ABD(fan));
+      const cmcAxF = vmul(afterFan[1], -1);              // out of the palm plane
+      const afterTilt = mMul(afterFan, FLEX(tilt));
+      const cmcAxT = vmul(afterTilt[0], -1);             // opposition (roll -= opp)
+      let frame = mOrtho(mMul(afterTilt, TWIST(roll)));
       let origin = vadd(rig.origin, mApply(rig.root, cmc.pos));
 
       const segs = [];
@@ -1163,14 +1189,15 @@
       for (let seg = 0; seg < nSeg; seg++) {
         if (seg > 0) {
           // ---- joint rotation ---------------------------------------------
-          let flexA = 0, abdA = 0, twistA = 0;
+          let flexA = 0, abdA = 0, twistA = 0, abdScale = 1;
           if (d === AN.THUMB) {
             if (seg === 1) { flexA = P.mcpFlex || 0; abdA = (P.mcpAbd || 0); }
             else { flexA = P.ipFlex || 0; }
           } else {
             if (seg === 1) {
               flexA = P.mcpFlex || 0;
-              abdA = (P.mcpAbd || 0) * abdGate(flexA);
+              abdScale = abdGate(flexA);
+              abdA = (P.mcpAbd || 0) * abdScale;
             } else if (seg === 2) {
               flexA = P.pipFlex || 0;
             } else {
@@ -1179,14 +1206,21 @@
             }
           }
           flexA += bone.camber[seg] || 0;
-          frame = mOrtho(mMul(frame, mMul(ABD(abdA), FLEX(flexA))));
+          // World rotation axes, so a contact solver can ask how moving this
+          // joint would move a point. ABD turns about the parent frame's
+          // dorsopalmar axis; FLEX about the abducted frame's mediolateral
+          // one, in the negative sense (FLEX carries +X toward +Z).
+          const axA = frame[2];
+          const mid = mMul(frame, ABD(abdA));
+          const axF = vmul(mid[1], -1);
+          frame = mOrtho(mMul(mid, FLEX(flexA)));
           joints.push({
             digit: d, index: seg, name: bone.jointNames[seg],
-            P: origin, frame,
+            P: origin, frame, axA, axF, abdScale,
             flex: flexA, abd: abdA, twist: twistA
           });
         } else {
-          joints.push({ digit: d, index: 0, name: 'CMC', P: origin, frame, flex: tilt, abd: fan, twist: roll });
+          joints.push({ digit: d, index: 0, name: 'CMC', P: origin, frame, flex: tilt, abd: fan, twist: roll, axA: cmcAxA, axF: cmcAxF, axT: cmcAxT });
         }
 
         const len = bone.lengths[seg];
@@ -1197,6 +1231,11 @@
           digit: d, seg, name: bone.segNames[seg],
           A: start, B: end, len, frame,
           t: frame[0], ul: frame[1], pa: frame[2], dor: vmul(frame[2], -1),
+          // The proximal phalanx begins a little *before* its joint, so its
+          // condyle plugs into the end of the palm. That condyle is the
+          // knuckle: it has to belong to the digit, or the palm's own solid
+          // swallows it and a fist comes out with no knuckles at all.
+          sMin: seg === 1 ? -0.12 : 0,
           sMax: isLast ? 1 + AN.tipExtent(A, d) : 1,
           rendered: seg > 0 || d === AN.THUMB
         });
@@ -1206,6 +1245,9 @@
       for (const j of joints) rig.joints.push(j);
     }
 
+    // how far each knuckle has risen, for the dorsal thickness field
+    A.__knuckle = [1, 2, 3, 4].map(d =>
+      clamp01(Math.max(0, rig.digits[d].joints[1].flex) / (68 * DEG)));
     buildPalm(rig);
     A.__thenarV = rig.palm.thumbV * 0.72;
     return rig;
@@ -1324,10 +1366,12 @@
         const raw = 1 + 0.105 + 0.275 * Math.exp(-Math.pow((uu - 0.34) / 0.46, 2));
         return VMID + (raw - VMID) * wristNarrow(uu);
       },
-      // The palmar boundary is scalloped: it runs proximally under each digit
-      // and rises distally between them, which is exactly the web margin.
-      uDistal: (v, palmar) => palmar === false ? 1.055
-        : 1.018 + 0.165 * (0.5 - 0.5 * Math.cos(Math.PI * 6 * clamp(v, 0, 1)))
+      // The palm's own solid stops just past the metacarpal heads. The web
+      // margin between two digits is not a property of the palm at all — it
+      // is skin spanning from one finger's flank to the next — so it is built
+      // from those flanks, in webContours, rather than guessed here.
+      uDistal: (v, palmar) => palmar === false ? 1.045
+        : 1.030 + 0.055 * (0.5 - 0.5 * Math.cos(Math.PI * 6 * clamp(v, 0, 1)))
     };
   }
 
@@ -1377,12 +1421,25 @@
     return Math.max(1.0, t) * S * pad;
   }
 
-  /** dorsal soft-tissue thickness (mm) — the back of the hand is thin */
+  /**
+   * Dorsal soft-tissue thickness (mm). The back of the hand is thin, except
+   * over the metacarpal heads — and those only rise into knuckles when the
+   * joint below them flexes. A knuckle is the head rolling out from under the
+   * extensor hood, not the phalanx: with the joint at ninety degrees the
+   * phalanx's own condyle points distally and contributes nothing dorsally,
+   * which is why a fist drawn from the phalanx alone comes out with a flat
+   * back and no knuckles at all.
+   */
   function palmThickDorsal(A, u, v) {
     const S = A.size;
+    const kn = A.__knuckle || [0, 0, 0, 0];
     let t = 4.4;
-    // knuckle prominences
-    t += 3.0 * A.knuckles.prominence * Math.exp(-Math.pow((u - 0.99) / 0.13, 2));
+    for (let i = 0; i < 4; i++) {
+      const vc = i / 3;
+      t += (1.1 + 4.4 * kn[i]) * A.knuckles.prominence *
+        Math.exp(-Math.pow((u - 0.985) / 0.145, 2)) *
+        Math.exp(-Math.pow((v - vc) / 0.155, 2));
+    }
     // the shafts of the metacarpals show through as low ridges
     t += 0.9 * Math.pow(Math.abs(Math.cos(Math.PI * 3 * v)), 3) * M.smoothstep(clamp01((v + 0.20) / 0.28));
     t *= lerp(0.46, 1.0, smoothstep(clamp01((u + 0.30) / 0.56)));
@@ -1532,9 +1589,9 @@
         let s;
         if (isLast) {
           const q = i / n;
-          s = sg.sMax * (1 - Math.pow(1 - q, 1.55));
+          s = sg.sMin + (sg.sMax - sg.sMin) * (1 - Math.pow(1 - q, 1.55));
         } else {
-          s = i / n;
+          s = sg.sMin + (1 - sg.sMin) * (i / n);
         }
         const [a1, a2] = silhouetteAlphas(rig, view, d, sg.seg, s);
         const q1 = digitSurface(rig, d, sg.seg, s, a1).P;
@@ -1569,7 +1626,7 @@
       const f = Math.abs(vdot(sg.t, view.e));
       if (f < 0.50) continue;
       const gate = M.smoothstep(clamp01((f - 0.50) / 0.26));
-      const sRing = 0.055;
+      const sRing = sg.seg === 1 ? -0.02 : 0.055;
       const ring = [];
       const N = 44;
       for (let i = 0; i <= N; i++) {
@@ -1702,43 +1759,60 @@
       if (i === NU) { betaA1 = bMin; betaB1 = bMax; }
     }
 
-    // Close the distal end along whichever arc of the cross-section faces the
-    // eye, so the knuckle margin never draws a chord through the form.
+    // The palm has no distal end to close: four digits leave through it. The
+    // only real boundary there is the web margin on the palmar face, running
+    // proximally under each digit and distally between them. Closing the
+    // dorsal half as well lays a box straight across the knuckles.
     const cap = [];
-    const uD = u1;
-    let bestBeta = 0.25, bestNear = -1e18;
-    for (let k = 0; k < 96; k++) {
-      const beta = k / 96;
-      const q = palmSurface(rig, uD, beta).P;
-      const n = view.near(q);
-      if (n > bestNear) { bestNear = n; bestBeta = beta; }
-    }
-    const wrap = (x) => ((x % 1) + 1) % 1;
-    let from = betaA1, to = betaB1;
-    // walk from A to B the way round that passes the front-most point
-    const fwd = wrap(to - from), viaF = wrap(bestBeta - from);
-    const dir = viaF <= fwd ? 1 : -1;
-    const span = dir > 0 ? fwd : 1 - fwd;
-    const N = 56;
+    const N = 46;
     for (let i = 0; i <= N; i++) {
-      const beta = wrap(from + dir * span * (i / N));
-      const palmar = beta < 0.5;
-      const v = palmSurface(rig, uD, beta).v;
-      // The solid runs a little past the metacarpal heads so a hyperextended
-      // digit still merges into it, but the drawn margin must stop at the
-      // heads: carried further it lays a chord straight across the knuckles.
-      const uEnd = Math.min(rig.palm.uDistal(v, palmar), palmar ? 1.18 : 1.012);
-      const q = palmSurface(rig, uEnd, beta).P;
+      const beta = 0.5 * (i / N);                      // palmar face only
+      const v = palmSurface(rig, u1, beta).v;
+      const q = palmSurface(rig, rig.palm.uDistal(v, true), beta).P;
       const p = view.px(q);
       cap.push([p[0], p[1], view.near(q)]);
     }
     return { sideA, sideB, cap, u0, u1 };
   }
 
+  /**
+   * The free margins of the three interdigital webs. Each is a sheet of skin
+   * spanning between two adjacent proximal phalanges, so its edge runs from a
+   * point on one digit's ulnar flank to a point on the next digit's radial
+   * flank, sagging a little proximally in between. Building it from the
+   * flanks is what keeps it registered with the fingers it belongs to: a
+   * margin invented on the palm either pokes past them or leaves a slit.
+   */
+  function webContours(rig, view) {
+    const A = rig.anatomy;
+    const out = [];
+    for (let d = 1; d < 4; d++) {
+      const sgA = rig.digits[d].segs[1], sgB = rig.digits[d + 1].segs[1];
+      const aA = 0, aB = Math.PI;                       // ulnar flank, radial flank
+      const PA = digitSurface(rig, d, 1, AN.webStart(A, d, aA), aA).P;
+      const PB = digitSurface(rig, d + 1, 1, AN.webStart(A, d + 1, aB), aB).P;
+      // sag: pull the midpoint back toward the knuckles and a touch palmar
+      const mid = M.vlerp(PA, PB, 0.5);
+      const prox = vnorm(vadd(sgA.t, sgB.t));
+      const palmar = vnorm(vadd(sgA.pa, sgB.pa));
+      const gap = M.vdist(PA, PB);
+      const M1 = vmad(vmad(mid, prox, -gap * 0.30), palmar, gap * 0.06);
+      const pts = [];
+      const ctrl = [PA, PA, M1, PB, PB];
+      for (let i = 0; i <= 26; i++) {
+        const q = M.splineAt(ctrl, 1 + (i / 26) * 2);
+        const p = view.px(q);
+        pts.push([p[0], p[1], view.near(q), rig.palm.pid, 1]);
+      }
+      out.push(pts);
+    }
+    return out;
+  }
+
   GK.rig = {
     FLEX, ABD, TWIST, IDENT, View, solve, abdGate,
     palmSpine, palmSurface, palmNormal, palmThickPalmar, palmThickDorsal, palmWrap,
-    digitSurface, digitNormal, silhouetteAlphas, digitContour, palmContour, palmSilhouette,
+    digitSurface, digitNormal, silhouetteAlphas, digitContour, palmContour, palmSilhouette, webContours,
     PALM_NU, V_KNOTS
   };
 })(window.GK = window.GK || {});
@@ -1902,7 +1976,7 @@
     },
     'spread': {
       label: 'Spread',
-      spec: { wrist: [-0.10, 0, 0], arch: 0, thumb: [-0.65, 0.85, 0.05, -0.15, -0.20], f: [[-0.15, -0.4, -0.5, 1], [-0.12, -0.4, -0.5, 1], [-0.12, -0.4, -0.5, 1], [-0.15, -0.4, -0.5, 1]] }
+      spec: { wrist: [-0.10, 0, 0], arch: 0, thumb: [-0.90, 0.22, -0.15, -0.20, -0.25], f: [[-0.15, -0.4, -0.5, 1], [-0.12, -0.4, -0.5, 1], [-0.12, -0.4, -0.5, 1], [-0.15, -0.4, -0.5, 1]] }
     },
     'fist': {
       label: 'Fist',
@@ -1952,14 +2026,14 @@
     'thumbsUp': {
       label: 'Thumb up',
       spec: {
-        wrist: [0, 0.12, -0.35], arch: 0.52, thumb: [-0.85, 0.20, -0.30, -0.18, -0.35],
+        wrist: [0, 0.12, -0.35], arch: 0.52, thumb: [-0.72, 0.34, -0.55, -0.18, -0.35],
         f: [[0.94, 0.97, 0.78, -0.10], [0.95, 0.98, 0.79, 0], [0.95, 0.98, 0.79, 0.05], [0.95, 0.98, 0.79, 0.10]]
       }
     },
     'claw': {
       label: 'Claw',
       spec: {
-        wrist: [-0.20, 0, 0], arch: 0.30, thumb: [-0.30, 0.70, 0.25, -0.10, 0.55],
+        wrist: [-0.20, 0, 0], arch: 0.30, thumb: [-0.55, 0.52, 0.15, -0.10, 0.55],
         f: [[-0.34, 0.86, 0.68, 0.55], [-0.32, 0.88, 0.70, 0.20], [-0.32, 0.88, 0.70, 0.25], [-0.34, 0.86, 0.68, 0.60]]
       }
     },
@@ -1980,28 +2054,28 @@
     'hook': {
       label: 'Hook',
       spec: {
-        wrist: [-0.10, 0, 0], arch: 0.30, thumb: [-0.40, 0.30, 0.05, -0.10, -0.20],
+        wrist: [-0.10, 0, 0], arch: 0.30, thumb: [-0.62, 0.24, 0.00, -0.10, -0.20],
         f: [[0.05, 0.94, 0.80, -0.05], [0.05, 0.96, 0.82, 0], [0.05, 0.96, 0.82, 0.05], [0.05, 0.94, 0.80, 0.10]]
       }
     },
     'wave': {
       label: 'Open, palm out',
       spec: {
-        wrist: [-0.35, 0, 1.0], arch: 0.10, thumb: [-0.50, 0.72, 0.10, -0.10, -0.15],
+        wrist: [-0.35, 0, 1.0], arch: 0.10, thumb: [-0.78, 0.30, -0.05, -0.10, -0.15],
         f: [[-0.20, -0.10, -0.20, 0.55], [-0.18, -0.10, -0.20, 0.20], [-0.18, -0.10, -0.20, 0.25], [-0.20, -0.10, -0.20, 0.60]]
       }
     },
     'countThree': {
       label: 'Three',
       spec: {
-        wrist: [0, 0, 0], arch: 0.30, thumb: [-0.55, 0.75, 0.0, -0.10, -0.20],
+        wrist: [0, 0, 0], arch: 0.30, thumb: [-0.80, 0.28, -0.10, -0.10, -0.20],
         f: [[-0.10, -0.10, -0.20, 0.70], [-0.08, -0.10, -0.20, 0.30], [0.90, 0.95, 0.72, 0.05], [0.92, 0.96, 0.74, 0.10]]
       }
     },
     'hyperextend': {
       label: 'Hyperextended',
       spec: {
-        wrist: [-0.60, 0, 0], arch: 0, thumb: [-0.90, 0.55, -0.60, -0.60, -0.90],
+        wrist: [-0.60, 0, 0], arch: 0, thumb: [-0.95, 0.30, -0.85, -0.60, -0.90],
         f: [[-0.95, -0.9, -0.95, 0.45], [-0.95, -0.9, -0.95, 0.15], [-0.95, -0.9, -0.95, 0.20], [-0.95, -0.9, -0.95, 0.50]]
       }
     },
@@ -2216,8 +2290,179 @@
     return rows;
   }
 
+
+  // =========================================================================
+  //  CONTACT
+  //  A hand is not a linkage in free space: fingers meet each other and meet
+  //  the palm, and where they meet, they stop. Without this a fist drives its
+  //  fingertips ten millimetres through its own palm and the thumb passes
+  //  clean through the index — the mechanism is right and the hand is
+  //  impossible.
+  //
+  //  Contacts are resolved by a damped Jacobian-transpose relaxation: each
+  //  penetration asks the joints proximal to it how much moving them would
+  //  separate the pair, and every joint gives a share proportional to how much
+  //  good it can do. Distal joints are weighted higher, because a hand meeting
+  //  an obstruction gives at its fingertips before it gives at its knuckles.
+  // =========================================================================
+
+  /** the adjustable degrees of freedom of one digit, proximal to distal */
+  function jointDofs(rig, pose, d) {
+    const dg = rig.digits[d];
+    const out = [];
+    const push = (seg, j, axis, w, add) => {
+      if (!axis) return;
+      out.push({ seg, axis, O: j.P, w, add });
+    };
+    if (d === 0) {
+      const c = dg.joints[0], m = dg.joints[1], i = dg.joints[2];
+      push(0, c, c.axA, 0.55, x => pose.digits[0].cmcRad += x);
+      push(0, c, c.axF, 0.55, x => pose.digits[0].cmcAbd += x);
+      push(0, c, c.axT, 0.35, x => pose.digits[0].cmcOpp -= x);
+      push(1, m, m.axF, 1.5, x => pose.digits[0].mcpFlex += x);
+      push(2, i, i.axF, 2.4, x => pose.digits[0].ipFlex += x);
+    } else {
+      const m = dg.joints[1], pp = dg.joints[2], dd = dg.joints[3];
+      // Splay is the stiffest thing a hand has: fingers pressed together stay
+      // together and give at the joints instead. Letting abduction take the
+      // correction turns every closed pose into a splayed one.
+      push(1, m, m.axA, 0.035, x => pose.digits[d].mcpAbd += x / (m.abdScale || 1));
+      push(1, m, m.axF, 0.55, x => pose.digits[d].mcpFlex += x);
+      push(2, pp, pp.axF, 1.5, x => pose.digits[d].pipFlex += x);
+      push(3, dd, dd.axF, 2.6, x => pose.digits[d].dipFlex += x);
+    }
+    return out;
+  }
+
+  /** coarse palmar surface samples: spine point, outward normal, thickness */
+  function palmSamples(rig) {
+    const R = GK.rig, A = rig.anatomy;
+    const out = [];
+    for (let i = 0; i <= 13; i++) {
+      const u = lerp(-0.02, 1.01, i / 13);
+      const lo = rig.palm.vLo(u), hi = rig.palm.vHi(u);
+      for (let j = 0; j <= 9; j++) {
+        const v = lerp(lo + 0.06, hi - 0.06, j / 9);
+        const sp = R.palmSpine(rig, u, v);
+        // the palm's pad compresses under a fingertip; it is not a wall
+        out.push({ P: sp.P, n: sp.n, t: R.palmThickPalmar(A, u, v) * 0.82 });
+      }
+    }
+    return out;
+  }
+
+  function gatherContacts(A, rig, tol) {
+    const AN2 = GK.anatomy;
+    const segs = [];
+    for (let d = 0; d < 5; d++) {
+      for (const sg of rig.digits[d].segs) {
+        if (!sg.rendered) continue;
+        const r = (AN2.segmentProfile(A, d, sg.seg, 0.2)[0] + AN2.segmentProfile(A, d, sg.seg, 0.8)[0]) * 0.5;
+        segs.push({ d, seg: sg.seg, A: sg.A, B: sg.B, r, sg });
+      }
+    }
+    const cs = [];
+    // digit against digit
+    for (let i = 0; i < segs.length; i++) {
+      for (let j = i + 1; j < segs.length; j++) {
+        const a = segs[i], b = segs[j];
+        if (a.d === b.d && Math.abs(a.seg - b.seg) <= 1) continue;
+        if (a.d === 0 && b.d === 0) continue;
+        const cc = M.closestSeg(a.A, a.B, b.A, b.B);
+        // soft tissue may flatten a little where two digits press together
+        const sameRow = a.d > 0 && b.d > 0;
+        const pen = (a.r + b.r) * (sameRow ? 0.76 : 0.84) - cc.d;
+        if (pen <= tol) continue;
+        const n = M.vnorm(M.vsub(cc.P1, cc.P2));
+        if (!isFinite(n[0])) continue;
+        cs.push({ d: a.d, seg: a.seg, P: cc.P1, n, depth: pen * 0.5 });
+        cs.push({ d: b.d, seg: b.seg, P: cc.P2, n: M.vmul(n, -1), depth: pen * 0.5 });
+      }
+    }
+    // digit against palm
+    const ps = palmSamples(rig);
+    for (let d = 0; d < 5; d++) {
+      const dg = rig.digits[d];
+      const n0 = dg.segs.length;
+      for (const sg of dg.segs) {
+        if (!sg.rendered || sg.seg < (d === 0 ? 1 : 2)) continue;
+        const isLast = sg.seg === n0 - 1;
+        const sList = isLast ? [0.35, 0.75, 1.0, sg.sMax * 0.94] : [0.4, 0.85];
+        for (const sv of sList) {
+          const C = M.vmad(sg.A, sg.t, sg.len * sv);
+          const r = AN2.segmentProfile(A, d, sg.seg, Math.min(sv, 1))[1];
+          let best = null;
+          for (const q of ps) {
+            const off = M.vdot(M.vsub(C, q.P), q.n);
+            if (off < -6 || off > q.t + r) continue;
+            const lat = M.vlen(M.vsub(M.vsub(C, q.P), M.vmul(q.n, off)));
+            if (lat > 11) continue;
+            const pen = q.t + r - off;
+            if (pen > tol && (!best || pen > best.depth)) best = { d, seg: sg.seg, P: C, n: q.n, depth: pen };
+          }
+          if (best) cs.push(best);
+        }
+      }
+    }
+    return cs;
+  }
+
+  function applyContacts(A, pose, rig, cs, lambda) {
+    for (const c of cs) {
+      const dofs = jointDofs(rig, pose, c.d).filter(x => x.seg <= c.seg);
+      if (!dofs.length) continue;
+      const g = new Array(dofs.length);
+      let sum = 0;
+      for (let i = 0; i < dofs.length; i++) {
+        const x = dofs[i];
+        g[i] = M.vdot(M.vcross(x.axis, M.vsub(c.P, x.O)), c.n);
+        sum += x.w * g[i] * g[i];
+      }
+      if (sum < 1e-7) continue;
+      const k = lambda * c.depth / sum;
+      for (let i = 0; i < dofs.length; i++) dofs[i].add(k * dofs[i].w * g[i]);
+    }
+  }
+
+  /**
+   * Settle a pose against its own contacts. Returns a corrected copy; the
+   * deepest remaining penetration is reported on `.contactDepth`.
+   */
+  function resolveContacts(A, pose, opts) {
+    opts = opts || {};
+    const iters = opts.iters === undefined ? 20 : opts.iters;
+    const tol = opts.tol === undefined ? 0.35 : opts.tol;
+    const lambda = opts.lambda === undefined ? 0.72 : opts.lambda;
+    const kappa = opts.kappa === undefined ? 0.065 : opts.kappa;
+    const p0 = JSON.parse(JSON.stringify(pose));
+    let p = JSON.parse(JSON.stringify(pose));
+    let deepest = 0;
+    for (let it = 0; it < iters; it++) {
+      const rig = GK.rig.solve(A, p);
+      const cs = gatherContacts(A, rig, tol);
+      deepest = 0;
+      for (const c of cs) deepest = Math.max(deepest, c.depth);
+      if (!cs.length) break;
+      applyContacts(A, p, rig, cs, lambda);
+      // Every joint is sprung toward the pose that was asked for. The hand
+      // settles where contact balances intent, which is what a hand does;
+      // letting contact win outright turns a fist into a splayed claw.
+      for (let d = 0; d < 5; d++) {
+        const a = p.digits[d], b = p0.digits[d];
+        for (const k in a) if (typeof a[k] === 'number') a[k] += (b[k] - a[k]) * kappa;
+      }
+      p = clampPose(A, p);
+    }
+    p.contactDepth = deepest;
+    if (pose.active) p.active = pose.active;
+    if (pose.intent) p.intent = pose.intent;
+    if (pose.spec) p.spec = pose.spec;
+    return p;
+  }
+
   GK.pose = {
     blank, mk, clampPose, specOf, preset, PRESETS, PRESET_KEYS, couple, generate,
+    resolveContacts, gatherContacts, jointDofs,
     lerpPose, dofList, romTour, breathe, readout, nr
   };
 })(window.GK = window.GK || {});
@@ -2565,7 +2810,7 @@
     nailFine: { tone: 0.30, weight: 0.58, passes: 1, taper: 0.70, wobble: 0.70, jitter: 0.26, layer: 'nail' },
     print: { tone: 0.20, weight: 0.46, passes: 1, taper: 0.55, wobble: 0.55, jitter: 0.18, layer: 'print' },
     palmRidge: { tone: 0.13, weight: 0.44, passes: 1, taper: 0.60, wobble: 0.70, jitter: 0.20, layer: 'ridge' },
-    palmCrease: { tone: 0.70, weight: 0.94, passes: 2, taper: 0.52, wobble: 0.95, jitter: 0.50, layer: 'palmcrease' },
+    palmCrease: { tone: 0.80, weight: 0.98, passes: 2, taper: 0.52, wobble: 0.95, jitter: 0.50, layer: 'palmcrease' },
     palmMinor: { tone: 0.30, weight: 0.62, passes: 1, taper: 0.78, wobble: 1.10, jitter: 0.40, layer: 'palmcrease' },
     tendon: { tone: 0.28, weight: 0.72, passes: 1, taper: 0.88, wobble: 0.90, jitter: 0.45, layer: 'tendon' },
     vein: { tone: 0.22, weight: 0.58, passes: 1, taper: 0.86, wobble: 0.85, jitter: 0.35, layer: 'vein' },
@@ -3276,7 +3521,7 @@
       if (ln.length < 5) continue;
       out.push({
         on: 'palm', pts: palmCurve(rig, ln, true, -0.05),
-        style: st(S.palmRidge, { tone: 0.58 + 0.38 * rng.f(), phase: nextPhase() })
+        style: st(S.palmRidge, { tone: 0.40 + 0.28 * rng.f(), phase: nextPhase() })
       });
     }
   }
@@ -3849,7 +4094,7 @@
         const NS = sg.seg === dg.segs.length - 1 ? 11 : 8;
         let prev = null;
         for (let i = 0; i <= NS; i++) {
-          const s = (i / NS) * sg.sMax;
+          const s = sg.sMin + (sg.sMax - sg.sMin) * (i / NS);
           const ring = [];
           for (let k = 0; k < NA; k++) {
             const a = (k / NA) * TAU;
@@ -4005,6 +4250,8 @@
     fold: 0.12, crease: 0.09, palmcrease: 0.12, nail: 0.10
   };
 
+  const state_noop = false;
+
   const DEFAULT_LAYERS = {
     contour: true, crease: true, fold: true, nail: true, print: true,
     palmcrease: true, ridge: true, vein: true, tendon: true, hair: true,
@@ -4027,9 +4274,24 @@
       return this._an;
     }
 
+    /**
+     * Settle a pose against its own contacts, memoised so the draft pass and
+     * the plate that follows it share one solve.
+     */
+    settle(A, pose, iters) {
+      if (state_noop) return pose;
+      const key = this._anSeed + '|' + iters + '|' + JSON.stringify(pose);
+      if (this._ck === key) return this._cp;
+      const out = GK.pose.resolveContacts(A, pose, { iters });
+      this._ck = key; this._cp = out;
+      return out;
+    }
+
     build(state) {
       const A = this.anatomyFor(state.seed);
-      const rig = RG.solve(A, state.pose);
+      const pose = state.contacts === false ? state.pose
+        : this.settle(A, state.pose, (state.quality || 0) >= 1 ? 20 : 10);
+      const rig = RG.solve(A, pose);
       const V = state.view;
       const view = new RG.View(V.az, V.el, V.roll || 0, 1, [0, 0, 0], 0, 0);
 
@@ -4209,7 +4471,7 @@
           });
         }
         if (ghost > 0.01 && !opts.noGhost) {
-          for (const r of runs(tagged, 0.08, 4)) {
+          for (const r of runs(tagged, 0.08, 4, opts.maxJump)) {
             if (M.polyLen(r.pts) < 22) continue;
             g.stroke(r.pts, {
               grade, tone: style.tone * toneScale * ghost * 0.9, weight: style.weight * 0.85,
@@ -4228,7 +4490,7 @@
               const dl = Math.hypot(dx, dy) || 1;
               return [p[0] - dy / dl * off, p[1] + dx / dl * off, p[2], p[3], p[4], p[5], p[6]];
             });
-            for (const r of runs(shifted, 0.30, 2)) {
+            for (const r of runs(shifted, 0.30, 2, opts.maxJump)) {
               // A hand searches alongside a line it is committing to, not
               // beside every twelve-pixel fragment a busy pose leaves behind.
               if (M.polyLen(r.pts) < 46) continue;
@@ -4242,20 +4504,23 @@
         }
       };
 
+      // A rail that leaps across the picture is not one line: a digit turning
+      // through the view hands its silhouette from one flank to the other.
+      const jumpD = Math.max(12, this.w * 0.030);
       for (let d = 0; d < 5; d++) {
         const c = RG.digitContour(rig, view, d, { steps: 12 });
-        emit(c.right, F.st(F.S.contour, { phase: d * 37 + 1 }));
-        emit(c.left, F.st(F.S.contour, { phase: d * 37 + 3 }));
+        emit(c.right, F.st(F.S.contour, { phase: d * 37 + 1 }), { maxJump: jumpD });
+        emit(c.left, F.st(F.S.contour, { phase: d * 37 + 3 }), { maxJump: jumpD });
         // A ring or a tip cap is only an outline where the tube points away
         // from the eye. Pointing toward it, the near half of the same tube
         // covers the far half — and identity exclusion, which is what keeps a
         // silhouette from occluding itself, would otherwise let it through.
         if (c.cap.length) emit(c.cap, F.st(F.S.contour, { phase: d * 37 + 2 }),
-          { noSearch: true, selfTest: true });
+          { noSearch: true, selfTest: true, maxJump: jumpD });
         for (let ri = 0; ri < c.rings.length; ri++) {
           // where a digit foreshortens, its knuckle ring IS the outline
           emit(c.rings[ri], F.st(F.S.contour, { tone: 0.95, phase: d * 37 + 40 + ri }),
-            { noSearch: true, noGhost: true, selfTest: true });
+            { noSearch: true, noGhost: true, selfTest: true, maxJump: jumpD });
         }
       }
 
@@ -4269,9 +4534,14 @@
       const jump = Math.max(14, this.w * 0.035);
       emit(tagPalm(sil.sideA), F.st(F.S.contour, { tone: 0.90, phase: 200 }), { maxJump: jump, selfTest: true });
       emit(tagPalm(sil.sideB), F.st(F.S.contour, { tone: 0.90, phase: 201 }), { maxJump: jump, selfTest: true });
-      // the knuckle margin is a transition, not an edge
       emit(tagPalm(sil.cap, false),
-        F.st(F.S.contourSoft, { tone: 0.16, taper: 0.90, phase: 202 }), { noSearch: true, selfTest: true });
+        F.st(F.S.contourSoft, { tone: 0.30, taper: 0.86, phase: 202 }), { noSearch: true, selfTest: true });
+      // the free margins of the webs, spanning finger to finger
+      const webs = RG.webContours(rig, view);
+      for (let i = 0; i < webs.length; i++) {
+        emit(webs[i], F.st(F.S.contour, { tone: 0.72, taper: 0.68, phase: 210 + i }),
+          { noSearch: true, maxJump: jump });
+      }
     }
 
     resolve(state) {
@@ -4321,7 +4591,7 @@
       grade: 3, tone: 1, wobble: 1, ghost: 0.14, search: 0.35,
       paper: [244, 241, 232], ink: [26, 25, 23]
     },
-    detail: { print: 1, ridge: 0.8, lattice: 0.55, hair: 1, vein: 1 },
+    detail: { print: 1, ridge: 0.5, lattice: 0.55, hair: 1, vein: 1 },
     layers: Object.assign({}, RE.DEFAULT_LAYERS, { label: false })
   });
 
@@ -4679,7 +4949,7 @@
 
     const dt = $('detail-sliders'); dt.innerHTML = '';
     slider(dt, 'print', 'Fingerprints', 0, 2, 0.01, 1, fpc, v => params.detail.print = v);
-    slider(dt, 'ridge', 'Palm ridges', 0, 2, 0.01, 0.8, fpc, v => params.detail.ridge = v);
+    slider(dt, 'ridge', 'Palm ridges', 0, 2, 0.01, 0.5, fpc, v => params.detail.ridge = v);
     slider(dt, 'lattice', 'Skin lattice', 0, 2, 0.01, 0.55, fpc, v => params.detail.lattice = v);
     slider(dt, 'hair', 'Hair', 0, 2, 0.01, 1, fpc, v => params.detail.hair = v);
     slider(dt, 'vein', 'Veins', 0, 2, 0.01, 1, fpc, v => params.detail.vein = v);

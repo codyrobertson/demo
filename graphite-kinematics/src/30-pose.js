@@ -155,7 +155,7 @@
     },
     'spread': {
       label: 'Spread',
-      spec: { wrist: [-0.10, 0, 0], arch: 0, thumb: [-0.65, 0.85, 0.05, -0.15, -0.20], f: [[-0.15, -0.4, -0.5, 1], [-0.12, -0.4, -0.5, 1], [-0.12, -0.4, -0.5, 1], [-0.15, -0.4, -0.5, 1]] }
+      spec: { wrist: [-0.10, 0, 0], arch: 0, thumb: [-0.90, 0.22, -0.15, -0.20, -0.25], f: [[-0.15, -0.4, -0.5, 1], [-0.12, -0.4, -0.5, 1], [-0.12, -0.4, -0.5, 1], [-0.15, -0.4, -0.5, 1]] }
     },
     'fist': {
       label: 'Fist',
@@ -205,14 +205,14 @@
     'thumbsUp': {
       label: 'Thumb up',
       spec: {
-        wrist: [0, 0.12, -0.35], arch: 0.52, thumb: [-0.85, 0.20, -0.30, -0.18, -0.35],
+        wrist: [0, 0.12, -0.35], arch: 0.52, thumb: [-0.72, 0.34, -0.55, -0.18, -0.35],
         f: [[0.94, 0.97, 0.78, -0.10], [0.95, 0.98, 0.79, 0], [0.95, 0.98, 0.79, 0.05], [0.95, 0.98, 0.79, 0.10]]
       }
     },
     'claw': {
       label: 'Claw',
       spec: {
-        wrist: [-0.20, 0, 0], arch: 0.30, thumb: [-0.30, 0.70, 0.25, -0.10, 0.55],
+        wrist: [-0.20, 0, 0], arch: 0.30, thumb: [-0.55, 0.52, 0.15, -0.10, 0.55],
         f: [[-0.34, 0.86, 0.68, 0.55], [-0.32, 0.88, 0.70, 0.20], [-0.32, 0.88, 0.70, 0.25], [-0.34, 0.86, 0.68, 0.60]]
       }
     },
@@ -233,28 +233,28 @@
     'hook': {
       label: 'Hook',
       spec: {
-        wrist: [-0.10, 0, 0], arch: 0.30, thumb: [-0.40, 0.30, 0.05, -0.10, -0.20],
+        wrist: [-0.10, 0, 0], arch: 0.30, thumb: [-0.62, 0.24, 0.00, -0.10, -0.20],
         f: [[0.05, 0.94, 0.80, -0.05], [0.05, 0.96, 0.82, 0], [0.05, 0.96, 0.82, 0.05], [0.05, 0.94, 0.80, 0.10]]
       }
     },
     'wave': {
       label: 'Open, palm out',
       spec: {
-        wrist: [-0.35, 0, 1.0], arch: 0.10, thumb: [-0.50, 0.72, 0.10, -0.10, -0.15],
+        wrist: [-0.35, 0, 1.0], arch: 0.10, thumb: [-0.78, 0.30, -0.05, -0.10, -0.15],
         f: [[-0.20, -0.10, -0.20, 0.55], [-0.18, -0.10, -0.20, 0.20], [-0.18, -0.10, -0.20, 0.25], [-0.20, -0.10, -0.20, 0.60]]
       }
     },
     'countThree': {
       label: 'Three',
       spec: {
-        wrist: [0, 0, 0], arch: 0.30, thumb: [-0.55, 0.75, 0.0, -0.10, -0.20],
+        wrist: [0, 0, 0], arch: 0.30, thumb: [-0.80, 0.28, -0.10, -0.10, -0.20],
         f: [[-0.10, -0.10, -0.20, 0.70], [-0.08, -0.10, -0.20, 0.30], [0.90, 0.95, 0.72, 0.05], [0.92, 0.96, 0.74, 0.10]]
       }
     },
     'hyperextend': {
       label: 'Hyperextended',
       spec: {
-        wrist: [-0.60, 0, 0], arch: 0, thumb: [-0.90, 0.55, -0.60, -0.60, -0.90],
+        wrist: [-0.60, 0, 0], arch: 0, thumb: [-0.95, 0.30, -0.85, -0.60, -0.90],
         f: [[-0.95, -0.9, -0.95, 0.45], [-0.95, -0.9, -0.95, 0.15], [-0.95, -0.9, -0.95, 0.20], [-0.95, -0.9, -0.95, 0.50]]
       }
     },
@@ -469,8 +469,179 @@
     return rows;
   }
 
+
+  // =========================================================================
+  //  CONTACT
+  //  A hand is not a linkage in free space: fingers meet each other and meet
+  //  the palm, and where they meet, they stop. Without this a fist drives its
+  //  fingertips ten millimetres through its own palm and the thumb passes
+  //  clean through the index — the mechanism is right and the hand is
+  //  impossible.
+  //
+  //  Contacts are resolved by a damped Jacobian-transpose relaxation: each
+  //  penetration asks the joints proximal to it how much moving them would
+  //  separate the pair, and every joint gives a share proportional to how much
+  //  good it can do. Distal joints are weighted higher, because a hand meeting
+  //  an obstruction gives at its fingertips before it gives at its knuckles.
+  // =========================================================================
+
+  /** the adjustable degrees of freedom of one digit, proximal to distal */
+  function jointDofs(rig, pose, d) {
+    const dg = rig.digits[d];
+    const out = [];
+    const push = (seg, j, axis, w, add) => {
+      if (!axis) return;
+      out.push({ seg, axis, O: j.P, w, add });
+    };
+    if (d === 0) {
+      const c = dg.joints[0], m = dg.joints[1], i = dg.joints[2];
+      push(0, c, c.axA, 0.55, x => pose.digits[0].cmcRad += x);
+      push(0, c, c.axF, 0.55, x => pose.digits[0].cmcAbd += x);
+      push(0, c, c.axT, 0.35, x => pose.digits[0].cmcOpp -= x);
+      push(1, m, m.axF, 1.5, x => pose.digits[0].mcpFlex += x);
+      push(2, i, i.axF, 2.4, x => pose.digits[0].ipFlex += x);
+    } else {
+      const m = dg.joints[1], pp = dg.joints[2], dd = dg.joints[3];
+      // Splay is the stiffest thing a hand has: fingers pressed together stay
+      // together and give at the joints instead. Letting abduction take the
+      // correction turns every closed pose into a splayed one.
+      push(1, m, m.axA, 0.035, x => pose.digits[d].mcpAbd += x / (m.abdScale || 1));
+      push(1, m, m.axF, 0.55, x => pose.digits[d].mcpFlex += x);
+      push(2, pp, pp.axF, 1.5, x => pose.digits[d].pipFlex += x);
+      push(3, dd, dd.axF, 2.6, x => pose.digits[d].dipFlex += x);
+    }
+    return out;
+  }
+
+  /** coarse palmar surface samples: spine point, outward normal, thickness */
+  function palmSamples(rig) {
+    const R = GK.rig, A = rig.anatomy;
+    const out = [];
+    for (let i = 0; i <= 13; i++) {
+      const u = lerp(-0.02, 1.01, i / 13);
+      const lo = rig.palm.vLo(u), hi = rig.palm.vHi(u);
+      for (let j = 0; j <= 9; j++) {
+        const v = lerp(lo + 0.06, hi - 0.06, j / 9);
+        const sp = R.palmSpine(rig, u, v);
+        // the palm's pad compresses under a fingertip; it is not a wall
+        out.push({ P: sp.P, n: sp.n, t: R.palmThickPalmar(A, u, v) * 0.82 });
+      }
+    }
+    return out;
+  }
+
+  function gatherContacts(A, rig, tol) {
+    const AN2 = GK.anatomy;
+    const segs = [];
+    for (let d = 0; d < 5; d++) {
+      for (const sg of rig.digits[d].segs) {
+        if (!sg.rendered) continue;
+        const r = (AN2.segmentProfile(A, d, sg.seg, 0.2)[0] + AN2.segmentProfile(A, d, sg.seg, 0.8)[0]) * 0.5;
+        segs.push({ d, seg: sg.seg, A: sg.A, B: sg.B, r, sg });
+      }
+    }
+    const cs = [];
+    // digit against digit
+    for (let i = 0; i < segs.length; i++) {
+      for (let j = i + 1; j < segs.length; j++) {
+        const a = segs[i], b = segs[j];
+        if (a.d === b.d && Math.abs(a.seg - b.seg) <= 1) continue;
+        if (a.d === 0 && b.d === 0) continue;
+        const cc = M.closestSeg(a.A, a.B, b.A, b.B);
+        // soft tissue may flatten a little where two digits press together
+        const sameRow = a.d > 0 && b.d > 0;
+        const pen = (a.r + b.r) * (sameRow ? 0.76 : 0.84) - cc.d;
+        if (pen <= tol) continue;
+        const n = M.vnorm(M.vsub(cc.P1, cc.P2));
+        if (!isFinite(n[0])) continue;
+        cs.push({ d: a.d, seg: a.seg, P: cc.P1, n, depth: pen * 0.5 });
+        cs.push({ d: b.d, seg: b.seg, P: cc.P2, n: M.vmul(n, -1), depth: pen * 0.5 });
+      }
+    }
+    // digit against palm
+    const ps = palmSamples(rig);
+    for (let d = 0; d < 5; d++) {
+      const dg = rig.digits[d];
+      const n0 = dg.segs.length;
+      for (const sg of dg.segs) {
+        if (!sg.rendered || sg.seg < (d === 0 ? 1 : 2)) continue;
+        const isLast = sg.seg === n0 - 1;
+        const sList = isLast ? [0.35, 0.75, 1.0, sg.sMax * 0.94] : [0.4, 0.85];
+        for (const sv of sList) {
+          const C = M.vmad(sg.A, sg.t, sg.len * sv);
+          const r = AN2.segmentProfile(A, d, sg.seg, Math.min(sv, 1))[1];
+          let best = null;
+          for (const q of ps) {
+            const off = M.vdot(M.vsub(C, q.P), q.n);
+            if (off < -6 || off > q.t + r) continue;
+            const lat = M.vlen(M.vsub(M.vsub(C, q.P), M.vmul(q.n, off)));
+            if (lat > 11) continue;
+            const pen = q.t + r - off;
+            if (pen > tol && (!best || pen > best.depth)) best = { d, seg: sg.seg, P: C, n: q.n, depth: pen };
+          }
+          if (best) cs.push(best);
+        }
+      }
+    }
+    return cs;
+  }
+
+  function applyContacts(A, pose, rig, cs, lambda) {
+    for (const c of cs) {
+      const dofs = jointDofs(rig, pose, c.d).filter(x => x.seg <= c.seg);
+      if (!dofs.length) continue;
+      const g = new Array(dofs.length);
+      let sum = 0;
+      for (let i = 0; i < dofs.length; i++) {
+        const x = dofs[i];
+        g[i] = M.vdot(M.vcross(x.axis, M.vsub(c.P, x.O)), c.n);
+        sum += x.w * g[i] * g[i];
+      }
+      if (sum < 1e-7) continue;
+      const k = lambda * c.depth / sum;
+      for (let i = 0; i < dofs.length; i++) dofs[i].add(k * dofs[i].w * g[i]);
+    }
+  }
+
+  /**
+   * Settle a pose against its own contacts. Returns a corrected copy; the
+   * deepest remaining penetration is reported on `.contactDepth`.
+   */
+  function resolveContacts(A, pose, opts) {
+    opts = opts || {};
+    const iters = opts.iters === undefined ? 20 : opts.iters;
+    const tol = opts.tol === undefined ? 0.35 : opts.tol;
+    const lambda = opts.lambda === undefined ? 0.72 : opts.lambda;
+    const kappa = opts.kappa === undefined ? 0.065 : opts.kappa;
+    const p0 = JSON.parse(JSON.stringify(pose));
+    let p = JSON.parse(JSON.stringify(pose));
+    let deepest = 0;
+    for (let it = 0; it < iters; it++) {
+      const rig = GK.rig.solve(A, p);
+      const cs = gatherContacts(A, rig, tol);
+      deepest = 0;
+      for (const c of cs) deepest = Math.max(deepest, c.depth);
+      if (!cs.length) break;
+      applyContacts(A, p, rig, cs, lambda);
+      // Every joint is sprung toward the pose that was asked for. The hand
+      // settles where contact balances intent, which is what a hand does;
+      // letting contact win outright turns a fist into a splayed claw.
+      for (let d = 0; d < 5; d++) {
+        const a = p.digits[d], b = p0.digits[d];
+        for (const k in a) if (typeof a[k] === 'number') a[k] += (b[k] - a[k]) * kappa;
+      }
+      p = clampPose(A, p);
+    }
+    p.contactDepth = deepest;
+    if (pose.active) p.active = pose.active;
+    if (pose.intent) p.intent = pose.intent;
+    if (pose.spec) p.spec = pose.spec;
+    return p;
+  }
+
   GK.pose = {
     blank, mk, clampPose, specOf, preset, PRESETS, PRESET_KEYS, couple, generate,
+    resolveContacts, gatherContacts, jointDofs,
     lerpPose, dofList, romTour, breathe, readout, nr
   };
 })(window.GK = window.GK || {});

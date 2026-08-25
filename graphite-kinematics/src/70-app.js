@@ -26,7 +26,7 @@
       grade: 3, tone: 1, wobble: 1, ghost: 0.14, search: 0.35,
       paper: [244, 241, 232], ink: [26, 25, 23]
     },
-    detail: { print: 1, ridge: 0.8, lattice: 0.55, hair: 1, vein: 1 },
+    detail: { print: 1, ridge: 0.5, lattice: 0.55, hair: 1, vein: 1 },
     layers: Object.assign({}, RE.DEFAULT_LAYERS, { label: false })
   });
 
@@ -384,7 +384,7 @@
 
     const dt = $('detail-sliders'); dt.innerHTML = '';
     slider(dt, 'print', 'Fingerprints', 0, 2, 0.01, 1, fpc, v => params.detail.print = v);
-    slider(dt, 'ridge', 'Palm ridges', 0, 2, 0.01, 0.8, fpc, v => params.detail.ridge = v);
+    slider(dt, 'ridge', 'Palm ridges', 0, 2, 0.01, 0.5, fpc, v => params.detail.ridge = v);
     slider(dt, 'lattice', 'Skin lattice', 0, 2, 0.01, 0.55, fpc, v => params.detail.lattice = v);
     slider(dt, 'hair', 'Hair', 0, 2, 0.01, 1, fpc, v => params.detail.hair = v);
     slider(dt, 'vein', 'Veins', 0, 2, 0.01, 1, fpc, v => params.detail.vein = v);

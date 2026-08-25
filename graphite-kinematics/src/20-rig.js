@@ -143,7 +143,12 @@
         tilt += mob + (P.cmcFlex || 0);
         roll += mob * 0.45;          // ulnar metacarpals supinate as the palm cups
       }
-      let frame = mOrtho(mMul(rig.root, mMul(ABD(fan), mMul(FLEX(tilt), TWIST(roll)))));
+      const cmcAxA = rig.root[2];                       // in-plane swing
+      const afterFan = mMul(rig.root, ABD(fan));
+      const cmcAxF = vmul(afterFan[1], -1);              // out of the palm plane
+      const afterTilt = mMul(afterFan, FLEX(tilt));
+      const cmcAxT = vmul(afterTilt[0], -1);             // opposition (roll -= opp)
+      let frame = mOrtho(mMul(afterTilt, TWIST(roll)));
       let origin = vadd(rig.origin, mApply(rig.root, cmc.pos));
 
       const segs = [];
@@ -151,14 +156,15 @@
       for (let seg = 0; seg < nSeg; seg++) {
         if (seg > 0) {
           // ---- joint rotation ---------------------------------------------
-          let flexA = 0, abdA = 0, twistA = 0;
+          let flexA = 0, abdA = 0, twistA = 0, abdScale = 1;
           if (d === AN.THUMB) {
             if (seg === 1) { flexA = P.mcpFlex || 0; abdA = (P.mcpAbd || 0); }
             else { flexA = P.ipFlex || 0; }
           } else {
             if (seg === 1) {
               flexA = P.mcpFlex || 0;
-              abdA = (P.mcpAbd || 0) * abdGate(flexA);
+              abdScale = abdGate(flexA);
+              abdA = (P.mcpAbd || 0) * abdScale;
             } else if (seg === 2) {
               flexA = P.pipFlex || 0;
             } else {
@@ -167,14 +173,21 @@
             }
           }
           flexA += bone.camber[seg] || 0;
-          frame = mOrtho(mMul(frame, mMul(ABD(abdA), FLEX(flexA))));
+          // World rotation axes, so a contact solver can ask how moving this
+          // joint would move a point. ABD turns about the parent frame's
+          // dorsopalmar axis; FLEX about the abducted frame's mediolateral
+          // one, in the negative sense (FLEX carries +X toward +Z).
+          const axA = frame[2];
+          const mid = mMul(frame, ABD(abdA));
+          const axF = vmul(mid[1], -1);
+          frame = mOrtho(mMul(mid, FLEX(flexA)));
           joints.push({
             digit: d, index: seg, name: bone.jointNames[seg],
-            P: origin, frame,
+            P: origin, frame, axA, axF, abdScale,
             flex: flexA, abd: abdA, twist: twistA
           });
         } else {
-          joints.push({ digit: d, index: 0, name: 'CMC', P: origin, frame, flex: tilt, abd: fan, twist: roll });
+          joints.push({ digit: d, index: 0, name: 'CMC', P: origin, frame, flex: tilt, abd: fan, twist: roll, axA: cmcAxA, axF: cmcAxF, axT: cmcAxT });
         }
 
         const len = bone.lengths[seg];
@@ -185,6 +198,11 @@
           digit: d, seg, name: bone.segNames[seg],
           A: start, B: end, len, frame,
           t: frame[0], ul: frame[1], pa: frame[2], dor: vmul(frame[2], -1),
+          // The proximal phalanx begins a little *before* its joint, so its
+          // condyle plugs into the end of the palm. That condyle is the
+          // knuckle: it has to belong to the digit, or the palm's own solid
+          // swallows it and a fist comes out with no knuckles at all.
+          sMin: seg === 1 ? -0.12 : 0,
           sMax: isLast ? 1 + AN.tipExtent(A, d) : 1,
           rendered: seg > 0 || d === AN.THUMB
         });
@@ -194,6 +212,9 @@
       for (const j of joints) rig.joints.push(j);
     }
 
+    // how far each knuckle has risen, for the dorsal thickness field
+    A.__knuckle = [1, 2, 3, 4].map(d =>
+      clamp01(Math.max(0, rig.digits[d].joints[1].flex) / (68 * DEG)));
     buildPalm(rig);
     A.__thenarV = rig.palm.thumbV * 0.72;
     return rig;
@@ -312,10 +333,12 @@
         const raw = 1 + 0.105 + 0.275 * Math.exp(-Math.pow((uu - 0.34) / 0.46, 2));
         return VMID + (raw - VMID) * wristNarrow(uu);
       },
-      // The palmar boundary is scalloped: it runs proximally under each digit
-      // and rises distally between them, which is exactly the web margin.
-      uDistal: (v, palmar) => palmar === false ? 1.055
-        : 1.018 + 0.165 * (0.5 - 0.5 * Math.cos(Math.PI * 6 * clamp(v, 0, 1)))
+      // The palm's own solid stops just past the metacarpal heads. The web
+      // margin between two digits is not a property of the palm at all — it
+      // is skin spanning from one finger's flank to the next — so it is built
+      // from those flanks, in webContours, rather than guessed here.
+      uDistal: (v, palmar) => palmar === false ? 1.045
+        : 1.030 + 0.055 * (0.5 - 0.5 * Math.cos(Math.PI * 6 * clamp(v, 0, 1)))
     };
   }
 
@@ -365,12 +388,25 @@
     return Math.max(1.0, t) * S * pad;
   }
 
-  /** dorsal soft-tissue thickness (mm) — the back of the hand is thin */
+  /**
+   * Dorsal soft-tissue thickness (mm). The back of the hand is thin, except
+   * over the metacarpal heads — and those only rise into knuckles when the
+   * joint below them flexes. A knuckle is the head rolling out from under the
+   * extensor hood, not the phalanx: with the joint at ninety degrees the
+   * phalanx's own condyle points distally and contributes nothing dorsally,
+   * which is why a fist drawn from the phalanx alone comes out with a flat
+   * back and no knuckles at all.
+   */
   function palmThickDorsal(A, u, v) {
     const S = A.size;
+    const kn = A.__knuckle || [0, 0, 0, 0];
     let t = 4.4;
-    // knuckle prominences
-    t += 3.0 * A.knuckles.prominence * Math.exp(-Math.pow((u - 0.99) / 0.13, 2));
+    for (let i = 0; i < 4; i++) {
+      const vc = i / 3;
+      t += (1.1 + 4.4 * kn[i]) * A.knuckles.prominence *
+        Math.exp(-Math.pow((u - 0.985) / 0.145, 2)) *
+        Math.exp(-Math.pow((v - vc) / 0.155, 2));
+    }
     // the shafts of the metacarpals show through as low ridges
     t += 0.9 * Math.pow(Math.abs(Math.cos(Math.PI * 3 * v)), 3) * M.smoothstep(clamp01((v + 0.20) / 0.28));
     t *= lerp(0.46, 1.0, smoothstep(clamp01((u + 0.30) / 0.56)));
@@ -520,9 +556,9 @@
         let s;
         if (isLast) {
           const q = i / n;
-          s = sg.sMax * (1 - Math.pow(1 - q, 1.55));
+          s = sg.sMin + (sg.sMax - sg.sMin) * (1 - Math.pow(1 - q, 1.55));
         } else {
-          s = i / n;
+          s = sg.sMin + (1 - sg.sMin) * (i / n);
         }
         const [a1, a2] = silhouetteAlphas(rig, view, d, sg.seg, s);
         const q1 = digitSurface(rig, d, sg.seg, s, a1).P;
@@ -557,7 +593,7 @@
       const f = Math.abs(vdot(sg.t, view.e));
       if (f < 0.50) continue;
       const gate = M.smoothstep(clamp01((f - 0.50) / 0.26));
-      const sRing = 0.055;
+      const sRing = sg.seg === 1 ? -0.02 : 0.055;
       const ring = [];
       const N = 44;
       for (let i = 0; i <= N; i++) {
@@ -690,43 +726,60 @@
       if (i === NU) { betaA1 = bMin; betaB1 = bMax; }
     }
 
-    // Close the distal end along whichever arc of the cross-section faces the
-    // eye, so the knuckle margin never draws a chord through the form.
+    // The palm has no distal end to close: four digits leave through it. The
+    // only real boundary there is the web margin on the palmar face, running
+    // proximally under each digit and distally between them. Closing the
+    // dorsal half as well lays a box straight across the knuckles.
     const cap = [];
-    const uD = u1;
-    let bestBeta = 0.25, bestNear = -1e18;
-    for (let k = 0; k < 96; k++) {
-      const beta = k / 96;
-      const q = palmSurface(rig, uD, beta).P;
-      const n = view.near(q);
-      if (n > bestNear) { bestNear = n; bestBeta = beta; }
-    }
-    const wrap = (x) => ((x % 1) + 1) % 1;
-    let from = betaA1, to = betaB1;
-    // walk from A to B the way round that passes the front-most point
-    const fwd = wrap(to - from), viaF = wrap(bestBeta - from);
-    const dir = viaF <= fwd ? 1 : -1;
-    const span = dir > 0 ? fwd : 1 - fwd;
-    const N = 56;
+    const N = 46;
     for (let i = 0; i <= N; i++) {
-      const beta = wrap(from + dir * span * (i / N));
-      const palmar = beta < 0.5;
-      const v = palmSurface(rig, uD, beta).v;
-      // The solid runs a little past the metacarpal heads so a hyperextended
-      // digit still merges into it, but the drawn margin must stop at the
-      // heads: carried further it lays a chord straight across the knuckles.
-      const uEnd = Math.min(rig.palm.uDistal(v, palmar), palmar ? 1.18 : 1.012);
-      const q = palmSurface(rig, uEnd, beta).P;
+      const beta = 0.5 * (i / N);                      // palmar face only
+      const v = palmSurface(rig, u1, beta).v;
+      const q = palmSurface(rig, rig.palm.uDistal(v, true), beta).P;
       const p = view.px(q);
       cap.push([p[0], p[1], view.near(q)]);
     }
     return { sideA, sideB, cap, u0, u1 };
   }
 
+  /**
+   * The free margins of the three interdigital webs. Each is a sheet of skin
+   * spanning between two adjacent proximal phalanges, so its edge runs from a
+   * point on one digit's ulnar flank to a point on the next digit's radial
+   * flank, sagging a little proximally in between. Building it from the
+   * flanks is what keeps it registered with the fingers it belongs to: a
+   * margin invented on the palm either pokes past them or leaves a slit.
+   */
+  function webContours(rig, view) {
+    const A = rig.anatomy;
+    const out = [];
+    for (let d = 1; d < 4; d++) {
+      const sgA = rig.digits[d].segs[1], sgB = rig.digits[d + 1].segs[1];
+      const aA = 0, aB = Math.PI;                       // ulnar flank, radial flank
+      const PA = digitSurface(rig, d, 1, AN.webStart(A, d, aA), aA).P;
+      const PB = digitSurface(rig, d + 1, 1, AN.webStart(A, d + 1, aB), aB).P;
+      // sag: pull the midpoint back toward the knuckles and a touch palmar
+      const mid = M.vlerp(PA, PB, 0.5);
+      const prox = vnorm(vadd(sgA.t, sgB.t));
+      const palmar = vnorm(vadd(sgA.pa, sgB.pa));
+      const gap = M.vdist(PA, PB);
+      const M1 = vmad(vmad(mid, prox, -gap * 0.30), palmar, gap * 0.06);
+      const pts = [];
+      const ctrl = [PA, PA, M1, PB, PB];
+      for (let i = 0; i <= 26; i++) {
+        const q = M.splineAt(ctrl, 1 + (i / 26) * 2);
+        const p = view.px(q);
+        pts.push([p[0], p[1], view.near(q), rig.palm.pid, 1]);
+      }
+      out.push(pts);
+    }
+    return out;
+  }
+
   GK.rig = {
     FLEX, ABD, TWIST, IDENT, View, solve, abdGate,
     palmSpine, palmSurface, palmNormal, palmThickPalmar, palmThickDorsal, palmWrap,
-    digitSurface, digitNormal, silhouetteAlphas, digitContour, palmContour, palmSilhouette,
+    digitSurface, digitNormal, silhouetteAlphas, digitContour, palmContour, palmSilhouette, webContours,
     PALM_NU, V_KNOTS
   };
 })(window.GK = window.GK || {});

@@ -23,7 +23,7 @@ const built = r.draw({
   seed, pose,
   view: { az, el, roll: 0, zoom: 1 },
   style: { grade: 3, tone: 1, wobble: 1, ghost: parseFloat(process.env.GHOST===undefined?'0.20':process.env.GHOST), search: parseFloat(process.env.SEARCH===undefined?'0.55':process.env.SEARCH) },
-  detail: { print: 1, ridge: 0.8, lattice: 0.55, hair: 1, vein: 1 },
+  detail: { print: 1, ridge: 0.5, lattice: 0.55, hair: 1, vein: 1 },
   layers: JSON.parse(process.env.LAYERS || 'null') || undefined,
   quality
 });

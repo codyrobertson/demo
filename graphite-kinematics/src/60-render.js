@@ -168,7 +168,7 @@
         const NS = sg.seg === dg.segs.length - 1 ? 11 : 8;
         let prev = null;
         for (let i = 0; i <= NS; i++) {
-          const s = (i / NS) * sg.sMax;
+          const s = sg.sMin + (sg.sMax - sg.sMin) * (i / NS);
           const ring = [];
           for (let k = 0; k < NA; k++) {
             const a = (k / NA) * TAU;
@@ -324,6 +324,8 @@
     fold: 0.12, crease: 0.09, palmcrease: 0.12, nail: 0.10
   };
 
+  const state_noop = false;
+
   const DEFAULT_LAYERS = {
     contour: true, crease: true, fold: true, nail: true, print: true,
     palmcrease: true, ridge: true, vein: true, tendon: true, hair: true,
@@ -346,9 +348,24 @@
       return this._an;
     }
 
+    /**
+     * Settle a pose against its own contacts, memoised so the draft pass and
+     * the plate that follows it share one solve.
+     */
+    settle(A, pose, iters) {
+      if (state_noop) return pose;
+      const key = this._anSeed + '|' + iters + '|' + JSON.stringify(pose);
+      if (this._ck === key) return this._cp;
+      const out = GK.pose.resolveContacts(A, pose, { iters });
+      this._ck = key; this._cp = out;
+      return out;
+    }
+
     build(state) {
       const A = this.anatomyFor(state.seed);
-      const rig = RG.solve(A, state.pose);
+      const pose = state.contacts === false ? state.pose
+        : this.settle(A, state.pose, (state.quality || 0) >= 1 ? 20 : 10);
+      const rig = RG.solve(A, pose);
       const V = state.view;
       const view = new RG.View(V.az, V.el, V.roll || 0, 1, [0, 0, 0], 0, 0);
 
@@ -528,7 +545,7 @@
           });
         }
         if (ghost > 0.01 && !opts.noGhost) {
-          for (const r of runs(tagged, 0.08, 4)) {
+          for (const r of runs(tagged, 0.08, 4, opts.maxJump)) {
             if (M.polyLen(r.pts) < 22) continue;
             g.stroke(r.pts, {
               grade, tone: style.tone * toneScale * ghost * 0.9, weight: style.weight * 0.85,
@@ -547,7 +564,7 @@
               const dl = Math.hypot(dx, dy) || 1;
               return [p[0] - dy / dl * off, p[1] + dx / dl * off, p[2], p[3], p[4], p[5], p[6]];
             });
-            for (const r of runs(shifted, 0.30, 2)) {
+            for (const r of runs(shifted, 0.30, 2, opts.maxJump)) {
               // A hand searches alongside a line it is committing to, not
               // beside every twelve-pixel fragment a busy pose leaves behind.
               if (M.polyLen(r.pts) < 46) continue;
@@ -561,20 +578,23 @@
         }
       };
 
+      // A rail that leaps across the picture is not one line: a digit turning
+      // through the view hands its silhouette from one flank to the other.
+      const jumpD = Math.max(12, this.w * 0.030);
       for (let d = 0; d < 5; d++) {
         const c = RG.digitContour(rig, view, d, { steps: 12 });
-        emit(c.right, F.st(F.S.contour, { phase: d * 37 + 1 }));
-        emit(c.left, F.st(F.S.contour, { phase: d * 37 + 3 }));
+        emit(c.right, F.st(F.S.contour, { phase: d * 37 + 1 }), { maxJump: jumpD });
+        emit(c.left, F.st(F.S.contour, { phase: d * 37 + 3 }), { maxJump: jumpD });
         // A ring or a tip cap is only an outline where the tube points away
         // from the eye. Pointing toward it, the near half of the same tube
         // covers the far half — and identity exclusion, which is what keeps a
         // silhouette from occluding itself, would otherwise let it through.
         if (c.cap.length) emit(c.cap, F.st(F.S.contour, { phase: d * 37 + 2 }),
-          { noSearch: true, selfTest: true });
+          { noSearch: true, selfTest: true, maxJump: jumpD });
         for (let ri = 0; ri < c.rings.length; ri++) {
           // where a digit foreshortens, its knuckle ring IS the outline
           emit(c.rings[ri], F.st(F.S.contour, { tone: 0.95, phase: d * 37 + 40 + ri }),
-            { noSearch: true, noGhost: true, selfTest: true });
+            { noSearch: true, noGhost: true, selfTest: true, maxJump: jumpD });
         }
       }
 
@@ -588,9 +608,14 @@
       const jump = Math.max(14, this.w * 0.035);
       emit(tagPalm(sil.sideA), F.st(F.S.contour, { tone: 0.90, phase: 200 }), { maxJump: jump, selfTest: true });
       emit(tagPalm(sil.sideB), F.st(F.S.contour, { tone: 0.90, phase: 201 }), { maxJump: jump, selfTest: true });
-      // the knuckle margin is a transition, not an edge
       emit(tagPalm(sil.cap, false),
-        F.st(F.S.contourSoft, { tone: 0.16, taper: 0.90, phase: 202 }), { noSearch: true, selfTest: true });
+        F.st(F.S.contourSoft, { tone: 0.30, taper: 0.86, phase: 202 }), { noSearch: true, selfTest: true });
+      // the free margins of the webs, spanning finger to finger
+      const webs = RG.webContours(rig, view);
+      for (let i = 0; i < webs.length; i++) {
+        emit(webs[i], F.st(F.S.contour, { tone: 0.72, taper: 0.68, phase: 210 + i }),
+          { noSearch: true, maxJump: jump });
+      }
     }
 
     resolve(state) {

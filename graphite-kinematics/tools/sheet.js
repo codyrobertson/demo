@@ -23,7 +23,7 @@ spec.forEach((sp, i) => {
                                      : G.pose.preset(A, key);
   r.draw({ seed: useSeed, pose, view: { az: parseFloat(az||0)*DEG, el: parseFloat(el||0)*DEG, roll: 0, zoom: 1 },
     style: { grade: 3, tone: 1, wobble: 1, ghost: 0.20, search: 0.5 },
-    detail: { print: 1, ridge: 0.8, lattice: 0.5, hair: 1, vein: 1 }, quality: 1 });
+    detail: { print: 1, ridge: 0.5, lattice: 0.5, hair: 1, vein: 1 }, quality: 1 });
   const px = r.resolve({ style: {} });
   const cx = (i % cols) * cell, cy = Math.floor(i / cols) * cell;
   for (let y = 0; y < cell; y++) {

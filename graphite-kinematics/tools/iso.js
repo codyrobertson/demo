@@ -17,7 +17,7 @@ NAMES.forEach((n, i) => {
   const L = {}; NAMES.forEach(x => L[x] = false); L[n] = true; L.bone = false;
   r.draw({ seed: 12345, pose, view: { az: az*DEG, el: el*DEG, roll: 0, zoom: 1 },
     style: { grade: 3, tone: 1, wobble: 1, ghost: 0, search: 0 },
-    detail: { print: 1, ridge: 0.8, lattice: 0.5, hair: 1, vein: 1 }, layers: L, quality: 1 });
+    detail: { print: 1, ridge: 0.5, lattice: 0.5, hair: 1, vein: 1 }, layers: L, quality: 1 });
   const px = r.resolve({ style: {} });
   const cx = (i%cols)*cell, cy = Math.floor(i/cols)*cell;
   for (let y = 0; y < cell; y++) big.set(px.subarray(y*cell*4, (y+1)*cell*4), ((cy+y)*W+cx)*4);

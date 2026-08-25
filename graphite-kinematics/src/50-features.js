@@ -31,7 +31,7 @@
     nailFine: { tone: 0.30, weight: 0.58, passes: 1, taper: 0.70, wobble: 0.70, jitter: 0.26, layer: 'nail' },
     print: { tone: 0.20, weight: 0.46, passes: 1, taper: 0.55, wobble: 0.55, jitter: 0.18, layer: 'print' },
     palmRidge: { tone: 0.13, weight: 0.44, passes: 1, taper: 0.60, wobble: 0.70, jitter: 0.20, layer: 'ridge' },
-    palmCrease: { tone: 0.70, weight: 0.94, passes: 2, taper: 0.52, wobble: 0.95, jitter: 0.50, layer: 'palmcrease' },
+    palmCrease: { tone: 0.80, weight: 0.98, passes: 2, taper: 0.52, wobble: 0.95, jitter: 0.50, layer: 'palmcrease' },
     palmMinor: { tone: 0.30, weight: 0.62, passes: 1, taper: 0.78, wobble: 1.10, jitter: 0.40, layer: 'palmcrease' },
     tendon: { tone: 0.28, weight: 0.72, passes: 1, taper: 0.88, wobble: 0.90, jitter: 0.45, layer: 'tendon' },
     vein: { tone: 0.22, weight: 0.58, passes: 1, taper: 0.86, wobble: 0.85, jitter: 0.35, layer: 'vein' },
@@ -742,7 +742,7 @@
       if (ln.length < 5) continue;
       out.push({
         on: 'palm', pts: palmCurve(rig, ln, true, -0.05),
-        style: st(S.palmRidge, { tone: 0.58 + 0.38 * rng.f(), phase: nextPhase() })
+        style: st(S.palmRidge, { tone: 0.40 + 0.28 * rng.f(), phase: nextPhase() })
       });
     }
   }

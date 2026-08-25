@@ -271,6 +271,23 @@
     return stops[n - 1][1];
   }
 
+  /**
+   * Closest approach between two 3-D segments. Returns the parameters on each
+   * and the distance. Degenerate cases fall back to a point-on-segment solve.
+   */
+  function closestSeg(p1, q1, p2, q2) {
+    const d1 = vsub(q1, p1), d2 = vsub(q2, p2), r = vsub(p1, p2);
+    const a = vdot(d1, d1), e = vdot(d2, d2), f = vdot(d2, r), c = vdot(d1, r), b = vdot(d1, d2);
+    let s = 0, t = 0;
+    const den = a * e - b * b;
+    if (den > 1e-9) s = clamp((b * f - c * e) / den, 0, 1);
+    t = (b * s + f) / (e || 1);
+    if (t < 0) { t = 0; s = clamp(-c / (a || 1), 0, 1); }
+    else if (t > 1) { t = 1; s = clamp((b - c) / (a || 1), 0, 1); }
+    const P1 = vmad(p1, d1, s), P2 = vmad(p2, d2, t);
+    return { s, t, P1, P2, d: vdist(P1, P2) };
+  }
+
   // -------------------------------------------------------------- 2-D polyline
   /** total length of a 2-D polyline */
   function polyLen(pts) {
@@ -341,7 +358,7 @@
     mulberry32, Rng, Noise,
     v3, vadd, vsub, vmul, vmad, vdot, vcross, vlen, vdist, vnorm, vlerp, vcopy, vframe,
     IDENT, mApply, mMul, rotX, rotY, rotZ, mOrtho,
-    crS, crV, splineAt, splineAtS, knotIndex, profile,
+    crS, crV, splineAt, splineAtS, knotIndex, profile, closestSeg,
     polyLen, resample, chaikin, pointInPoly, bounds2
   };
 })(window.GK = window.GK || {});

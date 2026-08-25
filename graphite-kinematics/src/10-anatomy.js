@@ -61,7 +61,11 @@
     wrist: { flex: 80, ext: 70, ulnar: 33, radial: 19, pron: 85, sup: 85 },
     digits: [
       { // thumb: cmc(flex,abd,opp) mcp(flex) ip(flex,ext)
-        cmc: { flex: 52, ext: 24, abd: 62, add: 8, opp: 92, rep: 12 },
+        // In-plane radial abduction is the thumb's largest excursion — it is
+        // what opens the hand flat — and it was being given less range than
+        // adduction across the palm, so a spread hand threw the thumb forward
+        // out of the plane instead of out to the side.
+        cmc: { flex: 55, ext: 30, abd: 68, add: 10, opp: 92, rep: 15 },
         mcp: { flex: 58, ext: 12, abd: 9 },
         ip: { flex: 82, ext: 24 }
       },
@@ -286,9 +290,9 @@
         // The thumb's metacarpal is not buried: it is the thenar eminence,
         // a muscular mass that swells at mid-shaft and narrows to the knuckle.
         const a = W * M.profile(
-          [[0, 1.02], [0.24, 1.34 * A.palm.thenar], [0.58, 1.36 * A.palm.thenar],
-           [0.84, 1.18], [1, bone.jw[0]]], s) * A.palm.padding;
-        return [a, a * lerp(0.72, 0.92, s)];
+          [[0, 1.05], [0.26, 1.62 * A.palm.thenar], [0.56, 1.58 * A.palm.thenar],
+           [0.82, 1.22], [1, bone.jw[0]]], s) * A.palm.padding;
+        return [a, a * lerp(0.70, 0.92, s)];
       }
       // finger metacarpals are buried in the palm; only the head reads as form
       const a = W * lerp(1.18, bone.jw[0], s);
