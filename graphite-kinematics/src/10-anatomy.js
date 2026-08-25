@@ -290,7 +290,7 @@
         // The thumb's metacarpal is not buried: it is the thenar eminence,
         // a muscular mass that swells at mid-shaft and narrows to the knuckle.
         const a = W * M.profile(
-          [[0, 1.05], [0.26, 1.62 * A.palm.thenar], [0.56, 1.58 * A.palm.thenar],
+          [[0, 1.42], [0.26, 1.66 * A.palm.thenar], [0.56, 1.58 * A.palm.thenar],
            [0.82, 1.22], [1, bone.jw[0]]], s) * A.palm.padding;
         return [a, a * lerp(0.70, 0.92, s)];
       }

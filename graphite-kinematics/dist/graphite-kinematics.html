@@ -961,7 +961,7 @@
         // The thumb's metacarpal is not buried: it is the thenar eminence,
         // a muscular mass that swells at mid-shaft and narrows to the knuckle.
         const a = W * M.profile(
-          [[0, 1.05], [0.26, 1.62 * A.palm.thenar], [0.56, 1.58 * A.palm.thenar],
+          [[0, 1.42], [0.26, 1.66 * A.palm.thenar], [0.56, 1.58 * A.palm.thenar],
            [0.82, 1.22], [1, bone.jw[0]]], s) * A.palm.padding;
         return [a, a * lerp(0.70, 0.92, s)];
       }
@@ -1248,6 +1248,15 @@
     // how far each knuckle has risen, for the dorsal thickness field
     A.__knuckle = [1, 2, 3, 4].map(d =>
       clamp01(Math.max(0, rig.digits[d].joints[1].flex) / (68 * DEG)));
+    // The thenar is muscle, and it goes with the thumb: as the thumb swings
+    // out of the palm plane the mass rises behind it. Without this the palm
+    // stays flat, the metacarpal walks away from it, and the thumb reads as a
+    // separate object floating beside the hand.
+    {
+      const T = pose.digits[0];
+      A.__thenarLift = clamp01(((T.cmcAbd || 0) / (55 * DEG)) * 0.75 +
+        ((T.cmcOpp || 0) / (75 * DEG)) * 0.45);
+    }
     buildPalm(rig);
     A.__thenarV = rig.palm.thumbV * 0.72;
     return rig;
@@ -1338,7 +1347,7 @@
         const uu = clamp(u, -0.6, 1.3);
         // the radial border swings out to meet the thumb metacarpal, so the
         // thenar and the first web open and close with the thumb itself
-        const reach = Math.min(0, (thumbV * 0.86) + 0.20);
+        const reach = Math.min(0, (thumbV * 1.04) + 0.10);
         const raw = -0.20 + reach * Math.exp(-Math.pow((uu - 0.46) / 0.54, 2));
         return VMID - (VMID - raw) * wristNarrow(uu);
       },
@@ -1401,7 +1410,7 @@
     const S = A.size, pad = A.palm.padding;
     let t = 9.0;
     // thenar eminence — the muscular ball of the thumb
-    t += 6.0 * A.palm.thenar *
+    t += (6.0 + 9.5 * (A.__thenarLift || 0)) * A.palm.thenar *
       Math.exp(-Math.pow((v - A.__thenarV) / 0.34, 2)) *
       Math.exp(-Math.pow((u - 0.50) / 0.46, 2));
     // hypothenar eminence
@@ -1622,7 +1631,12 @@
     const rings = [];
     for (let k = 0; k < segs.length; k++) {
       const sg = segs[k];
-      if (sg.seg === 0) continue;          // the thenar has no ring to show
+      // Only the knuckle is a real step in the outline. A digit tapers along
+      // its length, so the proximal rim of a middle or distal phalanx lies
+      // *inside* the wider segment behind it — drawn as a ring it reads as the
+      // open end of a pipe, and a foreshortened hand comes out as a bundle of
+      // cut tubes.
+      if (sg.seg !== 1) continue;
       const f = Math.abs(vdot(sg.t, view.e));
       if (f < 0.50) continue;
       const gate = M.smoothstep(clamp01((f - 0.50) / 0.26));
@@ -1809,10 +1823,159 @@
     return out;
   }
 
+  /**
+   * The outline of a whole digit as one form.
+   *
+   * A digit pointing at the eye has no useful per-segment silhouette: its
+   * rails collapse, its knuckle ring and its tip cap survive as two detached
+   * ellipses, and the drawing comes out as a scatter of cut tubes. What a
+   * draughtsman draws there is the outer boundary of the entire digit. The
+   * projection is compact and near-convex in exactly the case that matters,
+   * so a radial maximum about the projected centroid recovers it.
+   *
+   * Returns `use: false` when the digit reads long enough to draw the ordinary
+   * way, which is most of the time.
+   */
+  function digitUnion(rig, view, d) {
+    const A = rig.anatomy;
+    const dg = rig.digits[d];
+    const segs = dg.segs.filter(sg => sg.rendered);
+    // how compact is this digit on screen, relative to how thick it is?
+    let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9, wSum = 0, wN = 0;
+    for (const sg of segs) {
+      for (let i = 0; i <= 4; i++) {
+        const sv = sg.sMin + (sg.sMax - sg.sMin) * (i / 4);
+        const p = view.px(vmad(sg.A, sg.t, sg.len * sv));
+        if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0];
+        if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
+        wSum += AN.segmentProfile(A, d, sg.seg, Math.min(sv, 1))[0] * view.scale * 2;
+        wN++;
+      }
+    }
+    const axisSpan = Math.hypot(x1 - x0, y1 - y0);
+    const width = wSum / Math.max(1, wN);
+    if (axisSpan > width * 2.1) return { use: false };
+
+    // sample the whole digit's surface and take the radial maximum
+    const pts = [];
+    for (const sg of segs) {
+      const NS = 9, NA = 24;
+      for (let i = 0; i <= NS; i++) {
+        const sv = sg.sMin + (sg.sMax - sg.sMin) * (i / NS);
+        for (let k = 0; k < NA; k++) {
+          const q = digitSurface(rig, d, sg.seg, sv, (k / NA) * Math.PI * 2).P;
+          const p = view.px(q);
+          pts.push([p[0], p[1], view.near(q)]);
+        }
+      }
+    }
+    let cx = 0, cy = 0;
+    for (const p of pts) { cx += p[0]; cy += p[1]; }
+    cx /= pts.length; cy /= pts.length;
+    const NB = 128;
+    const rad = new Float64Array(NB).fill(-1);
+    const dep = new Float64Array(NB);
+    for (const p of pts) {
+      const dx = p[0] - cx, dy = p[1] - cy;
+      const r = Math.hypot(dx, dy);
+      let b = Math.floor(((Math.atan2(dy, dx) + Math.PI) / (Math.PI * 2)) * NB) % NB;
+      if (b < 0) b += NB;
+      if (r > rad[b]) { rad[b] = r; dep[b] = p[2]; }
+    }
+    // fill any empty bins from their neighbours, then smooth the profile
+    // circularly: taking a per-bin maximum straight out gives a sawtooth.
+    let filled = 0;
+    for (let b = 0; b < NB; b++) if (rad[b] >= 0) filled++;
+    if (filled < NB * 0.5) return { use: false };
+    for (let b = 0; b < NB; b++) {
+      if (rad[b] >= 0) continue;
+      let lo = b, hi = b, n = 0;
+      while (rad[(lo + NB) % NB] < 0 && n++ < NB) lo--;
+      n = 0;
+      while (rad[hi % NB] < 0 && n++ < NB) hi++;
+      const a = rad[((lo % NB) + NB) % NB], c2 = rad[hi % NB];
+      rad[b] = (a + c2) * 0.5;
+      dep[b] = (dep[((lo % NB) + NB) % NB] + dep[hi % NB]) * 0.5;
+    }
+    for (let pass = 0; pass < 3; pass++) {
+      const src = Float64Array.from(rad);
+      const sd = Float64Array.from(dep);
+      for (let b = 0; b < NB; b++) {
+        const p0 = src[(b - 1 + NB) % NB], p2 = src[(b + 1) % NB];
+        rad[b] = (p0 + src[b] * 2 + p2) * 0.25;
+        dep[b] = (sd[(b - 1 + NB) % NB] + sd[b] * 2 + sd[(b + 1) % NB]) * 0.25;
+      }
+    }
+    const outline = [];
+    for (let b = 0; b <= NB; b++) {
+      const i = b % NB;
+      const th = (i / NB) * Math.PI * 2 - Math.PI;
+      outline.push([cx + Math.cos(th) * rad[i], cy + Math.sin(th) * rad[i], dep[i], segs[0].pid, 1]);
+    }
+    return { use: true, outline };
+  }
+
+  /**
+   * The first web: the commissure between thumb and index. It is a genuine
+   * sheet of skin, and it is what keeps a strongly opposed thumb attached to
+   * the hand — the distal thumb metacarpal really does stand clear of the
+   * palm, so without the web the thumb draws as an object floating beside it.
+   *
+   * Returns the free margin (the edge that shows in outline) and a ladder of
+   * rungs across the sheet, which the rasteriser fills so the web occludes.
+   */
+  function firstWeb(rig, view) {
+    const A = rig.anatomy;
+    const thPP = rig.digits[0].segs[1];
+    const ixPP = rig.digits[1].segs[1];
+    const ixMCP = ixPP.A, thMCP = thPP.A;
+
+    // which way round each digit faces its neighbour
+    const facingAlpha = (d, seg, sv, target) => {
+      let best = 0, bestDot = -2;
+      for (let i = 0; i < 28; i++) {
+        const a = (i / 28) * Math.PI * 2;
+        const q = digitSurface(rig, d, seg, sv, a);
+        const n = digitNormal(rig, d, seg, sv, a);
+        const dot = vdot(n, vnorm(vsub(target, q.P)));
+        if (dot > bestDot) { bestDot = dot; best = a; }
+      }
+      return best;
+    };
+    const aTh = facingAlpha(0, 1, 0.30, ixMCP);
+    const aIx = facingAlpha(1, 1, 0.30, thMCP);
+
+    // The sheet runs from deep in the palm out to a free margin between the
+    // two digits. Sample it as a ladder: thumb side, index side, one rung per
+    // step, with the margin the last rung.
+    const NR = 9;
+    const thSide = [], ixSide = [];
+    for (let i = 0; i <= NR; i++) {
+      const t = i / NR;
+      thSide.push(digitSurface(rig, 0, 1, lerp(-0.25, 0.38, t), aTh).P);
+      const sIx = lerp(-0.24, AN.webStart(A, 1, aIx) * 0.95, t);
+      ixSide.push(digitSurface(rig, 1, 1, sIx, aIx).P);
+    }
+    // free margin: the distal rung, sagging back toward the palm
+    const PT = thSide[NR], PI = ixSide[NR];
+    const span = M.vdist(PT, PI);
+    const mid = M.vlerp(PT, PI, 0.5);
+    const prox = vnorm(vadd(thPP.t, ixPP.t));
+    const sag = vmad(mid, prox, -span * 0.13);
+    const margin = [];
+    const ctrl = [PT, PT, sag, PI, PI];
+    for (let i = 0; i <= 30; i++) {
+      const q = M.splineAt(ctrl, 1 + (i / 30) * 2);
+      const p = view.px(q);
+      margin.push([p[0], p[1], view.near(q), rig.palm.pid, 1]);
+    }
+    return { thSide, ixSide, margin, PT, PI, sag };
+  }
+
   GK.rig = {
     FLEX, ABD, TWIST, IDENT, View, solve, abdGate,
     palmSpine, palmSurface, palmNormal, palmThickPalmar, palmThickDorsal, palmWrap,
-    digitSurface, digitNormal, silhouetteAlphas, digitContour, palmContour, palmSilhouette, webContours,
+    digitSurface, digitNormal, silhouetteAlphas, digitContour, digitUnion, palmContour, palmSilhouette, webContours, firstWeb,
     PALM_NU, V_KNOTS
   };
 })(window.GK = window.GK || {});
@@ -4112,6 +4275,30 @@
         }
       }
     }
+    // the first web, as a thin sheet, so the thumb is attached to the hand
+    {
+      const w = RG.firstWeb(rig, view);
+      const N = w.thSide.length;
+      const proj = (P) => { const p = view.px(P); return [p[0], p[1], view.near(P)]; };
+      for (let i = 0; i < N - 1; i++) {
+        const t = i / (N - 1), t2 = (i + 1) / (N - 1);
+        const a0 = w.thSide[i], b0 = w.ixSide[i];
+        const a1 = w.thSide[i + 1], b1 = w.ixSide[i + 1];
+        const NC = 6;
+        for (let k = 0; k < NC; k++) {
+          const u0 = k / NC, u1 = (k + 1) / NC;
+          // pull the distal rungs back toward the free margin's sag
+          const bow = (tt, uu) => tt * Math.sin(Math.PI * uu) * 0.18;
+          const P = (aa, bb, uu, tt) => {
+            const base = M.vlerp(aa, bb, uu);
+            const prox = M.vnorm(M.vadd(rig.digits[0].segs[1].t, rig.digits[1].segs[1].t));
+            return M.vmad(base, prox, -M.vdist(aa, bb) * bow(tt, uu));
+          };
+          df.quad(proj(P(a0, b0, u0, t)), proj(P(a0, b0, u1, t)),
+            proj(P(a1, b1, u1, t2)), proj(P(a1, b1, u0, t2)), ids.palm);
+        }
+      }
+    }
     const NU = 30, NB = 36, id = ids.palm;
     const uTop = [];
     for (let k = 0; k <= NB; k++) {
@@ -4508,6 +4695,13 @@
       // through the view hands its silhouette from one flank to the other.
       const jumpD = Math.max(12, this.w * 0.030);
       for (let d = 0; d < 5; d++) {
+        // a digit pointing at the eye is drawn as one form, not as pieces
+        const un = RG.digitUnion(rig, view, d);
+        if (un.use) {
+          emit(un.outline, F.st(F.S.contour, { tone: 0.94, phase: d * 37 + 60 }),
+            { noSearch: true, selfTest: false, maxJump: jumpD });
+          continue;
+        }
         const c = RG.digitContour(rig, view, d, { steps: 12 });
         emit(c.right, F.st(F.S.contour, { phase: d * 37 + 1 }), { maxJump: jumpD });
         emit(c.left, F.st(F.S.contour, { phase: d * 37 + 3 }), { maxJump: jumpD });
@@ -4515,7 +4709,7 @@
         // from the eye. Pointing toward it, the near half of the same tube
         // covers the far half — and identity exclusion, which is what keeps a
         // silhouette from occluding itself, would otherwise let it through.
-        if (c.cap.length) emit(c.cap, F.st(F.S.contour, { phase: d * 37 + 2 }),
+        if (c.cap.length) emit(c.cap, F.st(F.S.contour, { tone: 0.80, phase: d * 37 + 2 }),
           { noSearch: true, selfTest: true, maxJump: jumpD });
         for (let ri = 0; ri < c.rings.length; ri++) {
           // where a digit foreshortens, its knuckle ring IS the outline
@@ -4536,6 +4730,10 @@
       emit(tagPalm(sil.sideB), F.st(F.S.contour, { tone: 0.90, phase: 201 }), { maxJump: jump, selfTest: true });
       emit(tagPalm(sil.cap, false),
         F.st(F.S.contourSoft, { tone: 0.30, taper: 0.86, phase: 202 }), { noSearch: true, selfTest: true });
+      // the free margin of the thumb's commissure
+      const fw = RG.firstWeb(rig, view);
+      emit(fw.margin, F.st(F.S.contour, { tone: 0.74, taper: 0.66, phase: 208 }),
+        { noSearch: true, maxJump: jump });
       // the free margins of the webs, spanning finger to finger
       const webs = RG.webContours(rig, view);
       for (let i = 0; i < webs.length; i++) {

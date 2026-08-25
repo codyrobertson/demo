@@ -186,6 +186,30 @@
         }
       }
     }
+    // the first web, as a thin sheet, so the thumb is attached to the hand
+    {
+      const w = RG.firstWeb(rig, view);
+      const N = w.thSide.length;
+      const proj = (P) => { const p = view.px(P); return [p[0], p[1], view.near(P)]; };
+      for (let i = 0; i < N - 1; i++) {
+        const t = i / (N - 1), t2 = (i + 1) / (N - 1);
+        const a0 = w.thSide[i], b0 = w.ixSide[i];
+        const a1 = w.thSide[i + 1], b1 = w.ixSide[i + 1];
+        const NC = 6;
+        for (let k = 0; k < NC; k++) {
+          const u0 = k / NC, u1 = (k + 1) / NC;
+          // pull the distal rungs back toward the free margin's sag
+          const bow = (tt, uu) => tt * Math.sin(Math.PI * uu) * 0.18;
+          const P = (aa, bb, uu, tt) => {
+            const base = M.vlerp(aa, bb, uu);
+            const prox = M.vnorm(M.vadd(rig.digits[0].segs[1].t, rig.digits[1].segs[1].t));
+            return M.vmad(base, prox, -M.vdist(aa, bb) * bow(tt, uu));
+          };
+          df.quad(proj(P(a0, b0, u0, t)), proj(P(a0, b0, u1, t)),
+            proj(P(a1, b1, u1, t2)), proj(P(a1, b1, u0, t2)), ids.palm);
+        }
+      }
+    }
     const NU = 30, NB = 36, id = ids.palm;
     const uTop = [];
     for (let k = 0; k <= NB; k++) {
@@ -582,6 +606,13 @@
       // through the view hands its silhouette from one flank to the other.
       const jumpD = Math.max(12, this.w * 0.030);
       for (let d = 0; d < 5; d++) {
+        // a digit pointing at the eye is drawn as one form, not as pieces
+        const un = RG.digitUnion(rig, view, d);
+        if (un.use) {
+          emit(un.outline, F.st(F.S.contour, { tone: 0.94, phase: d * 37 + 60 }),
+            { noSearch: true, selfTest: false, maxJump: jumpD });
+          continue;
+        }
         const c = RG.digitContour(rig, view, d, { steps: 12 });
         emit(c.right, F.st(F.S.contour, { phase: d * 37 + 1 }), { maxJump: jumpD });
         emit(c.left, F.st(F.S.contour, { phase: d * 37 + 3 }), { maxJump: jumpD });
@@ -589,7 +620,7 @@
         // from the eye. Pointing toward it, the near half of the same tube
         // covers the far half — and identity exclusion, which is what keeps a
         // silhouette from occluding itself, would otherwise let it through.
-        if (c.cap.length) emit(c.cap, F.st(F.S.contour, { phase: d * 37 + 2 }),
+        if (c.cap.length) emit(c.cap, F.st(F.S.contour, { tone: 0.80, phase: d * 37 + 2 }),
           { noSearch: true, selfTest: true, maxJump: jumpD });
         for (let ri = 0; ri < c.rings.length; ri++) {
           // where a digit foreshortens, its knuckle ring IS the outline
@@ -610,6 +641,10 @@
       emit(tagPalm(sil.sideB), F.st(F.S.contour, { tone: 0.90, phase: 201 }), { maxJump: jump, selfTest: true });
       emit(tagPalm(sil.cap, false),
         F.st(F.S.contourSoft, { tone: 0.30, taper: 0.86, phase: 202 }), { noSearch: true, selfTest: true });
+      // the free margin of the thumb's commissure
+      const fw = RG.firstWeb(rig, view);
+      emit(fw.margin, F.st(F.S.contour, { tone: 0.74, taper: 0.66, phase: 208 }),
+        { noSearch: true, maxJump: jump });
       // the free margins of the webs, spanning finger to finger
       const webs = RG.webContours(rig, view);
       for (let i = 0; i < webs.length; i++) {
