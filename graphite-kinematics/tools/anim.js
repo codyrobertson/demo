@@ -2,7 +2,7 @@
    Usage: node tools/anim.js [out.gif] [frames] [size] [radius] [az] [el] */
 global.window = {};
 const path = require('path');
-['00-math','10-anatomy','20-rig','30-pose','40-pencil','50-features','55-dorsal','60-render']
+['00-math','10-anatomy','20-rig','30-pose','35-physics','40-pencil','50-features','55-dorsal','60-render']
   .forEach(f => require(path.join(__dirname, '..', 'src', f + '.js')));
 const G = window.GK, DEG = G.math.DEG;
 const writeGIF = require('./gif.js');

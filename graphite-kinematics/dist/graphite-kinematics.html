@@ -419,7 +419,12 @@
     }
     _h(i, j, k) {
       const pm = this.perm;
-      return this.g[pm[(pm[(pm[i & 511] + (j & 511)) & 1023 & 511] + (k & 511)) & 511]];
+      // `& 1023 & 511` and `& 511` mask to the same nine bits - 511 is a
+      // subset of the 1023 mask, so ANDing with 1023 first and throwing most
+      // of it away with a second AND right after was never selecting
+      // anything the single mask doesn't. Every hash this returns is called
+      // eight times for one noise sample, so it is worth not asking twice.
+      return this.g[pm[(pm[(pm[i & 511] + (j & 511)) & 511] + (k & 511)) & 511]];
     }
     /** 3-D value noise, output in [0,1] */
     n3(x, y, z) {
@@ -511,19 +516,29 @@
   }
 
   // ------------------------------------------------------------------- curves
-  /** uniform Catmull-Rom, scalar */
-  function crS(p0, p1, p2, p3, t) {
-    const t2 = t * t, t3 = t2 * t;
+  /** uniform Catmull-Rom, scalar, given t and its already-computed powers */
+  function crSt(p0, p1, p2, p3, t, t2, t3) {
     return 0.5 * ((2 * p1) + (-p0 + p2) * t +
       (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
       (-p0 + 3 * p1 - 3 * p2 + p3) * t3);
   }
-  /** uniform Catmull-Rom, vec3 */
+  /** uniform Catmull-Rom, scalar */
+  function crS(p0, p1, p2, p3, t) {
+    const t2 = t * t, t3 = t2 * t;
+    return crSt(p0, p1, p2, p3, t, t2, t3);
+  }
+  /** uniform Catmull-Rom, vec3
+   *  t2 and t3 depend on t alone, not on which of the three coordinates is
+   *  being blended, so computing them once here and handing them to crSt
+   *  three times is the same nine multiplies crS would have done on its own
+   *  three calls, minus the four of those nine that were computing the exact
+   *  same t*t and t*t*t over again each time. */
   function crV(p0, p1, p2, p3, t) {
+    const t2 = t * t, t3 = t2 * t;
     return [
-      crS(p0[0], p1[0], p2[0], p3[0], t),
-      crS(p0[1], p1[1], p2[1], p3[1], t),
-      crS(p0[2], p1[2], p2[2], p3[2], t)
+      crSt(p0[0], p1[0], p2[0], p3[0], t, t2, t3),
+      crSt(p0[1], p1[1], p2[1], p3[1], t, t2, t3),
+      crSt(p0[2], p1[2], p2[2], p3[2], t, t2, t3)
     ];
   }
   /** sample a Catmull-Rom spline through pts[] at fractional index fi (clamped ends) */
@@ -1611,13 +1626,19 @@
   /** numeric surface normal on the palm */
   function palmNormal(rig, u, beta) {
     const h = 0.006;
-    const p0 = palmSurface(rig, u, beta).P;
+    // c0 answers both what palmSurface(rig, u, beta) used to be asked for
+    // twice: the centre point for the finite difference, and .n/.palmar for
+    // the orientation reference below. Calling it a second time returned the
+    // same object every time - rig and (u, beta) are exactly what it reads -
+    // so the second call was never disagreeing with the first, only paying
+    // for palmSpine and the thickness fields all over again to reconfirm it.
+    const c0 = palmSurface(rig, u, beta);
+    const p0 = c0.P;
     const pu = palmSurface(rig, clamp(u + h, -0.1, 1.12), beta).P;
     const pb = palmSurface(rig, u, beta + h).P;
     const Tu = vsub(pu, p0), Tb = vsub(pb, p0);
     let N = vnorm(vcross(Tb, Tu));
-    const c = palmSurface(rig, u, beta);
-    const ref = vmul(c.n, c.palmar ? 1 : -1);
+    const ref = vmul(c0.n, c0.palmar ? 1 : -1);
     if (vdot(N, ref) < 0) N = vmul(N, -1);
     return N;
   }
@@ -1647,11 +1668,20 @@
     return [u + m * (cu / n), m * (cd / n)];
   }
 
-  /** surface point on a digit segment; alpha 0 = ulnar, +pi/2 = dorsal */
-  function digitSurface(rig, d, seg, s, alpha) {
+  /**
+   * Surface point on a digit segment; alpha 0 = ulnar, +pi/2 = dorsal.
+   *
+   * `pr0`, when the caller already has it, is this section's segmentProfile
+   * - optional, and only ever passed by a caller about to ask digitNormal
+   * for the same (d, seg, s) right after, so it can hand that call the
+   * profile back too instead of making it re-derive one this function
+   * already has sitting in a local variable. Every other caller leaves it
+   * out and gets exactly what this function always computed for itself.
+   */
+  function digitSurface(rig, d, seg, s, alpha, pr0) {
     const A = rig.anatomy;
     const sg = rig.digits[d].segs[seg];
-    const pr = AN.segmentProfile(A, d, seg, s);
+    const pr = pr0 || AN.segmentProfile(A, d, seg, s);
     const ca = Math.cos(alpha), sa = Math.sin(alpha);
     const off = sectionOffset(rig, d, seg, pr);
     const offU = off[0], offD = off[1];
@@ -1660,7 +1690,7 @@
       sg.A[1] + sg.t[1] * sg.len * s + sg.ul[1] * (pr[0] * ca + offU) + sg.dor[1] * (pr[1] * sa + offD),
       sg.A[2] + sg.t[2] * sg.len * s + sg.ul[2] * (pr[0] * ca + offU) + sg.dor[2] * (pr[1] * sa + offD)
     ];
-    return { P: rig.soft ? softPoint(rig, P) : P, a: pr[0], b: pr[1], seg: sg };
+    return { P: rig.soft ? softPoint(rig, P) : P, a: pr[0], b: pr[1], seg: sg, pr, off };
   }
 
 
@@ -1806,16 +1836,29 @@
     return vmad(vmad(vmad(sg.A, sg.t, sg.len * s), sg.ul, off[0]), sg.dor, off[1]);
   }
 
-  /** outward surface normal on a digit segment */
-  function digitNormal(rig, d, seg, s, alpha) {
+  /**
+   * Outward surface normal on a digit segment.
+   *
+   * `pr0`/`off0` let a caller that just computed digitSurface at this same
+   * (d, seg, s) hand its segmentProfile and sectionOffset straight in,
+   * rather than have this function spend a segmentProfile call and a
+   * sectionOffset call re-deriving values it was just given the inputs to
+   * skip. projectCurve, knuckleRings and firstWeb all call digitSurface and
+   * digitNormal back to back at the same point for exactly this reason - a
+   * curve needs both the surface and the way it faces - and passing them
+   * through is arithmetically inert: p0 and o0 below end up holding the
+   * identical values a bare call would have computed, just once instead of
+   * twice.
+   */
+  function digitNormal(rig, d, seg, s, alpha, pr0, off0) {
     const A = rig.anatomy;
     const sg = rig.digits[d].segs[seg];
     const h = 0.004;
-    const p0 = AN.segmentProfile(A, d, seg, s);
+    const p0 = pr0 || AN.segmentProfile(A, d, seg, s);
     const p1 = AN.segmentProfile(A, d, seg, s + h);
     const da = (p1[0] - p0[0]) / h, db = (p1[1] - p0[1]) / h;
     // the section-centre offset (see sectionOffset) can also move with s
-    const o0 = sectionOffset(rig, d, seg, p0), o1 = sectionOffset(rig, d, seg, p1);
+    const o0 = off0 || sectionOffset(rig, d, seg, p0), o1 = sectionOffset(rig, d, seg, p1);
     const dOffU = (o1[0] - o0[0]) / h, dOffD = (o1[1] - o0[1]) / h;
     const ca = Math.cos(alpha), sa = Math.sin(alpha);
     // dP/dalpha
@@ -1870,8 +1913,9 @@
       const N = 44;
       for (let i = 0; i <= N; i++) {
         const a = (i / N) * Math.PI * 2;
-        const q = digitSurface(rig, d, sg.seg, sRing, a).P;
-        const fn = vdot(digitNormal(rig, d, sg.seg, sRing, a), view.e);
+        const surf = digitSurface(rig, d, sg.seg, sRing, a);
+        const fn = vdot(digitNormal(rig, d, sg.seg, sRing, a, surf.pr, surf.off), view.e);
+        const q = surf.P;
         // only the arc where the surface grazes is an edge
         let g = gate * (1 - M.smoothstep(clamp01((Math.abs(fn) - 0.05) / 0.32)));
         // ...and where the web has buried it. This used to read `sRing <
@@ -2258,18 +2302,31 @@
     if (y1 < y0 || x1 < x0) return;
     const d = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
     if (Math.abs(d) < 1e-12) return;
+    // Same hoist as DepthField.tri in 60-render.js, and for the same reason:
+    // l1 and l2 are affine in (px, py), so the four coefficients below are
+    // identical at every pixel this triangle covers and do not belong inside
+    // the loop that visits them. The division by `d` stays a division, done
+    // once per pixel exactly where it always was - turning it into a
+    // multiply by a precomputed 1/d would change the rounding of every l1
+    // and l2 in the mask by a bit that never shows on a smoothed, resampled
+    // silhouette, but "never shows" is not the bar this file holds itself
+    // to, so it is left a division.
+    const A1 = by - cy, B1 = cx - bx;
+    const A2 = cy - ay, B2 = ax - cx;
     for (let y = y0; y <= y1; y++) {
-      const py = y + 0.5;
+      const py = y + 0.5, dpy = py - cy;
+      const rowB1 = B1 * dpy, rowB2 = B2 * dpy;
+      const row = y * W;
       for (let x = x0; x <= x1; x++) {
-        const px = x + 0.5;
-        const l1 = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) / d;
+        const px = x + 0.5, dpx = px - cx;
+        const l1 = (A1 * dpx + rowB1) / d;
         if (l1 < -0.002) continue;
-        const l2 = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) / d;
+        const l2 = (A2 * dpx + rowB2) / d;
         if (l2 < -0.002) continue;
         const l3 = 1 - l1 - l2;
         if (l3 < -0.002) continue;
         const zz = l1 * az + l2 * bz + l3 * cz;
-        const i = y * W + x;
+        const i = row + x;
         if (!m.cov[i] || zz > m.dep[i]) {
           m.dep[i] = zz; m.own[i] = owner;
           m.gn[i] = l1 * ag + l2 * bg + l3 * cg;
@@ -2507,7 +2564,7 @@
       for (let i = 0; i < 28; i++) {
         const a = (i / 28) * Math.PI * 2;
         const q = digitSurface(rig, d, seg, sv, a);
-        const n = digitNormal(rig, d, seg, sv, a);
+        const n = digitNormal(rig, d, seg, sv, a, q.pr, q.off);
         const dot = vdot(n, vnorm(vsub(target, q.P)));
         if (dot > bestDot) { bestDot = dot; best = a; }
       }
@@ -3566,52 +3623,290 @@
    *
    * Returns a closure rather than a pose, because closing a hand on something
    * is a settle inside a settle and costs a couple of hundred milliseconds -
-   * far too much to pay per frame. The two ends are worked out once and every
-   * frame is an interpolation between them, which is also why the closing
-   * reads as one motion instead of a series of separate grips.
+   * far too much to pay per frame. The grasp is worked out once; every frame
+   * before release is an interpolation between fixed keyframes, which is also
+   * why the closing reads as one motion instead of a series of separate
+   * grips. But the closure is not purely a function of its argument the way
+   * the rest of this file is: from the moment the fingers begin to open, the
+   * ball is a live GK.physics body, and physics has a memory - what it does
+   * next depends on what it was doing a moment ago, not just on "now". So
+   * this closure carries that body forward call to call, and (like every
+   * other stateful animation driver in this codebase - PH.step itself, or a
+   * dragged fingertip in reach()) it is meant to be sampled with a
+   * monotonically increasing argument, once per frame, the way every caller
+   * in this file already does. A rewind is handled - it will not throw - but
+   * it cannot un-happen a bounce, so scrubbing backward through a fall just
+   * holds the ball at wherever it last got to rather than replaying physics
+   * in reverse.
    *
-   * The hand does not travel: there is no translation in the rig, and faking
-   * one by sliding the ball into the palm looks like the ball doing the work.
-   * So the lift is carried by the wrist, which is a real degree of freedom,
-   * and the drop by the ball alone - once the fingers have opened past it
-   * there is nothing holding it, and it accelerates along the hand's own
-   * proximal axis, which is down the page in the framing this draws in.
+   * The hand itself does not travel: there is no translation in the rig, and
+   * faking one by sliding the ball into the palm looks like the ball doing
+   * the work. So the lift is carried by the wrist, which is a real degree of
+   * freedom - the whole hand swings up about a fixed wrist origin - and for
+   * as long as the grip holds, the ball is carried rigidly with it: attached
+   * to a fixed spot on the palm sheet, not frozen at a world-space point,
+   * which is what a hand that lifts its grip while the held object stays
+   * exactly where it was in space would mean. Once support is lost the ball
+   * answers to nothing but gravity and whatever it touches on the way out.
    */
   function pickAndDrop(A, radius, opts) {
     opts = opts || {};
+    const R = GK.rig;
     const openKey = opts.open || 'spread';
     const open = clampPose(A, mk(A, PRESETS[openKey].spec));
     const grip = holdBall(A, open, radius);
     const ball0 = grip.ball;
-    const rig0 = GK.rig.solve(A, open);
-    const down = M.vmul(rig0.root[0], -1);
-    // phase boundaries: settle, close, lift and hold, open, fall
-    const P = opts.phases || [0.08, 0.36, 0.60, 0.74];
-    const ease = M.ease.inOut, inv = M.inv;
+    // Gravity is anchored here, once, to the pose the hand is in BEFORE it
+    // starts moving - not re-read at the moment of release. root rotates
+    // rigidly with wrist flexion (see 35-physics.js's header), so anchoring
+    // at release would let a hand that had already tilted while lifting the
+    // ball redefine "down" to match its own tilt: gravity would always point
+    // straight out of the palm no matter how the hand held it, which is the
+    // wrist rotating the world rather than the world staying put. Anchored
+    // here instead, a hand that lifts a ball at an angle can show the ball
+    // pressing into a different part of the cupped palm as it tips - real
+    // weight against a real contact - rather than that being erased by
+    // gravity quietly following the hand around.
+    const rig0 = R.solve(A, open);
+    // `open` is posed with no notion of the ball at all, and while
+    // ballOnPalm keeps it clear for most seeds and radii, it does not for
+    // every one: measured across this file's own seed/radius sweep, the
+    // largest ball size put the hand a couple of millimetres into its own
+    // object before the hand had moved at all. So it is settled against the
+    // ball once here, the same way holdBall settles its own final pose, and
+    // this corrected copy - not the raw preset - is what idle and the start
+    // of the close actually blend from. `open` itself stays untouched: it
+    // is still what `grip` and the gravity frame above were built from, and
+    // re-settling it here must not feed back into either.
+    const openClear = resolveContacts(A, open, { scene: { ball: ball0 }, iters: 20, tol: 0.2 });
+
+    // ==== TIMING ============================================================
+    // Every field below is a FRACTION of the whole looping cycle (0..1), and
+    // `seconds` is what turns fractions into the physics engine's own units -
+    // the ball does not know or care how fast the caller is stepping `t`, it
+    // only knows how many seconds of gravity it has been given, so this is
+    // the number to change if a drop should feel heavier/slower or lighter/
+    // quicker without touching a single physics constant.
+    const T = Object.assign({
+      start:    0.05, // idle at `open` ends here; the fingers start closing
+      contact:  0.34, // the fingers have arrived on the ball; grip settled
+      liftTop:  0.52, // the lift is complete: ball held up and steady
+      release:  0.60, // the pause at the top ends; fingers begin opening
+      clear:    0.76  // the KINEMATIC opening motion finishes here. This is
+                       // a fallback deadline, not the release trigger - the
+                       // physics contact solver almost always lets go
+                       // earlier than this, on its own, the moment the
+                       // fingers have actually opened clear of the ball, the
+                       // same way simtest.js's "opening the hand releases
+                       // the ball into a real fall" case works.
+    }, opts.timing);
+    // Real gravity (G_MAG in 35-physics.js) is not adjustable to taste, so
+    // this is the number that actually controls how far the ball falls
+    // before the cycle loops: 1.0s means the release-to-loop-end window
+    // (1-T.release, about 0.4 of the cycle) is ~0.4s of real free fall,
+    // which drops a ball on the order of the hand's own size before the
+    // sequence resets - long enough to read as a real fall, short enough
+    // that it has not left the frame's neighbourhood by the time it does.
+    const SECONDS = opts.seconds === undefined ? 1.0 : opts.seconds; // whole-cycle physics duration
+    const PHYS_STEP_CAP = 1 / 60;  // no single PH.step() call covers more than this much physics time,
+                                    // regardless of how coarsely the caller samples `t` - see advancePhysics
+    const LIFT_FLEX = 26 * DEG, LIFT_DEV = 7 * DEG;  // unchanged from the original: the wrist carries the lift
+    const SETTLE_LIFT = 0.6;       // how much of the lift is still held once the hand has fully re-opened
+    const ANCHOR_UV = [0.52, 0.22]; // the same palm spot ballOnPalm itself places a held ball against
+
+    // Per-digit stagger for the close and the open, so the fingers do not
+    // arrive (or let go) in lockstep. Every digit still lands EXACTLY on the
+    // pose holdBall computed - this only changes how it gets there, never
+    // where. The naive way to stagger five things is five different finish
+    // times, but a digit that finishes early would have to stop dead against
+    // whatever it is closing on before the window itself is over, and one
+    // that starts late would have to leave zero velocity behind at a
+    // boundary shared with an adjacent phase that is not itself moving -
+    // both are the "abrupt start or stop" this whole file is trying to get
+    // away from. So instead every digit gets the SAME ease.inOut - zero
+    // velocity at both ends, guaranteed - just entered late: a digit with a
+    // large delay sits exactly at its start value, genuinely motionless,
+    // for that fraction of the window, then eases through the rest of it no
+    // differently from a digit with no delay at all, arriving with the same
+    // zero velocity every one of them does. The order - index and middle
+    // move first, ring and little a little behind, the thumb last - is not
+    // to taste: it is the order a real hand's digits actually arrive in
+    // (and, reversed, let go in), because the thumb's opposition is a
+    // compound CMC rotation plus flexion and is the slowest degree of
+    // freedom a hand has, where the fingers close on a comparatively simple
+    // hinge.
+    const DIGIT_DELAY = [0.34, 0, 0, 0.12, 0.18];   // thumb, index, middle, ring, little
+    function digitProgress(cta) { return DIGIT_DELAY.map(delay => M.ease.inOut(clamp01(M.inv(cta, delay, 1)))); }
+
+    function copyDigits(pose) { return pose.digits.map(d => Object.assign({}, d)); }
+    function blendDigits(a, b, tt) {
+      return a.digits.map((da, d) => {
+        const db = b.digits[d], e = Array.isArray(tt) ? tt[d] : tt, out = {};
+        for (const k in da) out[k] = typeof da[k] === 'number' ? M.lerp(da[k], db[k], e) : da[k];
+        return out;
+      });
+    }
+    /** 0 before the grip forms, eases up to 1 across the lift, holds through
+     *  the pause, eases back down to SETTLE_LIFT as the hand re-opens, and
+     *  stays there through the fall - the wrist leading the fingers in the
+     *  one place this rig can show it, since it is the only joint upstream
+     *  of everything else: the fingers hold the grip they already have
+     *  while the wrist alone carries the ball up, and later carries it back
+     *  down partway, exactly the "wrist leads, fingers follow" a real lift
+     *  shows, because on this rig the wrist is the only joint that CAN lead
+     *  without also having to be the thing doing the holding. */
+    function liftFrac(u) {
+      if (u < T.contact) return 0;
+      if (u < T.liftTop) return M.ease.inOut(M.inv(u, T.contact, T.liftTop));
+      if (u < T.release) return 1;
+      if (u < T.clear) return M.lerp(1, SETTLE_LIFT, M.ease.inOut(M.inv(u, T.release, T.clear)));
+      return SETTLE_LIFT;
+    }
+    function wristFor(li) {
+      // Every phase before contact and after clear holds `open`'s own
+      // wrist value (grip's wrist is open's wrist too - holdBall never
+      // touches it), so the wrist has exactly one motion in this whole
+      // sequence: the lift, and liftFrac already carries its own easing.
+      return { flex: open.wrist.flex + li * LIFT_FLEX, dev: open.wrist.dev + li * LIFT_DEV, pron: open.wrist.pron };
+    }
+
+    // ==== THE BALL, ATTACHED ================================================
+    // Where a held ball sits, expressed as a fixed offset off a fixed spot on
+    // the palm sheet, so re-evaluating it against a rotated (lifted) rig
+    // carries the ball rigidly with the palm instead of leaving it stranded
+    // at a world-space point while the hand swings up and away from it.
+    //
+    // The offset is a full 3-D vector in the palm's own local frame at that
+    // spot - the surface normal and two tangents built from it - not a
+    // single distance along the normal alone. A single scalar only
+    // reproduces ball0.C if ball0.C happens to sit exactly on that one
+    // normal line, which it does for the rig it was actually placed
+    // against and essentially never does for any other: measured, that
+    // version of this function was quietly discarding upwards of a
+    // millimetre of ball0.C's position every time, sideways to the normal,
+    // which is exactly the direction a scalar-along-the-normal offset has
+    // no way to represent. Three components does not have that blind spot -
+    // it is the whole vector, decomposed rather than approximated - and it
+    // still carries the ball rigidly through a pure rotation for the same
+    // reason the scalar version tried to: normal, tangents and surface
+    // point all rotate together, because they are all read from the same
+    // rig.
+    //
+    // The frame itself is solved once, eagerly, against the rig the hand is
+    // actually in the instant attachment begins - grip's own digits, at
+    // open's own (not yet lifted) wrist, which is exactly T.contact - not
+    // against rig0, whose fingers are still open. reproduces ball0.C
+    // exactly at T.contact by construction, because that is precisely the
+    // geometry ball0.C sits in front of at that instant.
+    function tangentFrame(n) {
+      // an arbitrary but CONSISTENT pair of tangents built from n alone, so
+      // they rotate rigidly whenever n itself does; which two directions
+      // they are does not matter, only that the same recipe is used every
+      // time this is called.
+      const ref = Math.abs(n[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+      const t1 = M.vnorm(M.vcross(ref, n));
+      return [t1, M.vcross(n, t1)];
+    }
+    const anchorLocal = (function () {
+      const rigAtContact = R.solve(A, grip);
+      const sp = R.palmSurface(rigAtContact, ANCHOR_UV[0], ANCHOR_UV[1]);
+      const n = R.palmNormal(rigAtContact, ANCHOR_UV[0], ANCHOR_UV[1]);
+      const [t1, t2] = tangentFrame(n);
+      const d = M.vsub(ball0.C, sp.P);
+      return { n: M.vdot(d, n), t1: M.vdot(d, t1), t2: M.vdot(d, t2) };
+    })();
+    function attachedBallC(rig) {
+      const sp = R.palmSurface(rig, ANCHOR_UV[0], ANCHOR_UV[1]);
+      const n = R.palmNormal(rig, ANCHOR_UV[0], ANCHOR_UV[1]);
+      const [t1, t2] = tangentFrame(n);
+      let C = M.vmad(sp.P, n, anchorLocal.n);
+      C = M.vmad(C, t1, anchorLocal.t1);
+      C = M.vmad(C, t2, anchorLocal.t2);
+      return C;
+    }
+
+    // ==== THE BALL, FALLING ==================================================
+    // A real GK.physics body, created the instant it is first needed (the
+    // instant the caller's sampling first crosses T.release) and stepped
+    // forward by exactly as much physics time as `u` has advanced since the
+    // last call. Zero initial velocity is not a simplification stood in for
+    // a real number: liftFrac's own ease.inOut has zero slope at u=T.release
+    // (that is what ease.inOut(0) with a cubic on both sides means), so the
+    // hand's own motion is already momentarily still at the instant of
+    // release - a controlled let-go, not a toss - and handing the ball a
+    // velocity of exactly what the hand was doing at that instant is exactly
+    // what "zero" already is here, not an approximation of it.
+    let sim = null;
+    function advancePhysics(u, rigNow) {
+      const PH = GK.physics;
+      if (!sim) {
+        const state = PH.createState({
+          r: radius, C: attachedBallC(rigNow), v: [0, 0, 0], w: [0, 0, 0],
+          density: opts.density, restitution: opts.restitution, friction: opts.friction
+        });
+        PH.setGravityFromRig(state, rig0);
+        sim = { state, lastU: u };
+        return;
+      }
+      let remaining = (u - sim.lastU) * SECONDS;
+      sim.lastU = u;
+      // Chunked rather than handed to PH.step() in one call, so accuracy
+      // never depends on how densely the caller happens to sample `t`: a
+      // tool taking eight frames across the whole animation gets the same
+      // trajectory as one taking two hundred, just read out at coarser
+      // intervals, because the physics underneath never sees a dt larger
+      // than PHYS_STEP_CAP regardless.
+      while (remaining > 1e-6) {
+        const h = Math.min(remaining, PHYS_STEP_CAP);
+        PH.step(sim.state, rigNow, h);
+        remaining -= h;
+      }
+    }
+
+    let gen = null;   // which lap of the loop the previous call belonged to
     return function (t) {
       const u = ((t % 1) + 1) % 1;
-      let mix = 0, lift = 0, fall = 0;
-      if (u < P[0]) { mix = 0; }
-      else if (u < P[1]) { mix = ease(inv(u, P[0], P[1])); }
-      else if (u < P[2]) { mix = 1; lift = ease(inv(u, P[1], P[2])); }
-      else if (u < P[3]) { mix = 1 - ease(inv(u, P[2], P[3])); lift = 1 - ease(inv(u, P[2], P[3])) * 0.4; }
-      else { mix = 0; lift = 0.6; fall = inv(u, P[3], 1); }
-      const p = lerpPose(open, grip, mix);
-      // the wrist carries the lift, since nothing else can
-      p.wrist.flex += lift * 26 * DEG;
-      p.wrist.dev += lift * 7 * DEG;
-      const held = { C: ball0.C.slice(), r: ball0.r,
-        roughness: opts.roughness, anisotropy: opts.anisotropy };
-      if (fall > 0) {
-        // a real acceleration, not a slide: the first tenth of the fall is
-        // barely visible and the last is a blur, which is what selling a drop
-        // in a still sequence depends on
-        const drop = 0.5 * 2600 * Math.pow(fall * 0.42, 2);
-        held.C = M.vmad(held.C, down, drop);
+      const thisGen = Math.floor(t);
+      // A new lap is a fresh repetition of the same gesture: a new ball, in
+      // effect, so any physics body left over from the last one round has
+      // nothing to do with this one. (anchorT does not need this - it no
+      // longer depends on when it was first asked for, see its own note.)
+      if (thisGen !== gen) { sim = null; gen = thisGen; }
+
+      const li = liftFrac(u);
+      const p = blank();
+      let phase;
+      if (u < T.start) {
+        p.digits = copyDigits(openClear); p.arch = openClear.arch; phase = 'idle';
+      } else if (u < T.contact) {
+        const cta = M.inv(u, T.start, T.contact);
+        p.digits = blendDigits(openClear, grip, digitProgress(cta));
+        p.arch = M.lerp(openClear.arch, grip.arch, M.ease.inOut(cta)); phase = 'close';
+      } else if (u < T.release) {
+        p.digits = copyDigits(grip); p.arch = grip.arch; phase = u < T.liftTop ? 'lift' : 'hold';
+      } else if (u < T.clear) {
+        const oe = M.inv(u, T.release, T.clear);
+        p.digits = blendDigits(grip, open, digitProgress(oe));
+        p.arch = M.lerp(grip.arch, open.arch, M.ease.inOut(oe)); phase = 'release';
+      } else {
+        p.digits = copyDigits(open); p.arch = open.arch; phase = 'falling';
       }
+      p.wrist = wristFor(li);
+
+      let ball;
+      if (u < T.contact) {
+        ball = { C: ball0.C.slice(), r: ball0.r };
+      } else {
+        const rigNow = R.solve(A, p);
+        if (u < T.release) ball = { C: attachedBallC(rigNow), r: ball0.r };
+        else { advancePhysics(u, rigNow); ball = { C: sim.state.C.slice(), r: sim.state.r }; }
+      }
+      ball.roughness = opts.roughness;
+      ball.anisotropy = opts.anisotropy;
+
       const out = clampPose(A, p);
-      out.ball = held;
-      out.phase = fall > 0 ? 'falling' : mix > 0.98 ? 'held' : mix > 0.02 ? 'closing' : 'open';
+      out.ball = ball;
+      out.phase = phase;
       return out;
     };
   }
@@ -3739,6 +4034,561 @@
     resolveContacts, gatherContacts, jointDofs, reach,
     holdBall, ballOnPalm, ballContacts, pickAndDrop,
     lerpPose, dofList, romTour, breathe, readout, nr
+  };
+})(window.GK = window.GK || {});
+
+</script>
+<script>
+/* ============================================================================
+   GRAPHITE KINEMATICS — 35 · physics
+   The held ball as a real object: a small rigid-body sphere with its own
+   state — position, velocity, orientation, spin — that collides with the
+   hand's own surfaces (the same digitSurface/palmSurface the renderer draws
+   from) and is resolved by impulses, not placed by a formula. Squeeze it and
+   the contact forces rise. Tilt the hand past what friction can hold and it
+   rolls. Open the fingers and it is not "released" by a timeline — it falls
+   because nothing is pushing back on it any more.
+
+   WHAT THIS FILE DOES NOT DO: it does not give the hand itself mass. The
+   joints stay exactly what they already were — an IK-posed linkage — and the
+   ball pushes on them the same way a contact already does in 30-pose.js:
+   jointDofs() plus a Jacobian-transpose relaxation (see reactToHand below,
+   which is applyContacts' sibling, driven by contact force instead of
+   penetration depth). Two different problems, two different solvers, wired
+   together by the contact records this file produces.
+
+   THE GRAVITY / "DOWN" CONVENTION. rig.root is this system's only notion of
+   a world frame, and pickAndDrop (30-pose.js) already treats -root[0] as
+   "down the page" for exactly one pose, fixed once at the start of that
+   animation and never revisited even while the wrist goes on to move. That
+   is deliberate, not an oversight: root rotates rigidly with wrist
+   flexion/deviation, and the whole hand's geometry rotates right along with
+   it, so a gravity vector that were re-read from root every frame would
+   rotate in lockstep with the palm and a wrist twist would never change
+   anything relative to the ball — "tilting the hand" would be a no-op.
+   Real gravity does not rotate when a wrist does. So: -root[0] is read once,
+   the first time a state sees a rig, cached on state.down, and held fixed
+   from then on — call setGravityFromRig() to deliberately re-anchor it (a
+   ball freshly dropped into a new hand/pose) or wake() to nudge a resting
+   ball back into the solver without moving gravity at all.
+
+   UNITS. Millimetres, kilograms, seconds throughout — the rig is already in
+   mm, so contacts need no conversion. Force is reported to callers in
+   newtons (see FORCE_SI); everything internal stays mm/kg/s.
+   ========================================================================== */
+(function (GK) {
+  'use strict';
+  const M = GK.math, AN = GK.anatomy, RG = GK.rig, PO = GK.pose;
+  const { clamp, clamp01, lerp } = M;
+  const { vadd, vsub, vmul, vmad, vdot, vcross, vlen, vdist, vnorm, vlerp } = M;
+
+  // =========================================================================
+  //  TUNABLES
+  // =========================================================================
+  const G_MAG = 9810;                 // mm/s^2
+  const DEFAULT_DENSITY = 1.0e-6;     // kg/mm^3 (~1 g/cm^3 — a light rubber/wood ball)
+  const DEFAULT_RESTITUTION = 0.28;
+  const DEFAULT_FRICTION = 0.92;      // combined ball/skin Coulomb coefficient
+  const SUBSTEP_DT = 1 / 240;         // fixed substep, so a step's outcome is frame-rate independent
+  const MAX_SUBSTEPS = 8;
+  const MAX_DT = 0.1;                 // guard against a stalled caller handing us a huge dt
+  const SOLVER_ITERS = 4;             // Gauss-Seidel sweeps per substep
+  const REST_LIN_EPS = 3.0;           // mm/s
+  const REST_ANG_EPS = 3.0;           // rad/s
+  const REST_TIME = 0.12;             // s below both thresholds before sleeping
+  const RESTITUTION_VEL_FLOOR = 45;   // mm/s — slower closing speeds bounce inelastically
+  const WAKE_HAND_SPEED = 1.5;        // mm/s of hand-surface motion that wakes a sleeping ball
+  const SPEC_MARGIN = 2.0;            // mm — speculative contact margin so fast approach isn't missed
+  const PALM_COMPLIANCE = 0.85;       // the palm's pad is not a wall (cf. palmSamples in 30-pose.js)
+  const CONTACT_EMA_ALPHA = 0.35;     // low-pass on exposed contact depth/force/position
+  const CONTACT_GRACE = 0.10;         // s a contact is kept alive after it stops being detected
+  const CONTACT_MIN_DEPTH = 0.01;     // mm — below this a contact isn't worth publishing
+  const FORCE_SI = 1e-3;              // (kg*mm/s^2) -> N
+  const FORCE_TO_YIELD_MM = 3.2;      // mm of give at the contact point, saturating (see reactToHand)
+  const FORCE_SAT = 3.5;              // N — force at which that yield is ~63% saturated
+  const ANGULAR_DAMPING = 1.0;        // 1/s - see the note beside its use in step()
+
+  const now = () => (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+
+  // =========================================================================
+  //  QUATERNION — [w,x,y,z]. Kept local: 00-math.js has no rotation type
+  //  beyond the 3x3 frames the rig already uses, and a ball spinning under
+  //  friction needs an orientation cheap enough to integrate every substep.
+  // =========================================================================
+  function qIdent() { return [1, 0, 0, 0]; }
+  function qNormalize(q) {
+    const l = Math.hypot(q[0], q[1], q[2], q[3]) || 1;
+    return [q[0] / l, q[1] / l, q[2] / l, q[3] / l];
+  }
+  function qMul(a, b) {
+    return [
+      a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
+      a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
+      a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
+      a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0]
+    ];
+  }
+  /** semi-implicit integration of orientation by angular velocity w over dt */
+  function qIntegrate(q, w, h) {
+    const wq = [0, w[0] * h, w[1] * h, w[2] * h];
+    const dq = qMul(wq, q);
+    return qNormalize([q[0] + dq[0] * 0.5, q[1] + dq[1] * 0.5, q[2] + dq[2] * 0.5, q[3] + dq[3] * 0.5]);
+  }
+  /** rotate a world vector by q (Fabian Giesen's optimised form) */
+  function qRotate(q, v) {
+    const qv = [q[1], q[2], q[3]];
+    const t = vmul(vcross(qv, v), 2);
+    return vadd(vadd(v, vmul(t, q[0])), vcross(qv, t));
+  }
+  /** the ball's own frame in world space, as [ex,ey,ez] — GK.math's mApply convention */
+  function orientationFrame(state) {
+    return [qRotate(state.q, [1, 0, 0]), qRotate(state.q, [0, 1, 0]), qRotate(state.q, [0, 0, 1])];
+  }
+
+  // =========================================================================
+  //  STATE
+  // =========================================================================
+
+  /**
+   * A new ball. Mass follows from radius and density like a real object's
+   * would, rather than being handed in independently of its size.
+   */
+  function createState(opts) {
+    opts = opts || {};
+    const r = opts.r === undefined ? 26 : opts.r;
+    const density = opts.density === undefined ? DEFAULT_DENSITY : opts.density;
+    const mass = Math.max(1e-6, density * (4 / 3) * Math.PI * r * r * r);
+    const I = 0.4 * mass * r * r;            // solid sphere: (2/5) m r^2
+    return {
+      C: (opts.C || [0, 0, 0]).slice(),
+      v: (opts.v || [0, 0, 0]).slice(),
+      q: (opts.q || qIdent()).slice(),
+      w: (opts.w || [0, 0, 0]).slice(),
+      r, mass, invMass: 1 / mass, invI: 1 / I,
+      restitution: opts.restitution === undefined ? DEFAULT_RESTITUTION : opts.restitution,
+      friction: opts.friction === undefined ? DEFAULT_FRICTION : opts.friction,
+      down: opts.down ? vnorm(opts.down) : null,
+      asleep: false, _restT: 0, _simTime: 0,
+      _prevRig: null, _palmUV: null, _ema: new Map(),
+      contacts: [], netContactForce: [0, 0, 0], lastStepMs: 0, lastSubsteps: 0
+    };
+  }
+
+  /** (Re-)anchor "down" from a rig's own frame — see the file header. */
+  function setGravityFromRig(state, rig) {
+    state.down = vnorm(vmul(rig.root[0], -1));
+    state.asleep = false; state._restT = 0;
+    return state.down;
+  }
+
+  /** Nudge a sleeping ball back into the solver without touching gravity. */
+  function wake(state) { state.asleep = false; state._restT = 0; }
+
+  // =========================================================================
+  //  CONTACT GEOMETRY — sampled fresh from the rig each step(), cached for
+  //  the substeps within it (the hand doesn't move mid-step; only the ball
+  //  does). This is deliberately the same simplification gatherContacts and
+  //  ballContacts already use in 30-pose.js: one capsule per rendered
+  //  segment, radius averaged from segmentProfile — not a fresh union of
+  //  cross-sections. It is proven cheap enough there for a settle loop run
+  //  20 times over; here it runs a handful of times per frame.
+  // =========================================================================
+
+  function closestOnSeg(A, B, P) {
+    const AB = vsub(B, A);
+    const L2 = vdot(AB, AB);
+    let t = L2 > 1e-9 ? vdot(vsub(P, A), AB) / L2 : 0;
+    t = clamp(t, 0, 1);
+    return { Q: vmad(A, AB, t), t };
+  }
+
+  function buildDigitCapsules(A, rig, ballC) {
+    const caps = [];
+    for (let d = 0; d < 5; d++) {
+      for (const sg of rig.digits[d].segs) {
+        // A finger's segment 0 is its metacarpal, which lives inside the
+        // palm - the palm contact already answers for it, and giving it its
+        // own capsule as well would just double-count the same flesh. The
+        // thumb's segment 0 is not that: it is the thenar mass, out on its
+        // own away from the palm sheet, and ballContacts (30-pose.js) already
+        // treats it as a contact in its own right for exactly that reason.
+        // Skipping it here too - as this used to, uniformly - leaves the
+        // thumb's own base with no physics capsule at all, and a ball
+        // released near a still-closing thumb sails straight through it:
+        // measured on this file's own test data, over 11mm of a 26mm ball
+        // through the thenar before this fix, zero after.
+        if (!sg.rendered || (sg.seg < 1 && d !== 0)) continue;
+        // dorsopalmar half-depth (index 1), the same choice ballContacts
+        // makes for ball-vs-digit — the width that actually meets a ball
+        // pressed against the front or back of a finger, not its flanks.
+        const r = (AN.segmentProfile(A, d, sg.seg, 0.2)[1] + AN.segmentProfile(A, d, sg.seg, 0.8)[1]) * 0.5;
+        const { t } = closestOnSeg(sg.A, sg.B, ballC);
+        caps.push({ d, seg: sg.seg, A: sg.A, B: sg.B, r: Math.max(1.5, r), t });
+      }
+    }
+    return caps;
+  }
+
+  const PALM_DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+  /**
+   * Closest point on the palm's smooth (u,v) sheet to a world point: a coarse
+   * grid over the whole sheet (cheap enough, next to the substep loop below,
+   * to just always run — this is not the place to economise) plus last
+   * frame's answer as an extra seed, then coordinate-descent refinement. A
+   * warm-start-only search was tried first and quietly lost real, thin
+   * contacts on a fast-moving ball: the greedy descent can settle into a
+   * local minimum in the few iterations available and never find the true
+   * closest point again. Re-scanning every call costs a fraction of a
+   * millisecond and cannot get stuck. Contact IDENTITY doesn't depend on
+   * exactly which (u,v) this converges to — every palm contact is exposed
+   * under the one 'palm' key (see publishContacts) — so re-seeding here
+   * cannot itself cause the flicker that identity would.
+   */
+  function palmClosest(rig, C, warmUV) {
+    let u, v, bestD = Infinity;
+    for (let iu = 0; iu <= 14; iu++) {
+      const uu = lerp(-0.3, 1.1, iu / 14);
+      const lo = rig.palm.vLo(uu), hi = rig.palm.vHi(uu);
+      for (let iv = 0; iv <= 12; iv++) {
+        const vv = lerp(lo, hi, iv / 12);
+        const d = vdist(RG.palmSpine(rig, uu, vv).P, C);
+        if (d < bestD) { bestD = d; u = uu; v = vv; }
+      }
+    }
+    if (warmUV) {
+      const uu = clamp(warmUV[0], -0.5, 1.15);
+      const vv = clamp(warmUV[1], rig.palm.vLo(uu) + 0.02, rig.palm.vHi(uu) - 0.02);
+      const d = vdist(RG.palmSpine(rig, uu, vv).P, C);
+      if (d < bestD) { bestD = d; u = uu; v = vv; }
+    }
+    let step = 0.05;
+    for (let pass = 0; pass < 12 && step > 0.0004; pass++) {
+      let improved = false;
+      for (const [du, dv] of PALM_DIRS) {
+        const uu = clamp(u + du * step, -0.5, 1.15);
+        const vv = clamp(v + dv * step, rig.palm.vLo(uu) + 0.02, rig.palm.vHi(uu) - 0.02);
+        const d = vdist(RG.palmSpine(rig, uu, vv).P, C);
+        if (d < bestD - 1e-9) { bestD = d; u = uu; v = vv; improved = true; }
+      }
+      if (!improved) step *= 0.5;
+    }
+    const sp = RG.palmSpine(rig, u, v);
+    return { u, v, P: sp.P, n: sp.n };
+  }
+
+  /** live contact candidates against the ball's CURRENT position, given the
+   *  per-step capsule/palm cache — cheap enough to call once a substep. */
+  function gatherLive(state, capsules, palmPoint) {
+    const C = state.C, r = state.r;
+    const list = [];
+    const off = vdot(vsub(C, palmPoint.P), palmPoint.n);
+    const depthP = (palmPoint.thick + r) - off;
+    if (depthP > -SPEC_MARGIN && off > -8) {
+      list.push({
+        kind: 'palm', u: palmPoint.u, v: palmPoint.v, n: palmPoint.n, depth: depthP,
+        Phand: vmad(palmPoint.P, palmPoint.n, palmPoint.thick)
+      });
+    }
+    for (const cap of capsules) {
+      const { Q } = closestOnSeg(cap.A, cap.B, C);
+      const dist = vdist(C, Q);
+      if (dist < 1e-6) continue;
+      const n = vmul(vsub(C, Q), 1 / dist);
+      const depth = (cap.r + r) - dist;
+      if (depth > -SPEC_MARGIN) {
+        list.push({ kind: 'digit', d: cap.d, seg: cap.seg, n, depth, Phand: vmad(Q, n, cap.r) });
+      }
+    }
+    return list;
+  }
+
+  // =========================================================================
+  //  IMPULSE SOLVER — sequential impulses, accumulated and clamped per
+  //  contact within a substep (Gauss-Seidel across contacts so a ball
+  //  touching the palm and three fingers at once has them all agree).
+  //
+  //  Normal impulse needs no rotational coupling: the sphere's lever arm to
+  //  any contact point is r*(-n), parallel to n, so a purely normal force
+  //  produces no torque. Friction's lever arm is perpendicular to n (it acts
+  //  along the tangent), and that is what makes the ball roll: the effective
+  //  mass for the tangential impulse works out to invMass + invI*r^2, which
+  //  for a solid sphere is 7/(2m) — the classic rolling-sphere factor.
+  //
+  //  Velocity here is solved as though the hand were momentarily static at
+  //  each contact. A real closing or tilting hand still reaches the ball:
+  //  contacts are re-detected from the moving surface every substep (see
+  //  gatherLive), so a finger that has advanced 0.3mm since the last substep
+  //  shows up as 0.3mm more penetration right now, and the same non-
+  //  penetration constraint below pushes the ball out of that — which is
+  //  what carries it along as the hand closes. What this deliberately does
+  //  NOT do is also hand the ball the contact point's own velocity as
+  //  momentum: that was tried (finite-differencing the closest point frame
+  //  to frame) and cost more than it bought. The closest point on a capsule
+  //  or the palm sheet does not track one fixed patch of skin — it is
+  //  recomputed from wherever the ball is now — so differencing it measures
+  //  the drift of a moving target, not a surface's true velocity, and under
+  //  a full grip (six to eight contacts, all changing together as fingers
+  //  close) that noise compounded into a runaway within a few dozen frames,
+  //  every way it was weighted in. The plain constraint below has no such
+  //  term to go wrong and settles a closing grip to within 1% of net force
+  //  balancing weight; see updateSleep for how standing penetration is kept
+  //  from ever growing once the ball is actually at rest.
+  // =========================================================================
+  function solveContactsSubstep(state, contacts, iters) {
+    const invM = state.invMass, invI = state.invI, r = state.r, mu = state.friction, mass = state.mass;
+    for (const c of contacts) {
+      c._jn = 0; c._jt = 0;
+      c._rVec = vmul(c.n, -r);
+      const vPoint = vadd(state.v, vcross(state.w, c._rVec));
+      const vn0 = vdot(vPoint, c.n);
+      const e = (vn0 > -RESTITUTION_VEL_FLOOR) ? 0 : state.restitution;
+      // No Baumgarte-style depth bias here. Two shapes of it were tried —
+      // an independent post-substep push on state.C, and a bias folded into
+      // this same accumulated normal impulse — and both destabilised a full
+      // grip: six to eight simultaneous contacts, their depths all changing
+      // together as the fingers close, and both approaches went into a
+      // runaway within a few dozen frames every time, however small the
+      // correction was made per application. The plain velocity constraint
+      // below does not have that failure mode and turns out not to need the
+      // help: resting depth is whatever this converges to under load, held
+      // there by the constraint itself rather than trimmed back by a second
+      // system, and once asleep (see updateSleep) it never has the chance to
+      // creep further. See the header note above this function.
+      c._desired = vn0 < 0 ? -e * vn0 : 0;
+    }
+    const kt = invM + invI * r * r;
+    for (let it = 0; it < iters; it++) {
+      for (const c of contacts) {
+        const n = c.n, rVec = c._rVec;
+        // ---- normal ----
+        let vPoint = vadd(state.v, vcross(state.w, rVec));
+        let vn = vdot(vPoint, n);
+        let dPn = (c._desired - vn) * mass;
+        let newJn = Math.max(0, c._jn + dPn);
+        dPn = newJn - c._jn; c._jn = newJn;
+        state.v = vmad(state.v, n, dPn * invM);
+        // ---- friction (Coulomb cone sized off the normal impulse) ----
+        vPoint = vadd(state.v, vcross(state.w, rVec));
+        const vt = vsub(vPoint, vmul(n, vdot(vPoint, n)));
+        const vtLen = vlen(vt);
+        if (vtLen > 1e-6 && c._jn > 0) {
+          const tDir = vmul(vt, 1 / vtLen);
+          let dPt = -vtLen / kt;
+          const maxT = mu * c._jn;
+          let newJt = clamp(c._jt + dPt, -maxT, maxT);
+          dPt = newJt - c._jt; c._jt = newJt;
+          state.v = vmad(state.v, tDir, dPt * invM);
+          state.w = vadd(state.w, vmul(vcross(rVec, vmul(tDir, dPt)), invI));
+        }
+      }
+    }
+  }
+
+  function updateSleep(state, dt) {
+    const lin = vlen(state.v), ang = vlen(state.w);
+    if (lin < REST_LIN_EPS && ang < REST_ANG_EPS) {
+      state._restT += dt;
+      if (state._restT > REST_TIME) { state.asleep = true; state.v = [0, 0, 0]; state.w = [0, 0, 0]; }
+    } else state._restT = 0;
+  }
+
+  // =========================================================================
+  //  EXPOSED CONTACTS — the input the surface deformation reads. Identity is
+  //  (d,seg) for a digit or the single palm point, which is exactly what
+  //  keeps this stable: there is at most one contact per rendered segment and
+  //  one for the palm, so the SET rarely changes shape frame to frame, and an
+  //  EMA per identity (plus a short grace period before an identity is
+  //  dropped) smooths what does move so a squeeze reads as a settling field
+  //  rather than a flicker.
+  // =========================================================================
+  function publishContacts(state, ctx, dt) {
+    const { capsules, palmPoint, accumJn } = ctx;
+    const fresh = gatherLive(state, capsules, palmPoint);
+    const seen = new Set();
+    for (const c of fresh) {
+      if (c.depth <= CONTACT_MIN_DEPTH) continue;
+      const key = c.kind === 'palm' ? 'palm' : ('digit_' + c.d + '_' + c.seg);
+      seen.add(key);
+      const jn = c.kind === 'palm' ? accumJn.palm : (accumJn.digit[key] || 0);
+      const fRaw = Math.max(0, (jn / dt) * FORCE_SI);
+      let ema = state._ema.get(key);
+      if (!ema) {
+        ema = { depth: c.depth, f: fRaw, P: c.Phand.slice(), n: c.n.slice() };
+      } else {
+        const a = CONTACT_EMA_ALPHA;
+        ema.depth = lerp(ema.depth, c.depth, a);
+        ema.f = lerp(ema.f, fRaw, a);
+        ema.P = vlerp(ema.P, c.Phand, a);
+        ema.n = vnorm(vlerp(ema.n, c.n, a));
+      }
+      ema.seenAt = state._simTime;
+      ema.part = c.kind === 'palm' ? { kind: 'palm', u: c.u, v: c.v } : { kind: 'digit', d: c.d, seg: c.seg };
+      state._ema.set(key, ema);
+    }
+    const out = [];
+    for (const [key, ema] of state._ema) {
+      if (!seen.has(key)) {
+        if (state._simTime - ema.seenAt > CONTACT_GRACE) { state._ema.delete(key); continue; }
+      }
+      out.push({ P: ema.P.slice(), n: ema.n.slice(), depth: ema.depth, f: ema.f, part: ema.part });
+    }
+    state.contacts = out;
+  }
+
+  // =========================================================================
+  //  STEP — a fixed-substep integrator so the resting position, the settle
+  //  time and the fall all come out the same whether the caller runs at 30,
+  //  60 or 144 fps; only how many substeps get spent to cover dt changes.
+  // =========================================================================
+  function step(state, rig, dt) {
+    const t0 = now();
+    if (!(dt > 0)) { state.lastStepMs = 0; return state; }
+    dt = Math.min(dt, MAX_DT);
+    state._simTime += dt;
+    const A = rig.anatomy;
+    if (state.down == null) setGravityFromRig(state, rig);
+
+    const capsules = buildDigitCapsules(A, rig, state.C);
+    const palmHit = palmClosest(rig, state.C, state._palmUV);
+    state._palmUV = [palmHit.u, palmHit.v];
+    const palmPoint = {
+      u: palmHit.u, v: palmHit.v, P: palmHit.P, n: palmHit.n,
+      thick: RG.palmThickPalmar(A, palmHit.u, palmHit.v) * PALM_COMPLIANCE
+    };
+    const prevRig = state._prevRig;
+
+    // ---- asleep: stay put unless the hand has moved or support vanished ---
+    if (state.asleep) {
+      const live = gatherLive(state, capsules, palmPoint);
+      let held = false;
+      for (const c of live) if (c.depth > 0.02) held = true;
+      let disturbed = !held;
+      // geometric disturbance only (never fed into the impulse solve, see
+      // the note above solveContactsSubstep) - just "has the hand actually
+      // moved enough to be worth re-checking", so a sleeping ball wakes when
+      // fingers open or the hand tilts even though nothing has hit it yet
+      if (!disturbed && prevRig) {
+        const dt2 = dt > 0 ? dt : 1;
+        disturbed = vdist(palmHit.P, RG.palmSpine(prevRig, palmHit.u, palmHit.v).P) / dt2 > WAKE_HAND_SPEED;
+        for (let i = 0; i < capsules.length && !disturbed; i++) {
+          const cap = capsules[i];
+          const old = prevRig.digits[cap.d] && prevRig.digits[cap.d].segs[cap.seg];
+          if (old && vdist(vlerp(cap.A, cap.B, cap.t), vlerp(old.A, old.B, cap.t)) / dt2 > WAKE_HAND_SPEED) disturbed = true;
+        }
+      }
+      if (!disturbed) {
+        state._prevRig = rig; state.lastStepMs = now() - t0; state.lastSubsteps = 0;
+        return state;                 // state.contacts is untouched: already settled
+      }
+      wake(state);
+    }
+
+    // ---- active integration, fixed substeps -------------------------------
+    const nSub = Math.min(MAX_SUBSTEPS, Math.max(1, Math.round(dt / SUBSTEP_DT)));
+    const h = dt / nSub;
+    const accumJn = { palm: 0, digit: Object.create(null) };
+    let impulseAccum = [0, 0, 0];        // normal + friction, every contact, this whole step()
+    for (let s = 0; s < nSub; s++) {
+      state.v = vmad(state.v, state.down, G_MAG * h);
+      const live = gatherLive(state, capsules, palmPoint);
+      const vBefore = state.v;
+      solveContactsSubstep(state, live, SOLVER_ITERS);
+      impulseAccum = vmad(impulseAccum, vsub(state.v, vBefore), state.mass);
+      for (const c of live) {
+        if (c.kind === 'palm') accumJn.palm += c._jn;
+        else accumJn.digit['digit_' + c.d + '_' + c.seg] = (accumJn.digit['digit_' + c.d + '_' + c.seg] || 0) + c._jn;
+      }
+      // A resting multi-contact ball can settle its LINEAR velocity to a
+      // dead stop while very slightly, persistently gaining spin: friction
+      // here only cancels slip that is already showing up at a contact, not
+      // the slip gravity is about to introduce over the rest of this
+      // substep, and with several contacts at once the residual from each
+      // can combine into a genuine (if tiny) net torque none of them sees
+      // individually. Real static friction would zero that; this one-line
+      // damping stands in for that missing proactive term. It can only ever
+      // shrink |w|, never grow it, so unlike the position-correction and
+      // reactToHand-at-full-strength failures documented above, it has no
+      // runaway mode to reopen — and it is far too gentle (a few tenths of a
+      // percent per substep) to visibly slow an actually rolling ball over
+      // the second-or-so a tilt or a fall plays out in.
+      state.w = vmul(state.w, Math.max(0, 1 - ANGULAR_DAMPING * h));
+      state.C = vmad(state.C, state.v, h);
+      state.q = qIntegrate(state.q, state.w, h);
+    }
+    // the total force (normal + Coulomb friction, summed over every contact)
+    // the hand actually exerted on the ball this frame — the honest way to
+    // check "is friction plus normal force what's holding this up", since a
+    // side-pinched ball can be held almost entirely by friction with very
+    // little of it in the normal direction at all.
+    state.netContactForce = vmul(impulseAccum, (1 / dt) * FORCE_SI);
+
+    publishContacts(state, { capsules, palmPoint, accumJn }, dt);
+    updateSleep(state, dt);
+    state._prevRig = rig;
+    state.lastStepMs = now() - t0; state.lastSubsteps = nSub;
+    return state;
+  }
+
+  // =========================================================================
+  //  HAND REACTION — reads back exactly like applyContacts (30-pose.js):
+  //  same jointDofs, same Jacobian-transpose pseudo-inverse step, same
+  //  per-joint compliance weights. The difference is what drives it: not
+  //  penetration depth (there mostly isn't any once the ball solver is
+  //  running) but the contact FORCE this step actually produced, saturating
+  //  so a hard squeeze yields more than a light rest but never unhinges a
+  //  joint. Palm force gets a small direct nudge on the arch — the one
+  //  compliant DOF jointDofs doesn't reach — so a heavy ball presses the cup
+  //  flatter, not just the fingers wider.
+  // =========================================================================
+  function reactToHand(A, pose, rig, contacts, opts) {
+    opts = opts || {};
+    const kappa = opts.kappa === undefined ? 1 : opts.kappa;
+    const archYield = opts.archYield === undefined ? 0.5 : opts.archYield;
+    const p = JSON.parse(JSON.stringify(pose));
+    let palmF = 0;
+    for (const c of contacts) {
+      if (c.part.kind === 'palm') { palmF = Math.max(palmF, c.f); continue; }
+      const d = c.part.d, seg = c.part.seg;
+      const dofs = PO.jointDofs(rig, p, d).filter(x => x.seg <= seg);
+      if (!dofs.length) continue;
+      const g = new Array(dofs.length);
+      let sum = 0;
+      for (let i = 0; i < dofs.length; i++) {
+        const x = dofs[i];
+        g[i] = vdot(vcross(x.axis, vsub(c.P, x.O)), c.n);
+        sum += x.w * g[i] * g[i];
+      }
+      if (sum < 1e-7) continue;
+      // yieldAmt is in the SAME units g[i] is - mm of point displacement
+      // along the contact normal - exactly like applyContacts' lambda*depth,
+      // so this reuses that same pseudo-inverse honestly rather than in
+      // name only: a target expressed directly in radians here would be
+      // solved for as though it were millimetres of relief and come out
+      // roughly (typical lever arm in mm) times too small.
+      const yieldAmt = kappa * FORCE_TO_YIELD_MM * Math.tanh(c.f / FORCE_SAT);
+      const k = yieldAmt / sum;
+      for (let i = 0; i < dofs.length; i++) dofs[i].add(k * dofs[i].w * g[i]);
+    }
+    if (palmF > 0) p.arch = clamp01(p.arch - archYield * 0.12 * Math.tanh(palmF / FORCE_SAT));
+    return PO.clampPose(A, p);
+  }
+
+  // =========================================================================
+  //  DIAGNOSTICS
+  // =========================================================================
+  function energy(state) {
+    const keLin = 0.5 * state.mass * vdot(state.v, state.v);
+    const I = 0.4 * state.mass * state.r * state.r;
+    const keAng = 0.5 * I * vdot(state.w, state.w);
+    const heightUp = state.down ? -vdot(state.C, state.down) : 0;
+    const pe = state.mass * G_MAG * heightUp;
+    return { keLin, keAng, ke: keLin + keAng, pe, total: keLin + keAng + pe };
+  }
+
+  GK.physics = {
+    G: G_MAG, SUBSTEP_DT, MAX_SUBSTEPS,
+    createState, setGravityFromRig, wake, step, reactToHand, energy, orientationFrame,
+    qIdent, qMul, qNormalize, qRotate, qIntegrate
   };
 })(window.GK = window.GK || {});
 
@@ -6024,11 +6874,18 @@
       const n = this.w * this.h;
       this.z0 = new Float32Array(n); this.i0 = new Int16Array(n);
       this.z1 = new Float32Array(n); this.i1 = new Int16Array(n);
+      // A cache for slope(), filled in lazily rather than all at once: see
+      // the note on slope() below for why this is safe and _slopeSet exists
+      // rather than a sentinel value, and why it stays unallocated (null)
+      // until the first query, since a caller that never asks about slope
+      // (nothing does, off the contour/occlusion path) should not pay for it.
+      this._slope = null; this._slopeSet = null;
       this.clear();
     }
     clear() {
       this.z0.fill(-1e18); this.z1.fill(-1e18);
       this.i0.fill(-1); this.i1.fill(-1);
+      this._slope = null; this._slopeSet = null;
       return this;
     }
     /** rasterise a triangle owned by part `id`, peeling two layers */
@@ -6044,22 +6901,40 @@
       const den = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
       if (Math.abs(den) < 1e-12) return;
       const iden = 1 / den;
+      // l0 and l1 are affine in (px, py): every one of these four
+      // coefficients is the same at every pixel the triangle covers, so this
+      // hoists them out of a loop that, until now, recomputed all four from
+      // scratch on every single pixel - the actual cost of this function,
+      // since a triangle is on average tens of pixels and this ran twice
+      // that often for nothing. What is pulled out is exactly the
+      // sub-expressions as they were written, not a reassociated equivalent
+      // of them, so the value each pixel multiplies by iden is bit-for-bit
+      // what it was before. A wrong version of this hoist still looks right
+      // on every triangle in this file and only disagrees with the original
+      // on one rasterised near some part's own silhouette, where l0 or l1
+      // sits within float noise of the -0.003 cutoff - which is exactly
+      // where nobody would go looking for it.
+      const A0 = by - cy, B0 = cx - bx;
+      const A1 = cy - ay, B1 = ax - cx;
       for (let y = y0; y <= y1; y++) {
-        const py = y + 0.5;
+        const py = y + 0.5, dpy = py - cy;
+        const rowB0 = B0 * dpy, rowB1 = B1 * dpy;
+        const row = y * W;
         for (let x = x0; x <= x1; x++) {
-          const px = x + 0.5;
-          const l0 = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) * iden;
+          const px = x + 0.5, dpx = px - cx;
+          const l0 = (A0 * dpx + rowB0) * iden;
           if (l0 < -0.003) continue;
-          const l1 = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) * iden;
+          const l1 = (A1 * dpx + rowB1) * iden;
           if (l1 < -0.003) continue;
           const l2 = 1 - l0 - l1;
           if (l2 < -0.003) continue;
           const zz = l0 * az + l1 * bz + l2 * cz;
-          const i = y * W + x;
-          if (zz > z0[i]) {
-            if (i0[i] !== id) { z1[i] = z0[i]; i1[i] = i0[i]; }
+          const i = row + x;
+          const cur = z0[i], curId = i0[i];
+          if (zz > cur) {
+            if (curId !== id) { z1[i] = cur; i1[i] = curId; }
             z0[i] = zz; i0[i] = id;
-          } else if (id !== i0[i] && zz > z1[i]) {
+          } else if (id !== curId && zz > z1[i]) {
             z1[i] = zz; i1[i] = id;
           }
         }
@@ -6086,14 +6961,43 @@
       return this.i1[i] === -1 ? -1e18 : this.z1[i];
     }
 
-    /** local steepness of the depth field, in scene units per cell */
+    /**
+     * Local steepness of the depth field, in scene units per cell.
+     *
+     * The depth field itself (z0) is written once, by rasterise(), before
+     * the first call to slope() and never again - every mark in the plate
+     * is projected and occlusion-tested against the SAME finished field, not
+     * one still being drawn into. That is exactly the condition memoising
+     * this on first ask requires: the value at a cell cannot change out from
+     * under the cache between one query and the next, so the second query
+     * of a cell is not skipping work that might now give a different
+     * answer, it is skipping work that is guaranteed to give the same one.
+     * A silhouette walks its own border at a few pixels per point and a
+     * dense field of ridge or fingerprint strokes crosses itself constantly,
+     * so the same handful of cells near any busy patch of the drawing get
+     * asked about over and over - hidden() alone taps up to four of them
+     * per point it tests, twice over on a self-tested contour.
+     *
+     * What would NOT be safe is caching this across draws, which is why it
+     * is a property of one DepthField instance - built fresh every draw()
+     * and thrown away at the end of it - rather than of the Renderer, and
+     * why clear() drops it: a cache that outlived the field it was measuring
+     * would go on answering questions about a pose, view or anatomy that
+     * has since changed, and that is a wrong drawing wearing the frame of a
+     * fast one.
+     */
     slope(cx, cy) {
-      const W = this.w, H = this.h, z = this.z0;
+      const W = this.w, H = this.h;
       if (cx < 1 || cy < 1 || cx >= W - 1 || cy >= H - 1) return 0;
+      const n = W * H;
+      if (!this._slope) { this._slope = new Float32Array(n); this._slopeSet = new Uint8Array(n); }
       const i = cy * W + cx;
+      if (this._slopeSet[i]) return this._slope[i];
+      const z = this.z0;
       const l = z[i - 1], r = z[i + 1], u = z[i - W], d = z[i + W];
-      if (l < -1e17 || r < -1e17 || u < -1e17 || d < -1e17) return 0;
-      return Math.max(Math.abs(r - l), Math.abs(d - u)) * 0.5;
+      const v = (l < -1e17 || r < -1e17 || u < -1e17 || d < -1e17) ? 0 : Math.max(Math.abs(r - l), Math.abs(d - u)) * 0.5;
+      this._slope[i] = v; this._slopeSet[i] = 1;
+      return v;
     }
 
     /** slope(), addressed by screen pixel like behind() and stepBehind() rather than by cell */
@@ -6348,8 +7252,12 @@
       const q = cv.pts[i];
       let P, N = null;
       if (cv.on === 'digit') {
+        // digitSurface already worked out this section's profile and its
+        // centre offset to place P; handing them to digitNormal (see its
+        // own comment) is what lets the busiest call in this loop skip
+        // redoing that part of the work for the same point a line below.
         const sp = RG.digitSurface(rig, cv.d, cv.seg, q[0], q[1]);
-        N = RG.digitNormal(rig, cv.d, cv.seg, q[0], q[1]);
+        N = RG.digitNormal(rig, cv.d, cv.seg, q[0], q[1], sp.pr, sp.off);
         P = q[2] ? vmad(sp.P, N, q[2]) : sp.P;
       } else if (cv.on === 'palm') {
         const sp = RG.palmSurface(rig, q[0], q[1]);

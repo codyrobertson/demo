@@ -923,52 +923,290 @@
    *
    * Returns a closure rather than a pose, because closing a hand on something
    * is a settle inside a settle and costs a couple of hundred milliseconds -
-   * far too much to pay per frame. The two ends are worked out once and every
-   * frame is an interpolation between them, which is also why the closing
-   * reads as one motion instead of a series of separate grips.
+   * far too much to pay per frame. The grasp is worked out once; every frame
+   * before release is an interpolation between fixed keyframes, which is also
+   * why the closing reads as one motion instead of a series of separate
+   * grips. But the closure is not purely a function of its argument the way
+   * the rest of this file is: from the moment the fingers begin to open, the
+   * ball is a live GK.physics body, and physics has a memory - what it does
+   * next depends on what it was doing a moment ago, not just on "now". So
+   * this closure carries that body forward call to call, and (like every
+   * other stateful animation driver in this codebase - PH.step itself, or a
+   * dragged fingertip in reach()) it is meant to be sampled with a
+   * monotonically increasing argument, once per frame, the way every caller
+   * in this file already does. A rewind is handled - it will not throw - but
+   * it cannot un-happen a bounce, so scrubbing backward through a fall just
+   * holds the ball at wherever it last got to rather than replaying physics
+   * in reverse.
    *
-   * The hand does not travel: there is no translation in the rig, and faking
-   * one by sliding the ball into the palm looks like the ball doing the work.
-   * So the lift is carried by the wrist, which is a real degree of freedom,
-   * and the drop by the ball alone - once the fingers have opened past it
-   * there is nothing holding it, and it accelerates along the hand's own
-   * proximal axis, which is down the page in the framing this draws in.
+   * The hand itself does not travel: there is no translation in the rig, and
+   * faking one by sliding the ball into the palm looks like the ball doing
+   * the work. So the lift is carried by the wrist, which is a real degree of
+   * freedom - the whole hand swings up about a fixed wrist origin - and for
+   * as long as the grip holds, the ball is carried rigidly with it: attached
+   * to a fixed spot on the palm sheet, not frozen at a world-space point,
+   * which is what a hand that lifts its grip while the held object stays
+   * exactly where it was in space would mean. Once support is lost the ball
+   * answers to nothing but gravity and whatever it touches on the way out.
    */
   function pickAndDrop(A, radius, opts) {
     opts = opts || {};
+    const R = GK.rig;
     const openKey = opts.open || 'spread';
     const open = clampPose(A, mk(A, PRESETS[openKey].spec));
     const grip = holdBall(A, open, radius);
     const ball0 = grip.ball;
-    const rig0 = GK.rig.solve(A, open);
-    const down = M.vmul(rig0.root[0], -1);
-    // phase boundaries: settle, close, lift and hold, open, fall
-    const P = opts.phases || [0.08, 0.36, 0.60, 0.74];
-    const ease = M.ease.inOut, inv = M.inv;
+    // Gravity is anchored here, once, to the pose the hand is in BEFORE it
+    // starts moving - not re-read at the moment of release. root rotates
+    // rigidly with wrist flexion (see 35-physics.js's header), so anchoring
+    // at release would let a hand that had already tilted while lifting the
+    // ball redefine "down" to match its own tilt: gravity would always point
+    // straight out of the palm no matter how the hand held it, which is the
+    // wrist rotating the world rather than the world staying put. Anchored
+    // here instead, a hand that lifts a ball at an angle can show the ball
+    // pressing into a different part of the cupped palm as it tips - real
+    // weight against a real contact - rather than that being erased by
+    // gravity quietly following the hand around.
+    const rig0 = R.solve(A, open);
+    // `open` is posed with no notion of the ball at all, and while
+    // ballOnPalm keeps it clear for most seeds and radii, it does not for
+    // every one: measured across this file's own seed/radius sweep, the
+    // largest ball size put the hand a couple of millimetres into its own
+    // object before the hand had moved at all. So it is settled against the
+    // ball once here, the same way holdBall settles its own final pose, and
+    // this corrected copy - not the raw preset - is what idle and the start
+    // of the close actually blend from. `open` itself stays untouched: it
+    // is still what `grip` and the gravity frame above were built from, and
+    // re-settling it here must not feed back into either.
+    const openClear = resolveContacts(A, open, { scene: { ball: ball0 }, iters: 20, tol: 0.2 });
+
+    // ==== TIMING ============================================================
+    // Every field below is a FRACTION of the whole looping cycle (0..1), and
+    // `seconds` is what turns fractions into the physics engine's own units -
+    // the ball does not know or care how fast the caller is stepping `t`, it
+    // only knows how many seconds of gravity it has been given, so this is
+    // the number to change if a drop should feel heavier/slower or lighter/
+    // quicker without touching a single physics constant.
+    const T = Object.assign({
+      start:    0.05, // idle at `open` ends here; the fingers start closing
+      contact:  0.34, // the fingers have arrived on the ball; grip settled
+      liftTop:  0.52, // the lift is complete: ball held up and steady
+      release:  0.60, // the pause at the top ends; fingers begin opening
+      clear:    0.76  // the KINEMATIC opening motion finishes here. This is
+                       // a fallback deadline, not the release trigger - the
+                       // physics contact solver almost always lets go
+                       // earlier than this, on its own, the moment the
+                       // fingers have actually opened clear of the ball, the
+                       // same way simtest.js's "opening the hand releases
+                       // the ball into a real fall" case works.
+    }, opts.timing);
+    // Real gravity (G_MAG in 35-physics.js) is not adjustable to taste, so
+    // this is the number that actually controls how far the ball falls
+    // before the cycle loops: 1.0s means the release-to-loop-end window
+    // (1-T.release, about 0.4 of the cycle) is ~0.4s of real free fall,
+    // which drops a ball on the order of the hand's own size before the
+    // sequence resets - long enough to read as a real fall, short enough
+    // that it has not left the frame's neighbourhood by the time it does.
+    const SECONDS = opts.seconds === undefined ? 1.0 : opts.seconds; // whole-cycle physics duration
+    const PHYS_STEP_CAP = 1 / 60;  // no single PH.step() call covers more than this much physics time,
+                                    // regardless of how coarsely the caller samples `t` - see advancePhysics
+    const LIFT_FLEX = 26 * DEG, LIFT_DEV = 7 * DEG;  // unchanged from the original: the wrist carries the lift
+    const SETTLE_LIFT = 0.6;       // how much of the lift is still held once the hand has fully re-opened
+    const ANCHOR_UV = [0.52, 0.22]; // the same palm spot ballOnPalm itself places a held ball against
+
+    // Per-digit stagger for the close and the open, so the fingers do not
+    // arrive (or let go) in lockstep. Every digit still lands EXACTLY on the
+    // pose holdBall computed - this only changes how it gets there, never
+    // where. The naive way to stagger five things is five different finish
+    // times, but a digit that finishes early would have to stop dead against
+    // whatever it is closing on before the window itself is over, and one
+    // that starts late would have to leave zero velocity behind at a
+    // boundary shared with an adjacent phase that is not itself moving -
+    // both are the "abrupt start or stop" this whole file is trying to get
+    // away from. So instead every digit gets the SAME ease.inOut - zero
+    // velocity at both ends, guaranteed - just entered late: a digit with a
+    // large delay sits exactly at its start value, genuinely motionless,
+    // for that fraction of the window, then eases through the rest of it no
+    // differently from a digit with no delay at all, arriving with the same
+    // zero velocity every one of them does. The order - index and middle
+    // move first, ring and little a little behind, the thumb last - is not
+    // to taste: it is the order a real hand's digits actually arrive in
+    // (and, reversed, let go in), because the thumb's opposition is a
+    // compound CMC rotation plus flexion and is the slowest degree of
+    // freedom a hand has, where the fingers close on a comparatively simple
+    // hinge.
+    const DIGIT_DELAY = [0.34, 0, 0, 0.12, 0.18];   // thumb, index, middle, ring, little
+    function digitProgress(cta) { return DIGIT_DELAY.map(delay => M.ease.inOut(clamp01(M.inv(cta, delay, 1)))); }
+
+    function copyDigits(pose) { return pose.digits.map(d => Object.assign({}, d)); }
+    function blendDigits(a, b, tt) {
+      return a.digits.map((da, d) => {
+        const db = b.digits[d], e = Array.isArray(tt) ? tt[d] : tt, out = {};
+        for (const k in da) out[k] = typeof da[k] === 'number' ? M.lerp(da[k], db[k], e) : da[k];
+        return out;
+      });
+    }
+    /** 0 before the grip forms, eases up to 1 across the lift, holds through
+     *  the pause, eases back down to SETTLE_LIFT as the hand re-opens, and
+     *  stays there through the fall - the wrist leading the fingers in the
+     *  one place this rig can show it, since it is the only joint upstream
+     *  of everything else: the fingers hold the grip they already have
+     *  while the wrist alone carries the ball up, and later carries it back
+     *  down partway, exactly the "wrist leads, fingers follow" a real lift
+     *  shows, because on this rig the wrist is the only joint that CAN lead
+     *  without also having to be the thing doing the holding. */
+    function liftFrac(u) {
+      if (u < T.contact) return 0;
+      if (u < T.liftTop) return M.ease.inOut(M.inv(u, T.contact, T.liftTop));
+      if (u < T.release) return 1;
+      if (u < T.clear) return M.lerp(1, SETTLE_LIFT, M.ease.inOut(M.inv(u, T.release, T.clear)));
+      return SETTLE_LIFT;
+    }
+    function wristFor(li) {
+      // Every phase before contact and after clear holds `open`'s own
+      // wrist value (grip's wrist is open's wrist too - holdBall never
+      // touches it), so the wrist has exactly one motion in this whole
+      // sequence: the lift, and liftFrac already carries its own easing.
+      return { flex: open.wrist.flex + li * LIFT_FLEX, dev: open.wrist.dev + li * LIFT_DEV, pron: open.wrist.pron };
+    }
+
+    // ==== THE BALL, ATTACHED ================================================
+    // Where a held ball sits, expressed as a fixed offset off a fixed spot on
+    // the palm sheet, so re-evaluating it against a rotated (lifted) rig
+    // carries the ball rigidly with the palm instead of leaving it stranded
+    // at a world-space point while the hand swings up and away from it.
+    //
+    // The offset is a full 3-D vector in the palm's own local frame at that
+    // spot - the surface normal and two tangents built from it - not a
+    // single distance along the normal alone. A single scalar only
+    // reproduces ball0.C if ball0.C happens to sit exactly on that one
+    // normal line, which it does for the rig it was actually placed
+    // against and essentially never does for any other: measured, that
+    // version of this function was quietly discarding upwards of a
+    // millimetre of ball0.C's position every time, sideways to the normal,
+    // which is exactly the direction a scalar-along-the-normal offset has
+    // no way to represent. Three components does not have that blind spot -
+    // it is the whole vector, decomposed rather than approximated - and it
+    // still carries the ball rigidly through a pure rotation for the same
+    // reason the scalar version tried to: normal, tangents and surface
+    // point all rotate together, because they are all read from the same
+    // rig.
+    //
+    // The frame itself is solved once, eagerly, against the rig the hand is
+    // actually in the instant attachment begins - grip's own digits, at
+    // open's own (not yet lifted) wrist, which is exactly T.contact - not
+    // against rig0, whose fingers are still open. reproduces ball0.C
+    // exactly at T.contact by construction, because that is precisely the
+    // geometry ball0.C sits in front of at that instant.
+    function tangentFrame(n) {
+      // an arbitrary but CONSISTENT pair of tangents built from n alone, so
+      // they rotate rigidly whenever n itself does; which two directions
+      // they are does not matter, only that the same recipe is used every
+      // time this is called.
+      const ref = Math.abs(n[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+      const t1 = M.vnorm(M.vcross(ref, n));
+      return [t1, M.vcross(n, t1)];
+    }
+    const anchorLocal = (function () {
+      const rigAtContact = R.solve(A, grip);
+      const sp = R.palmSurface(rigAtContact, ANCHOR_UV[0], ANCHOR_UV[1]);
+      const n = R.palmNormal(rigAtContact, ANCHOR_UV[0], ANCHOR_UV[1]);
+      const [t1, t2] = tangentFrame(n);
+      const d = M.vsub(ball0.C, sp.P);
+      return { n: M.vdot(d, n), t1: M.vdot(d, t1), t2: M.vdot(d, t2) };
+    })();
+    function attachedBallC(rig) {
+      const sp = R.palmSurface(rig, ANCHOR_UV[0], ANCHOR_UV[1]);
+      const n = R.palmNormal(rig, ANCHOR_UV[0], ANCHOR_UV[1]);
+      const [t1, t2] = tangentFrame(n);
+      let C = M.vmad(sp.P, n, anchorLocal.n);
+      C = M.vmad(C, t1, anchorLocal.t1);
+      C = M.vmad(C, t2, anchorLocal.t2);
+      return C;
+    }
+
+    // ==== THE BALL, FALLING ==================================================
+    // A real GK.physics body, created the instant it is first needed (the
+    // instant the caller's sampling first crosses T.release) and stepped
+    // forward by exactly as much physics time as `u` has advanced since the
+    // last call. Zero initial velocity is not a simplification stood in for
+    // a real number: liftFrac's own ease.inOut has zero slope at u=T.release
+    // (that is what ease.inOut(0) with a cubic on both sides means), so the
+    // hand's own motion is already momentarily still at the instant of
+    // release - a controlled let-go, not a toss - and handing the ball a
+    // velocity of exactly what the hand was doing at that instant is exactly
+    // what "zero" already is here, not an approximation of it.
+    let sim = null;
+    function advancePhysics(u, rigNow) {
+      const PH = GK.physics;
+      if (!sim) {
+        const state = PH.createState({
+          r: radius, C: attachedBallC(rigNow), v: [0, 0, 0], w: [0, 0, 0],
+          density: opts.density, restitution: opts.restitution, friction: opts.friction
+        });
+        PH.setGravityFromRig(state, rig0);
+        sim = { state, lastU: u };
+        return;
+      }
+      let remaining = (u - sim.lastU) * SECONDS;
+      sim.lastU = u;
+      // Chunked rather than handed to PH.step() in one call, so accuracy
+      // never depends on how densely the caller happens to sample `t`: a
+      // tool taking eight frames across the whole animation gets the same
+      // trajectory as one taking two hundred, just read out at coarser
+      // intervals, because the physics underneath never sees a dt larger
+      // than PHYS_STEP_CAP regardless.
+      while (remaining > 1e-6) {
+        const h = Math.min(remaining, PHYS_STEP_CAP);
+        PH.step(sim.state, rigNow, h);
+        remaining -= h;
+      }
+    }
+
+    let gen = null;   // which lap of the loop the previous call belonged to
     return function (t) {
       const u = ((t % 1) + 1) % 1;
-      let mix = 0, lift = 0, fall = 0;
-      if (u < P[0]) { mix = 0; }
-      else if (u < P[1]) { mix = ease(inv(u, P[0], P[1])); }
-      else if (u < P[2]) { mix = 1; lift = ease(inv(u, P[1], P[2])); }
-      else if (u < P[3]) { mix = 1 - ease(inv(u, P[2], P[3])); lift = 1 - ease(inv(u, P[2], P[3])) * 0.4; }
-      else { mix = 0; lift = 0.6; fall = inv(u, P[3], 1); }
-      const p = lerpPose(open, grip, mix);
-      // the wrist carries the lift, since nothing else can
-      p.wrist.flex += lift * 26 * DEG;
-      p.wrist.dev += lift * 7 * DEG;
-      const held = { C: ball0.C.slice(), r: ball0.r,
-        roughness: opts.roughness, anisotropy: opts.anisotropy };
-      if (fall > 0) {
-        // a real acceleration, not a slide: the first tenth of the fall is
-        // barely visible and the last is a blur, which is what selling a drop
-        // in a still sequence depends on
-        const drop = 0.5 * 2600 * Math.pow(fall * 0.42, 2);
-        held.C = M.vmad(held.C, down, drop);
+      const thisGen = Math.floor(t);
+      // A new lap is a fresh repetition of the same gesture: a new ball, in
+      // effect, so any physics body left over from the last one round has
+      // nothing to do with this one. (anchorT does not need this - it no
+      // longer depends on when it was first asked for, see its own note.)
+      if (thisGen !== gen) { sim = null; gen = thisGen; }
+
+      const li = liftFrac(u);
+      const p = blank();
+      let phase;
+      if (u < T.start) {
+        p.digits = copyDigits(openClear); p.arch = openClear.arch; phase = 'idle';
+      } else if (u < T.contact) {
+        const cta = M.inv(u, T.start, T.contact);
+        p.digits = blendDigits(openClear, grip, digitProgress(cta));
+        p.arch = M.lerp(openClear.arch, grip.arch, M.ease.inOut(cta)); phase = 'close';
+      } else if (u < T.release) {
+        p.digits = copyDigits(grip); p.arch = grip.arch; phase = u < T.liftTop ? 'lift' : 'hold';
+      } else if (u < T.clear) {
+        const oe = M.inv(u, T.release, T.clear);
+        p.digits = blendDigits(grip, open, digitProgress(oe));
+        p.arch = M.lerp(grip.arch, open.arch, M.ease.inOut(oe)); phase = 'release';
+      } else {
+        p.digits = copyDigits(open); p.arch = open.arch; phase = 'falling';
       }
+      p.wrist = wristFor(li);
+
+      let ball;
+      if (u < T.contact) {
+        ball = { C: ball0.C.slice(), r: ball0.r };
+      } else {
+        const rigNow = R.solve(A, p);
+        if (u < T.release) ball = { C: attachedBallC(rigNow), r: ball0.r };
+        else { advancePhysics(u, rigNow); ball = { C: sim.state.C.slice(), r: sim.state.r }; }
+      }
+      ball.roughness = opts.roughness;
+      ball.anisotropy = opts.anisotropy;
+
       const out = clampPose(A, p);
-      out.ball = held;
-      out.phase = fall > 0 ? 'falling' : mix > 0.98 ? 'held' : mix > 0.02 ? 'closing' : 'open';
+      out.ball = ball;
+      out.phase = phase;
       return out;
     };
   }

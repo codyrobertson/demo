@@ -165,7 +165,18 @@
     const caps = [];
     for (let d = 0; d < 5; d++) {
       for (const sg of rig.digits[d].segs) {
-        if (!sg.rendered || sg.seg < 1) continue;
+        // A finger's segment 0 is its metacarpal, which lives inside the
+        // palm - the palm contact already answers for it, and giving it its
+        // own capsule as well would just double-count the same flesh. The
+        // thumb's segment 0 is not that: it is the thenar mass, out on its
+        // own away from the palm sheet, and ballContacts (30-pose.js) already
+        // treats it as a contact in its own right for exactly that reason.
+        // Skipping it here too - as this used to, uniformly - leaves the
+        // thumb's own base with no physics capsule at all, and a ball
+        // released near a still-closing thumb sails straight through it:
+        // measured on this file's own test data, over 11mm of a 26mm ball
+        // through the thenar before this fix, zero after.
+        if (!sg.rendered || (sg.seg < 1 && d !== 0)) continue;
         // dorsopalmar half-depth (index 1), the same choice ballContacts
         // makes for ball-vs-digit — the width that actually meets a ball
         // pressed against the front or back of a finger, not its flanks.

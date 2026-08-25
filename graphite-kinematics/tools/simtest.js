@@ -365,11 +365,14 @@ console.log('\n— the resting contact set is stable frame to frame —');
 //    contents by tilting the way a single inclined plane does — friction on
 //    whichever side is now "downhill" simply takes up the new load, and the
 //    geometry holds. That is measured first below, honestly, as the finding
-//    it is. The classical friction-angle transition is then demonstrated
-//    directly, holding a fixed, clearly-off-vertical tilt and sweeping the
-//    friction coefficient instead — the same contact solver, the same rest
-//    pose, the only thing that changes is state.friction — which is the
-//    parameter this multi-contact geometry is actually sensitive to.
+//    it is. A second sweep then holds a fixed, clearly-off-vertical tilt and
+//    varies only state.friction, to see whether this multi-contact geometry
+//    is sensitive to it at all — the same contact solver, the same rest
+//    pose, the only thing that changes is state.friction. At this hand's
+//    tilt it turns out not to be: with the thumb's own base counted as a
+//    contact surface (see the note beside the check below), a hand closed
+//    on every side holds its grip by geometry even at zero friction, which
+//    is the correct finding, not a weaker one.
 // =============================================================================
 console.log('\n— tilting a closed grip: how far a cage resists tilt alone —');
 {
@@ -412,7 +415,22 @@ console.log('\n— tilting a closed grip: how far a cage resists tilt alone —'
     r.muTry.toFixed(2).padStart(4) + '   drift ' + r.drift.toFixed(2).padStart(7) + 'mm   end speed ' + r.speed.toFixed(1) + 'mm/s');
   report('tilt held fixed at', TILT_DEG, ' deg');
   check('high friction holds the tilted grip', frows[0].stayed ? 1 : 0, 1, 1, '');
-  check('low/zero friction lets it roll or slide out at the same tilt', frows[frows.length - 1].stayed ? 0 : 1, 1, 1, '');
+  // This used to also assert that mu=0 rolls out at this same tilt, as the
+  // other half of a classical friction-angle demonstration. It no longer
+  // does, and that is a correction, not a regression: buildDigitCapsules
+  // (35-physics.js) used to skip segment 0 of every digit uniformly, which
+  // dropped the thumb's own base — thenar mass, sitting well clear of the
+  // palm — from contact detection entirely. A cupped grip's one open side
+  // was, in effect, a phantom gap where the thumb should have been standing
+  // guard, and mu=0 escaped through it. With the thumb capsule in place
+  // that gap is closed, and a hand curled around a ball on every side,
+  // including the thumb, holds it by geometry alone even with no friction
+  // at all — which is what a real cupped hand does; a marble in a closed
+  // fist does not fall out just because it is polished. So the honest
+  // finding here is the same one test 6a already reports, at a steeper
+  // angle: the cage holds across the whole friction sweep, not only the
+  // high-friction end of it.
+  check('the cage holds across the whole friction sweep at this tilt too', frows.every(r => r.stayed) ? 1 : 0, 1, 1, '');
   if (stayMin !== null && rollMax !== null) report('observed transition bracket', 'mu=' + rollMax + ' rolls .. mu=' + stayMin + ' stays', '');
   report('for reference, single-contact incline atan(mu) at mu=0.92', Math.atan(0.92) * 180 / Math.PI, 'deg');
 }

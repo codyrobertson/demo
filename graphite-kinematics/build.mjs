@@ -9,7 +9,7 @@ import path from 'path';
 const root = path.dirname(new URL(import.meta.url).pathname);
 const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
 
-const SRC = ['00-math', '10-anatomy', '20-rig', '30-pose', '40-pencil',
+const SRC = ['00-math', '10-anatomy', '20-rig', '30-pose', '35-physics', '40-pencil',
   '50-features', '55-dorsal', '60-render', '70-app'];
 
 // Split the page BEFORE anything is inlined. A minified library contains
