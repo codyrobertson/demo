@@ -104,6 +104,13 @@
   function buildAnatomy(seed, opts) {
     opts = opts || {};
     const rng = new Rng(seed);
+    // A left hand is not a right hand with a flipped label: it is a genuine
+    // mirror image, built by negating every quantity measured along the
+    // ulnar axis (never distal or palmar, which stay shared) wherever one is
+    // authored below or, for a pose term, wherever the rig reads it. That
+    // keeps every frame a proper rotation of the last — never a reflection —
+    // so handedness survives intact and nothing downstream has to know which
+    // hand it is looking at.
     const A = { seed, chirality: opts.chirality === 'left' ? -1 : 1 };
 
     // ---- global build ------------------------------------------------------
@@ -171,17 +178,25 @@
           rng.gaussIn(d === LITTLE ? 4.5 : 2.0, 1.6, -1, 9) * DEG,
           rng.gaussIn(1.5, 1.2, -1, 5) * DEG
         ],
-        // little-finger clinodactyly: a slight ulnar bow at the DIP, common
-        clino: d === LITTLE ? rng.gaussIn(5.5, 3.2, 0, 14) * DEG : rng.gaussIn(0.6, 1.0, -2, 3) * DEG
+        // little-finger clinodactyly: a slight ulnar bow at the DIP, common.
+        // Same lateral sense as fan/roll below, so it mirrors with them.
+        clino: (d === LITTLE ? rng.gaussIn(5.5, 3.2, 0, 14) : rng.gaussIn(0.6, 1.0, -2, 3)) * DEG * A.chirality
       });
     }
 
     // ---- carpometacarpal layout -------------------------------------------
+    // pos.y, fan and roll are the three numbers CMC_BASE authors along the
+    // radial(-)/ulnar(+) gradient (see the field comments above CMC_BASE);
+    // tilt does not run thumb-to-little the way they do, and FLEX(tilt) does
+    // not change sense under mirroring the way ABD(fan)/TWIST(roll) do, so
+    // it is left alone. Miss one of these three on a left hand and the
+    // metacarpal fan stays right-handed while its origin mirrors, or the
+    // reverse - either way the palm tents instead of cupping.
     A.cmc = CMC_BASE.map((b, i) => ({
-      pos: [b.pos[0] * size, b.pos[1] * size, b.pos[2] * size],
-      fan: b.fan * rng.gaussIn(1, 0.07, 0.8, 1.2),
+      pos: [b.pos[0] * size, b.pos[1] * size * A.chirality, b.pos[2] * size],
+      fan: b.fan * A.chirality * rng.gaussIn(1, 0.07, 0.8, 1.2),
       tilt: b.tilt * rng.gaussIn(1, 0.1, 0.75, 1.3),
-      roll: b.roll * rng.gaussIn(1, 0.045, 0.88, 1.12),
+      roll: b.roll * A.chirality * rng.gaussIn(1, 0.045, 0.88, 1.12),
       mobility: CMC_MOBILITY[i]
     }));
 

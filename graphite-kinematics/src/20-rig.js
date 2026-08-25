@@ -117,8 +117,18 @@
     const W = pose.wrist;
     const base = mount && mount.frame ? mOrtho(mount.frame) : IDENT();
 
+    // A pose is authored once and read by both hands, so its wrist terms are
+    // still in right-hand sense here. Mirror the two that change sense under
+    // reflection - deviation swings about the palmar axis, pronation about
+    // the distal one, and both reverse; flexion swings about the mediolateral
+    // axis and does not - once, so the root chain and the forearm stub below
+    // read the same already-correct sign instead of each flipping it apart
+    // and risking they disagree.
+    const wDev = (W.dev || 0) * A.chirality;
+    const wPron = (W.pron || 0) * A.chirality;
+
     // forearm roll, then wrist deviation, then wrist flexion
-    const root = mMul(TWIST(W.pron || 0), mMul(ABD(W.dev || 0), FLEX(W.flex || 0)));
+    const root = mMul(TWIST(wPron), mMul(ABD(wDev), FLEX(W.flex || 0)));
     rig.root = mOrtho(mMul(base, root));
     rig.origin = mount && mount.origin ? mount.origin.slice() : [0, 0, 0];
     rig.mount = mount || null;
@@ -127,7 +137,7 @@
     const carpalLen = 26 * A.size;
     rig.carpal = { frame: rig.root, A: vmad(rig.origin, rig.root[0], -carpalLen * 0.55), len: carpalLen };
     rig.forearm = {
-      frame: mOrtho(mMul(base, TWIST(W.pron || 0))),
+      frame: mOrtho(mMul(base, TWIST(wPron))),
       A: rig.origin
     };
 
@@ -140,18 +150,24 @@
       const nSeg = bone.lengths.length;
 
       // ---- carpometacarpal frame -----------------------------------------
+      // cmc.fan/.roll already carry this hand's chirality (buildAnatomy); the
+      // pose terms below are the shared right-hand-sense spec, so they take
+      // it here, at the point each is folded in - fan and roll are ABD/TWIST
+      // angles and reverse under mirroring, tilt is a FLEX angle and does not.
       let fan = cmc.fan, tilt = cmc.tilt, roll = cmc.roll;
       if (d === AN.THUMB) {
-        fan += (P.cmcRad || 0);      // radial abduction / adduction, in-plane
+        fan += (P.cmcRad || 0) * A.chirality;      // radial abduction / adduction, in-plane
         tilt += (P.cmcAbd || 0);     // palmar abduction, out of the palm plane
         // Opposition pronates the thumb so its pad turns to face the fingers:
         // that carries the metacarpal's roll further from the palm plane, not
-        // back toward it.
-        roll -= (P.cmcOpp || 0);
+        // back toward it - toward the fingers on either hand, which is why
+        // this needs the mirror too: unflipped, a left thumb would pronate
+        // toward its own dorsum instead.
+        roll -= (P.cmcOpp || 0) * A.chirality;
       } else {
         const mob = cmc.mobility * arch;
         tilt += mob + (P.cmcFlex || 0);
-        roll += mob * 0.45;          // ulnar metacarpals supinate as the palm cups
+        roll += mob * 0.45 * A.chirality;          // ulnar metacarpals supinate as the palm cups
       }
       const cmcAxA = rig.root[2];                       // in-plane swing
       const afterFan = mMul(rig.root, ABD(fan));
@@ -168,17 +184,20 @@
           // ---- joint rotation ---------------------------------------------
           let flexA = 0, abdA = 0, twistA = 0, abdScale = 1;
           if (d === AN.THUMB) {
-            if (seg === 1) { flexA = P.mcpFlex || 0; abdA = (P.mcpAbd || 0); }
+            // abd is an ABD-axis angle, off the shared pose spec, so it
+            // takes the mirror here, same as fan/cmcOpp above.
+            if (seg === 1) { flexA = P.mcpFlex || 0; abdA = (P.mcpAbd || 0) * A.chirality; }
             else { flexA = P.ipFlex || 0; }
           } else {
             if (seg === 1) {
               flexA = P.mcpFlex || 0;
               abdScale = abdGate(flexA);
-              abdA = (P.mcpAbd || 0) * abdScale;
+              abdA = (P.mcpAbd || 0) * abdScale * A.chirality;
             } else if (seg === 2) {
               flexA = P.pipFlex || 0;
             } else {
               flexA = P.dipFlex || 0;
+              // bone.clino is baked to this hand's chirality in buildAnatomy
               abdA = bone.clino * (d === AN.LITTLE ? 1 : 0.4);
             }
           }
