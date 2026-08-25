@@ -28,12 +28,14 @@
       const lift = clamp01(-rig.pose.digits[d].mcpFlex / (26 * DEG));
       const vis = clamp01(ext * 0.85 + lift * 0.5) * prom;
       if (vis < 0.06) continue;
-      // the cords converge under the extensor retinaculum, not at a point
+      // A cord only reads where it stands proud of the metacarpal, over the
+      // distal half of the back of the hand. Run it from wrist to knuckle and
+      // it becomes a straight radiating spoke, which is not what a hand does.
       const ctrl = [
-        [0.10, lerp(0.40, v, 0.30)],
-        [0.36, lerp(0.44, v, 0.62)],
-        [0.66, lerp(0.46, v, 0.88)],
-        [0.90, v],
+        [0.30, lerp(0.42, v, 0.52)],
+        [0.52, lerp(0.44, v, 0.74)],
+        [0.74, lerp(0.46, v, 0.92)],
+        [0.92, v],
         [1.02, v]
       ];
       const mid = uvSpline(ctrl, 34);
@@ -41,13 +43,13 @@
         const off = mid.map(p => [p[0], p[1] + sgn * 0.026 * (0.4 + 0.6 * p[0])]);
         out.push({
           on: 'palm', pts: palmCurve(rig, off, false, 0.35 * vis),
-          style: st(S.tendon, { tone: (0.25 + 0.46 * vis), phase: F.nextPhase() })
+          style: st(S.tendon, { tone: (0.16 + 0.34 * vis), taper: 0.94, phase: F.nextPhase() })
         });
       }
       // the tendon crest itself, brightest over the metacarpal shaft
       out.push({
         on: 'palm', pts: palmCurve(rig, mid, false, 0.6 * vis),
-        style: st(S.tendon, { tone: 0.14 + 0.29 * vis, weight: 0.6, phase: F.nextPhase() })
+        style: st(S.tendon, { tone: 0.06 + 0.15 * vis, weight: 0.6, taper: 0.95, phase: F.nextPhase() })
       });
     }
     // extensor pollicis longus and the snuffbox, when the thumb extends
@@ -302,14 +304,14 @@
   function skeleton(rig, view, out) {
     const A = rig.anatomy;
     const sc = A.size;
-    const style = st(S.bone, { tone: 0.36 });
+    const style = st(S.bone, { tone: 1.0 });
 
     // carpals
     for (let i = 0; i < CARPALS.length; i++) {
       const c = CARPALS[i];
       const P = vadd(rig.origin, M.mApply(rig.root, [c.p[0] * sc + 6 * sc, c.p[1] * sc, c.p[2] * sc]));
       out.push({
-        on: 'world', pts: billboardEllipse(view, P, c.r[0] * sc, c.r[1] * sc, 26),
+        on: 'world', xray: true, pts: billboardEllipse(view, P, c.r[0] * sc, c.r[1] * sc, 26),
         style: st(style, { tone: 0.88, phase: F.nextPhase() }), close: true, name: CARPAL_NAMES[i]
       });
     }
@@ -322,24 +324,23 @@
         const [wa] = AN.segmentProfile(A, d, seg, 0.5);
         const shaft = wa * (seg === 0 ? 0.30 : 0.34);
         const head = wa * (seg === 0 ? 0.46 : 0.50);
-        // two shaft walls, waisted at the middle
+        // two shaft walls: broad at each end, waisted through the diaphysis
         for (const sgn of [-1, 1]) {
           const pts = [];
-          for (let i = 0; i <= 16; i++) {
-            const t = i / 16;
-            const w = lerp(head, shaft, Math.sin(Math.PI * clamp01(t)) * 0.55 + (t < 0.5 ? 0 : 0)) *
-              (0.72 + 0.28 * Math.abs(Math.cos(Math.PI * t)));
+          for (let i = 0; i <= 18; i++) {
+            const t = i / 18;
+            const w = lerp(shaft, head, Math.pow(Math.abs(Math.cos(Math.PI * t)), 1.6));
             pts.push(vadd(vmad(sg.A, sg.t, sg.len * t), vmul(sg.ul, sgn * w)));
           }
-          out.push({ on: 'world', pts, style: st(style, { phase: F.nextPhase() }) });
+          out.push({ on: 'world', xray: true, pts, style: st(style, { phase: F.nextPhase() }) });
         }
         // condyles
         out.push({
-          on: 'world', pts: billboardEllipse(view, sg.A, head * 1.02, head * 0.92, 20),
+          on: 'world', xray: true, pts: billboardEllipse(view, sg.A, head * 1.02, head * 0.92, 20),
           style: st(style, { tone: 0.76, phase: F.nextPhase() }), close: true
         });
         out.push({
-          on: 'world', pts: billboardEllipse(view, sg.B, head * 1.06, head * 0.96, 20),
+          on: 'world', xray: true, pts: billboardEllipse(view, sg.B, head * 1.06, head * 0.96, 20),
           style: st(style, { tone: 0.76, phase: F.nextPhase() }), close: true
         });
       }
@@ -355,7 +356,7 @@
         const p = vmad(rig.origin, axis, -lerp(6, fl, t) * 1);
         pts.push(vadd(p, vmul(side, sgn * rr * sc * lerp(1.25, 0.75, t))));
       }
-      out.push({ on: 'world', pts, style: st(style, { tone: 0.71, phase: F.nextPhase() }) });
+      out.push({ on: 'world', xray: true, pts, style: st(style, { tone: 0.71, phase: F.nextPhase() }) });
     }
   }
 

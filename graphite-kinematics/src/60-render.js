@@ -267,18 +267,32 @@
         const h0 = opt.horizon === undefined ? 0.015 : opt.horizon;
         vis = smoothstep(clamp01((f - h0) / (h0 > 0.1 ? 0.34 : 0.22)));
       }
-      let behind = 0;
+      // The skeleton is construction, not surface: it is drawn through the
+      // flesh that contains it, so it takes no occlusion test at all.
+      if (cv.xray) { out[i] = [p[0], p[1], 1, near, 0]; continue; }
+      // Facing and occlusion are different kinds of invisible and must not be
+      // conflated. A mark on the far side of the surface is simply not in the
+      // picture; a mark this side of it that another form covers is
+      // construction, and construction is what gets ghosted.
+      let hid = 0, behind = 0;
       if (vis > 0.004) {
-        vis *= 1 - df.hidden(p[0], p[1], near, myId, eps, gap);
+        hid = df.hidden(p[0], p[1], near, myId, eps, gap);
         behind = df.behind(p[0], p[1], near, myId);
       }
-      out[i] = [p[0], p[1], vis, near, Math.exp(-Math.max(0, behind - 2) / 20)];
+      const decay = Math.exp(-Math.max(0, behind - 2) / 20);
+      out[i] = [p[0], p[1], vis * (1 - hid), near, vis * hid * decay];
     }
     return out;
   }
 
   /** split a visibility-tagged polyline into runs above a threshold */
-  function runs(pts, lo, invert, gainIdx, maxJump) {
+  /**
+   * Split a visibility-tagged polyline into the runs worth drawing.
+   * `idx` names which slot carries the visibility for this pass, so the same
+   * point list can yield a finished run and a ghosted one without either
+   * having to be inferred from the other.
+   */
+  function runs(pts, lo, idx, maxJump) {
     const res = [];
     let cur = null;
     const jump2 = maxJump ? maxJump * maxJump : 0;
@@ -287,15 +301,14 @@
         const dx = pts[i][0] - pts[i - 1][0], dy = pts[i][1] - pts[i - 1][1];
         if (dx * dx + dy * dy > jump2) cur = null;
       }
-      const v = invert ? 1 - pts[i][2] : pts[i][2];
-      const gain = gainIdx === undefined ? 1 : (pts[i][gainIdx] === undefined ? 1 : pts[i][gainIdx]);
+      const v = pts[i][idx];
       if (v > lo) {
         if (!cur) { cur = { pts: [], vis: [] }; res.push(cur); }
         cur.pts.push([pts[i][0], pts[i][1]]);
-        cur.vis.push(v * gain);
+        cur.vis.push(v);
       } else if (cur) {
         // carry one fading point past the edge so the mark tapers out
-        cur.pts.push([pts[i][0], pts[i][1]]); cur.vis.push(v * 0.5 * gain);
+        cur.pts.push([pts[i][0], pts[i][1]]); cur.vis.push(v * 0.5);
         cur = null;
       }
     }
@@ -340,29 +353,27 @@
       const view = new RG.View(V.az, V.el, V.roll || 0, 1, [0, 0, 0], 0, 0);
 
       // ---- auto-frame -----------------------------------------------------
-      const keys = [];
-      for (const j of rig.joints) keys.push(j.P);
-      for (const dg of rig.digits) {
-        keys.push(dg.tip);
-        const last = dg.segs[dg.segs.length - 1];
-        for (const a of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
-          keys.push(RG.digitSurface(rig, dg.digit, last.seg, last.sMax, a).P);
-          keys.push(RG.digitSurface(rig, dg.digit, 1, 0.5, a).P);
-        }
-      }
-      for (let i = 0; i <= 10; i++) {
-        for (let k = 0; k < 8; k++) {
-          keys.push(RG.palmSurface(rig, lerp(-0.22, 1.05, i / 10), k / 8).P);
-        }
-      }
+      // Measure the real outline rather than a scatter of landmarks: a curled
+      // fingertip, a fat thenar or a foreshortened knuckle ring all sit
+      // outside any convenient set of key points, and the drawing gets clipped.
+      // Projection is linear, so a cheap pass at unit scale gives exact bounds.
+      view.scale = 1; view.cx = 0; view.cy = 0;
       let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
-      for (const P of keys) {
-        const rx = P[0] * view.r[0] + P[1] * view.r[1] + P[2] * view.r[2];
-        const ry = -(P[0] * view.u[0] + P[1] * view.u[1] + P[2] * view.u[2]);
-        if (rx < x0) x0 = rx; if (rx > x1) x1 = rx;
-        if (ry < y0) y0 = ry; if (ry > y1) y1 = ry;
+      const swallow = (pts) => {
+        for (const p of pts) {
+          if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0];
+          if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
+        }
+      };
+      for (let d = 0; d < 5; d++) {
+        const c = RG.digitContour(rig, view, d, { steps: 5 });
+        swallow(c.left); swallow(c.right); swallow(c.cap);
+        for (const r of c.rings) swallow(r);
       }
-      const margin = state.margin === undefined ? 0.90 : state.margin;
+      const fsil = RG.palmSilhouette(rig, view, { nu: 20, nb: 44, u0: -0.44, u1: 1.03 });
+      swallow(fsil.sideA); swallow(fsil.sideB); swallow(fsil.cap);
+
+      const margin = state.margin === undefined ? 0.88 : state.margin;
       const zoom = V.zoom === undefined ? 1 : V.zoom;
       const scale = Math.min(this.w * margin / Math.max(1e-6, x1 - x0),
         this.h * margin / Math.max(1e-6, y1 - y0)) * zoom;
@@ -447,11 +458,11 @@
         const fine = FINE_LAYERS[cv.style.layer] || 0;
         const pp = projectCurve(rig, view, df, cv, { eps, gap, ids, horizon: fine });
         const tone = gain === undefined ? 1 : clamp(gain, 0, 2);
-        for (const r of runs(pp, 0.05, false)) put(r, cv.style, tone);
+        for (const r of runs(pp, 0.05, 2)) put(r, cv.style, tone);
 
         if (ghost > 0.01 && cv.style.layer !== 'print' && cv.style.layer !== 'ridge' &&
           cv.style.layer !== 'hatch' && cv.style.layer !== 'hair') {
-          for (const r of runs(pp, 0.10, true, 4)) {
+          for (const r of runs(pp, 0.06, 4)) {
             put(r, F.st(cv.style, { passes: 1, taper: 0.85 }), tone * ghost);
           }
         }
@@ -476,6 +487,7 @@
       const emit = (pts, style, opts) => {
         opts = opts || {};
         const selfTol = opts.selfTest ? eps * 3 + 1.6 : 0;
+        // slots: 0 x, 1 y, 2 front, 3 near, 4 ghost, 5 gain, 6 part id
         const tagged = pts.map(p => {
           const id = p[3] === undefined ? -1 : p[3];
           let v = 1 - df.hidden(p[0], p[1], p[2], id, eps, gap);
@@ -487,8 +499,9 @@
           const behind = df.behind(p[0], p[1], p[2], id);
           const step = df.stepBehind(p[0], p[1], p[2], id);
           const merge = step === Infinity ? 1 : 0.16 + 0.84 * smoothstep(clamp01(step / 13));
-          return [p[0], p[1], v, p[2], (p[4] === undefined ? 1 : p[4]) * merge,
-            Math.exp(-Math.max(0, behind - 2) / 20), id];
+          const gain = (p[4] === undefined ? 1 : p[4]) * merge;
+          const decay = Math.exp(-Math.max(0, behind - 2) / 20);
+          return [p[0], p[1], v * gain, p[2], (1 - v) * decay * gain, gain, id];
         });
         // Overlap emphasis: where this form passes in front of another, a
         // draughtsman leans on the line. Probe just outside the contour and
@@ -504,9 +517,9 @@
             const bh = df.behind(p[0] + nx * sgn, p[1] + ny * sgn, p[3], p[6]);
             if (bh > 0.5 && bh < 70) best = Math.max(best, clamp01(bh / 14));
           }
-          p[4] *= 1 + best * 0.55;
+          p[2] *= 1 + best * 0.55;
         }
-        for (const r of runs(tagged, 0.06, false, 4, opts.maxJump)) {
+        for (const r of runs(tagged, 0.06, 2, opts.maxJump)) {
           g.stroke(r.pts, {
             grade, tone: style.tone * toneScale, weight: style.weight,
             passes: style.passes, taper: style.taper,
@@ -515,7 +528,7 @@
           });
         }
         if (ghost > 0.01 && !opts.noGhost) {
-          for (const r of runs(tagged, 0.12, true, 5)) {
+          for (const r of runs(tagged, 0.08, 4)) {
             if (M.polyLen(r.pts) < 22) continue;
             g.stroke(r.pts, {
               grade, tone: style.tone * toneScale * ghost * 0.9, weight: style.weight * 0.85,
@@ -534,7 +547,7 @@
               const dl = Math.hypot(dx, dy) || 1;
               return [p[0] - dy / dl * off, p[1] + dx / dl * off, p[2], p[3], p[4], p[5], p[6]];
             });
-            for (const r of runs(shifted, 0.30, false, 4)) {
+            for (const r of runs(shifted, 0.30, 2)) {
               // A hand searches alongside a line it is committing to, not
               // beside every twelve-pixel fragment a busy pose leaves behind.
               if (M.polyLen(r.pts) < 46) continue;

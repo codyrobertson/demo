@@ -73,6 +73,43 @@
     return p;
   }
 
+  /**
+   * The inverse of mk(): recover the normalised spec from a pose in radians,
+   * so a pose arrived at any way at all can be handed back to the sliders.
+   */
+  function specOf(A, pose) {
+    const L = A.limits;
+    const un = (v, flexDeg, extDeg) => {
+      if (v >= 0) return flexDeg > 0 ? clamp(v / (flexDeg * DEG), -1, 1) : 0;
+      return extDeg > 0 ? clamp(v / (extDeg * DEG), -1, 1) : 0;
+    };
+    const spec = { wrist: [], arch: clamp01(pose.arch || 0), thumb: [], f: [] };
+    spec.wrist[0] = un(pose.wrist.flex, L.wrist.flex, L.wrist.ext);
+    spec.wrist[1] = un(pose.wrist.dev, L.wrist.ulnar, L.wrist.radial);
+    spec.wrist[2] = clamp(pose.wrist.pron / (L.wrist.pron * DEG), -1, 1);
+    const T = pose.digits[0], TL = L.digits[0];
+    spec.thumb = [
+      un(T.cmcRad, TL.cmc.flex, TL.cmc.ext),
+      un(T.cmcAbd, TL.cmc.abd, TL.cmc.add),
+      un(T.cmcOpp, TL.cmc.opp, TL.cmc.rep),
+      un(T.mcpFlex, TL.mcp.flex, TL.mcp.ext),
+      un(T.ipFlex, TL.ip.flex, TL.ip.ext)
+    ];
+    for (let d = 1; d < 5; d++) {
+      const v = pose.digits[d], DL = L.digits[d];
+      const away = d === 1 ? -1 : d === 2 ? -0.35 : d === 3 ? 0.55 : 1;
+      // abduction is gated by flexion on the way in; undo that first
+      const gate = 1 - 0.88 * smoothstep(clamp01(Math.max(0, v.mcpFlex) / (78 * DEG)));
+      spec.f.push([
+        un(v.mcpFlex, DL.mcp.flex, DL.mcp.ext),
+        un(v.pipFlex, DL.pip.flex, DL.pip.ext),
+        un(v.dipFlex, DL.dip.flex, DL.dip.ext),
+        clamp(v.mcpAbd / (DL.mcp.abd * DEG * away * (gate > 0.05 ? 1 : 1)), -1, 1)
+      ]);
+    }
+    return spec;
+  }
+
   /** hard-clamp any pose back inside the envelope */
   function clampPose(A, pose) {
     const L = A.limits;
@@ -308,8 +345,13 @@
         .map((v, i) => v.map((x, j) => lerp(x, free.f[i][j], w) + rng.sym(0.09 * jitter)))
     };
     spec.f = couple(A, spec, 0.55 + 0.45 * (1 - entropy));
+    for (let i = 0; i < 3; i++) spec.wrist[i] = clamp(spec.wrist[i], -1, 1);
+    for (let i = 0; i < 5; i++) spec.thumb[i] = clamp(spec.thumb[i], -1, 1);
+    spec.arch = clamp01(spec.arch);
+    spec.f = spec.f.map(v => v.map(x => clamp(x, -1, 1)));
     const p = clampPose(A, mk(A, spec));
     p.intent = key;
+    p.spec = spec;
     return p;
   }
 
@@ -428,7 +470,7 @@
   }
 
   GK.pose = {
-    blank, mk, clampPose, preset, PRESETS, PRESET_KEYS, couple, generate,
+    blank, mk, clampPose, specOf, preset, PRESETS, PRESET_KEYS, couple, generate,
     lerpPose, dofList, romTour, breathe, readout, nr
   };
 })(window.GK = window.GK || {});

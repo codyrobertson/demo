@@ -37,7 +37,7 @@
     vein: { tone: 0.22, weight: 0.58, passes: 1, taper: 0.86, wobble: 0.85, jitter: 0.35, layer: 'vein' },
     hair: { tone: 0.21, weight: 0.42, passes: 1, taper: 0.90, wobble: 0.60, jitter: 0.15, layer: 'hair' },
     hatch: { tone: 0.10, weight: 0.40, passes: 1, taper: 0.70, wobble: 0.90, jitter: 0.20, layer: 'hatch' },
-    bone: { tone: 0.34, weight: 0.62, passes: 1, taper: 0.60, wobble: 0.70, jitter: 0.30, layer: 'bone' }
+    bone: { tone: 0.30, weight: 0.60, passes: 1, taper: 0.60, wobble: 0.70, jitter: 0.30, layer: 'bone' }
   };
   /**
    * Derive a style. A tone given here is a FACTOR on the base style's tone,
