@@ -24,8 +24,11 @@ r.draw({
   seed, pose, ball: pose.ball || null,
   soft: process.env.SOFT === undefined ? 1 : +process.env.SOFT,
   view: { az: az * DEG, el: el * DEG, roll: 0, zoom: 1 },
-  style: { grade: 3, tone: 1, wobble: 1, ghost: 0.2, search: 0.55 },
+  style: { grade: 3, tone: 1, wobble: 1,
+    ghost: process.env.GHOST === undefined ? 0.2 : +process.env.GHOST,
+    search: process.env.SEARCH === undefined ? 0.55 : +process.env.SEARCH },
   detail: { print: 1, ridge: 0.5, lattice: 0.55, hair: 1, vein: 1 },
+  layers: JSON.parse(process.env.LAYERS || 'null') || undefined,
   quality: 1
 });
 const px = r.resolve({ style: {} });

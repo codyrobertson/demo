@@ -289,18 +289,25 @@
             if (rng.f() > 0.34 + 0.55 * taut) continue;
             const sgn = rng.f() < 0.5 ? 1 : -1;
             const aC = DORSAL + (rng.f() - 0.5) * dspan * 1.9;
-            const slant = rng.range(0.18, 0.52) * sgn;
-            const len = rng.range(0.55, 1.15);
-            const mid = rng.sym(0.35);
+            const slant = rng.range(0.14, 0.40) * sgn;
+            // Short, and bowed. Run at the full width of the wrinkle band and
+            // ruled straight, an oblique is a third of a phalanx of dead
+            // straight line lying across a form that is curving underneath
+            // it, and it reads as a scratch on the paper rather than as a
+            // fold in skin - the more so where it happens to continue onto
+            // whatever is behind.
+            const len = rng.range(0.34, 0.62);
+            const mid = rng.sym(0.16);
+            const bow = rng.sym(0.10);
             const here = [], back = [];
             for (let k = 0; k <= 8; k++) {
-              const q = k / 8;
+              const q = k / 8, x = q * 2 - 1;
               const ss = (-spread * 0.45 + spread * 0.9 * q) * len + spread * mid;
-              const a = aC + slant * (q - 0.5) + rng.sym(0.02);
+              const a = aC + slant * (q - 0.5) + bow * (1 - x * x) + rng.sym(0.02);
               if (ss >= 0.012) here.push([ss, a, -0.14]);
               else if (seg > 1) back.push([1 + ss, a, -0.14]);
             }
-            const tone = lerp(0.12, 0.92, taut) * rng.range(0.6, 1.25);
+            const tone = lerp(0.10, 0.72, taut) * rng.range(0.55, 1.10);
             if (here.length > 2) out.push({
               on: 'digit', d, seg, pts: here,
               style: st(S.wrinkle, { tone, phase: nextPhase() })
