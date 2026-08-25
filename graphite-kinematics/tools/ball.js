@@ -9,10 +9,13 @@ const writePNG = require('./png.js');
 const a = process.argv.slice(2);
 const preset = a[0] || 'flat', seed = parseInt(a[1] || '12345');
 const az = (+a[2] || 0) * DEG, el = (+a[3] || 0) * DEG, rad = +a[4] || 26;
+const rough = process.env.ROUGH === undefined ? 0.25 : +process.env.ROUGH;
+const aniso = process.env.ANISO === undefined ? 0 : +process.env.ANISO;
 const out = a[5] || '/tmp/ball.png', S = parseInt(a[6] || '900');
 
 const A = G.anatomy.buildAnatomy(seed);
 const pose = G.pose.holdBall(A, G.pose.preset(A, preset), rad);
+pose.ball.roughness = rough; pose.ball.anisotropy = aniso;
 const r = new G.render.Renderer(S, S);
 const built = r.draw({
   seed, pose, ball: pose.ball,

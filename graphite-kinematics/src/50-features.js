@@ -897,8 +897,142 @@
     }
   }
 
+  // =========================================================================
+  //  G · WHAT THE HAND IS HOLDING
+  // =========================================================================
+
+  /**
+   * The surface of a held ball.
+   *
+   * A bare circle is not a sphere - it is a hole in the paper - and the only
+   * thing that makes it read as a solid is marks that follow its form. So the
+   * hatching runs as circles about the light's own axis, which is what a
+   * draughtsman does and what makes the curvature legible: the arcs crowd and
+   * fatten as the surface turns away, and stop where it turns to face the
+   * light.
+   *
+   * Two properties, because a ball is made of something.
+   *
+   * `roughness` is how the surface takes the pencil. At zero the arcs are
+   * continuous and the silhouette is one clean line: a billiard ball. Raised,
+   * the arcs break into dashes, wander off their circles, and the silhouette
+   * frays - stone, or a worn tennis ball. It also brings up a stipple, which
+   * a smooth ball has none of.
+   *
+   * `anisotropy` is whether the surface has a grain. At zero the arcs are
+   * true circles about the light and the ball reads as uniform. Raised, they
+   * stretch along one axis of the ball's own frame, so the form still reads
+   * but the material has a direction to it - wound thread, brushed metal,
+   * the seam-ward grain of a leather ball.
+   */
+  function heldBall(rig, out, detail) {
+    const b = rig.ball;
+    if (!b) return;
+    const amt = detail && detail.ball !== undefined ? detail.ball : 1;
+    if (amt <= 0.02) return;
+    const rough = clamp01(b.roughness === undefined ? 0.25 : b.roughness);
+    const aniso = clamp01(b.anisotropy === undefined ? 0 : b.anisotropy);
+    const rng = new M.Rng((rig.anatomy.seed ^ 0x5bb1) >>> 0);
+    const noise = new M.Noise((rig.anatomy.seed ^ 0x2f7d) >>> 0);
+
+    // The light, in the hand's own frame rather than the camera's, because a
+    // ball is lit by a room and not by whoever is looking at it. From the
+    // palm side, up and to the radial side: a ball held in a hand is nearly
+    // always seen from the palm, and lighting it from behind there leaves the
+    // whole visible face in shadow and the drawing reading as a dark disc.
+    // Strongly to one side rather than square on. A light behind the ball
+    // leaves the whole visible face in shadow; a light straight down the eye
+    // leaves it bare, and a bare circle is a hole in the paper. Across the
+    // form is the only place a terminator lands where it can be seen, which
+    // is the whole point of drawing one.
+    const L = M.vnorm(M.vadd(M.vmul(rig.root[0], -0.18),
+      M.vadd(M.vmul(rig.root[1], -0.86), M.vmul(rig.root[2], 0.48))));
+    // a frame about it, and the grain direction the anisotropy stretches along
+    const T0 = M.vnorm(M.vcross(L, rig.root[0]));
+    const T1 = M.vnorm(M.vcross(L, T0));
+    const grainAx = rig.root[1];
+
+    // Arcs at constant angle from the light. Past 90 degrees the surface has
+    // turned away; the terminator is where the tone has to start, and it
+    // thickens from there into the far limb.
+    const N = Math.round(lerp(7, 16, amt) * (1 - aniso * 0.25));
+    for (let i = 0; i < N; i++) {
+      const t = (i + 0.5) / N;
+      const th = lerp(Math.PI * 0.40, Math.PI * 0.99, t);
+      const shade = Math.pow(t, 0.72);
+      const pts = [];
+      const NP = 84;
+      for (let k = 0; k <= NP; k++) {
+        const ph = (k / NP) * M.TAU;
+        // stretch the circle along the grain: the form still reads, the
+        // material gains a direction
+        const wob = rough * 0.055 * (noise.n2(Math.cos(ph) * 2.2 + i * 3.1,
+          Math.sin(ph) * 2.2) - 0.5) * 2;
+        const a = th + wob;
+        let dir = M.vadd(M.vmul(T0, Math.cos(ph)), M.vmul(T1, Math.sin(ph)));
+        if (aniso > 0.01) {
+          const along = M.vdot(dir, grainAx);
+          dir = M.vnorm(M.vadd(dir, M.vmul(grainAx, along * aniso * 1.35)));
+        }
+        const P = M.vadd(b.C, M.vmul(M.vadd(M.vmul(L, Math.cos(a)),
+          M.vmul(dir, Math.sin(a))), b.r * 1.002));
+        pts.push(P);
+      }
+      // rough surfaces do not take a continuous line
+      const runs = rough < 0.12 ? [pts] : dash(pts, rng, rough);
+      for (const run of runs) {
+        if (run.length < 3) continue;
+        out.push({
+          on: 'world', pts: run,
+          style: st(S.hatch, {
+            tone: (0.55 + 1.5 * shade) * amt * (0.8 + 0.4 * rng.f()),
+            weight: lerp(1.0, 1.5, shade),
+            wobble: 0.8 + rough * 1.9, jitter: 0.3 + rough * 1.5,
+            phase: nextPhase()
+          })
+        });
+      }
+    }
+
+    // stipple, which only a rough ball has
+    const nDots = Math.round(rough * rough * 520 * amt);
+    for (let i = 0; i < nDots; i++) {
+      const u = rng.f() * 2 - 1, ph = rng.f() * M.TAU;
+      const sr = Math.sqrt(Math.max(0, 1 - u * u));
+      const dir = M.vadd(M.vmul(T0, Math.cos(ph) * sr), M.vmul(T1, Math.sin(ph) * sr));
+      const n = M.vadd(M.vmul(L, u), dir);
+      const lit = M.vdot(n, L);
+      if (lit > 0.35 - rough * 0.3) continue;      // the lit side stays bare
+      const P = M.vadd(b.C, M.vmul(n, b.r * 1.002));
+      const q = M.vmad(P, M.vnorm(M.vcross(n, L)), 0.5 + rng.f() * 1.1);
+      out.push({
+        on: 'world', pts: [P, q],
+        style: st(S.hatch, { tone: 0.5 + 1.1 * rng.f(), weight: 0.8, phase: nextPhase() })
+      });
+    }
+  }
+
+  /** break a path into dashes, the way a rough surface breaks a pencil line */
+  function dash(pts, rng, rough) {
+    const runs = [];
+    let cur = [];
+    for (const p of pts) {
+      cur.push(p);
+      if (cur.length > 4 && rng.f() < 0.035 + rough * 0.10) {
+        runs.push(cur);
+        cur = [];
+        const skip = 1 + Math.floor(rng.f() * (1 + rough * 5));
+        for (let s = 0; s < skip; s++) cur.push(null);
+        cur = [];
+      }
+    }
+    if (cur.length) runs.push(cur);
+    return runs;
+  }
+
   GK.features = {
     S, st, nextPhase, PALMAR, DORSAL, betaForV, palmCurve, uvSpline, flexFrac,
-    digitFolds, webs, nails, fingerprints, palmCreases, palmRidges, streamlines, printField
+    digitFolds, webs, nails, fingerprints, palmCreases, palmRidges, streamlines, printField,
+    heldBall
   };
 })(window.GK = window.GK || {});

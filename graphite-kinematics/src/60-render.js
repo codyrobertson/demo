@@ -530,6 +530,7 @@
       if (L.print && (det.print === undefined ? 1 : det.print) > 0.02) F.fingerprints(rig, curves, q);
       if (L.palmcrease) F.palmCreases(rig, curves);
       if (L.ridge && (det.ridge === undefined ? 1 : det.ridge) > 0.02) F.palmRidges(rig, curves, q);
+      if (rig.ball) F.heldBall(rig, curves, det);
       if (L.tendon) D.tendons(rig, curves);
       if (L.vein) D.veins(rig, curves);
       if (L.fold) D.knuckleField(rig, curves);
