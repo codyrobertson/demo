@@ -296,6 +296,10 @@
    * through the skin. Centring that mass on the bone draws a sausage; the
    * offset is what makes it read as a hand's thenar instead.
    */
+  // The thenar's swell, and how hard the compounded variation behind it is
+  // damped. Both fitted across three hundred seeds, not against one.
+  const TH_SWELL = 0.70, TH_DAMP = 0.40;
+
   function segmentProfile(A, d, seg, s) {
     const bone = A.bones[d];
     const isThumb = d === THUMB;
@@ -307,9 +311,21 @@
       if (isThumb) {
         // The thumb's metacarpal is not buried: it is the thenar eminence,
         // a muscular mass that swells at mid-shaft and narrows to the knuckle.
-        const a = W * M.profile(
-          [[0, 1.95], [0.26, 2.29 * A.palm.thenar], [0.56, 2.18 * A.palm.thenar],
-           [0.82, 1.55], [1, bone.jw[0]]], s) * A.palm.padding;
+        // The thenar's bulk is one biological quantity, and building it as a
+        // product over-disperses it: the bone's breadth already carries the
+        // hand's slenderness, and the eminence's own factor and the hand's
+        // fleshiness then multiply on top. Three independent draws gave a
+        // twofold spread of thenars across seeds - and muscle does not scale
+        // one for one with the bone it sits on anyway. So take the whole
+        // compounded deviation from nominal and damp it in log space, which
+        // pulls both tails in without moving the middle, and set the swell so
+        // a median hand lands mid-range instead of over the top of it.
+        const nomW = NOMINAL_BREADTH[THUMB] * A.size;
+        const dev = (W / nomW) * A.palm.thenar * A.palm.padding;
+        const bulk = Math.pow(Math.max(0.2, dev), TH_DAMP);
+        const a = nomW * bulk * M.profile(
+          [[0, 1.95 * TH_SWELL], [0.26, 2.29 * TH_SWELL], [0.56, 2.18 * TH_SWELL],
+           [0.82, 1.55 * TH_SWELL], [1, bone.jw[0]]], s);
         const b = a * lerp(0.70, 0.92, s);
         // The mass is not centred on the bone: abductor/flexor/opponens
         // pollicis brevis pile onto its palmar-radial side, while the dorsal
