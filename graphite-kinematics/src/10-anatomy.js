@@ -108,7 +108,17 @@
 
     // ---- global build ------------------------------------------------------
     // One size factor correlates every bone; slenderness is a second axis.
-    const size = rng.gaussIn(1.0, 0.062, 0.84, 1.18);
+    // Drawn from the population unless a caller names it. A figure project
+    // needs to grow a hand that fits a particular body rather than one that
+    // fits the distribution, and scaling the geometry after the fact would
+    // leave the features — print ridge spacing, hair, crease depth — at the
+    // size they were built for, on a hand that is no longer that size.
+    // The draw happens either way and is discarded if a caller named a size,
+    // rather than being skipped: skipping it shifts every subsequent draw and
+    // the same seed would then grow a different hand, not the same hand at a
+    // different size.
+    const drawnSize = rng.gaussIn(1.0, 0.062, 0.84, 1.18);
+    const size = opts.size === undefined ? drawnSize : opts.size;
     const slender = rng.gaussIn(1.0, 0.085, 0.80, 1.22);   // >1 = narrower digits
     const digitLengthBias = rng.gaussIn(1.0, 0.035, 0.90, 1.10);
     A.size = size; A.slender = slender;
