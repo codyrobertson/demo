@@ -133,7 +133,10 @@
         // the base of the proximal phalanx. Almost nobody draws this right.
         const isMCP = (jn === 'MCP');
         const base = isMCP ? 0.235 : (jn === 'PIP' ? 0.055 : 0.075);
-        const twin = (jn === 'PIP');                   // the PIP takes two
+        // The proximal interphalangeal joint takes two creases — and so does
+        // the thumb's metacarpophalangeal, which is the joint that does the
+        // same work in a ray with one fewer bone.
+        const twin = (jn === 'PIP') || (isThumb && jn === 'MCP');
         const span = lerp(1.02, 1.30, f) * (isMCP ? 1.16 : 1.0);
         const bow = (isMCP ? 0.030 : 0.016) * lerp(1, 1.5, f);
         const mainTone = lerp(0.60, 1.0, Math.pow(f, 0.72)) * (isMCP ? 0.94 : 1.0);
@@ -344,16 +347,58 @@
         });
       }
     }
-    // first web: the thumb-index commissure, a broad free margin
-    const pts = [];
-    for (let k = 0; k <= 18; k++) {
-      const t = k / 18;
-      pts.push([lerp(1.00, 0.76, t), lerp(-0.72, -0.24, t)]);
+    // ---- the first web -------------------------------------------------
+    // The thumb-index commissure has two regimes and they look nothing alike.
+    // Closed, the skin has surplus and gathers into folds lying along the
+    // margin. Open, it is a taut sheet and the only marks are the tension
+    // lines running across it from thumb to index.
+    const T = rig.pose.digits[0];
+    const open = clamp01(((-(T.cmcRad || 0)) / (26 * DEG)) * 0.55 +
+      ((T.cmcAbd || 0) / (50 * DEG)) * 0.55);
+    const margin = [];
+    for (let k = 0; k <= 20; k++) {
+      const t = k / 20;
+      margin.push([lerp(1.00, 0.76, t), lerp(-0.72, -0.24, t)]);
     }
     out.push({
-      on: 'palm', pts: palmCurve(rig, pts, true, -0.3),
-      style: st(S.crease, { tone: 0.54, weight: 0.8, phase: nextPhase() })
+      on: 'palm', pts: palmCurve(rig, margin, true, -0.3),
+      style: st(S.crease, { tone: 0.54 + 0.34 * open, weight: 0.85, phase: nextPhase() })
     });
+
+    const wRng = new M.Rng(A.seed ^ 0x7b21);
+    const gathered = 1 - open;
+    const nFold = Math.round(gathered * 4);
+    for (let i = 0; i < nFold; i++) {
+      // lying along the margin, crowding toward the depth of the commissure
+      const off = 0.055 + i * 0.045;
+      const fold = margin.map((p, k) => {
+        const t = k / (margin.length - 1);
+        const bulge = Math.sin(Math.PI * clamp01(t * 0.85 + 0.1));
+        return [p[0] - off * bulge * 0.55, p[1] + off * bulge];
+      });
+      out.push({
+        on: 'palm', pts: palmCurve(rig, fold, true, -0.28),
+        style: st(S.creaseFine, {
+          tone: (0.55 + 1.15 * gathered) * (1 - i * 0.20), phase: nextPhase()
+        })
+      });
+    }
+    const nTaut = Math.round(open * 5);
+    for (let i = 0; i < nTaut; i++) {
+      // running across the sheet, thumb to index, where it is stretched
+      const t = 0.16 + 0.68 * (i / Math.max(1, nTaut - 1)) + wRng.sym(0.04);
+      const base = [lerp(1.00, 0.76, t), lerp(-0.72, -0.24, t)];
+      const line = [];
+      for (let k = 0; k <= 10; k++) {
+        const q = k / 10;
+        const sag = Math.sin(Math.PI * q) * 0.035 * (1 - open * 0.5);
+        line.push([base[0] - 0.10 + 0.20 * q - sag, base[1] - 0.12 + 0.24 * q]);
+      }
+      out.push({
+        on: 'palm', pts: palmCurve(rig, line, true, -0.2),
+        style: st(S.fold, { tone: (0.5 + 1.1 * open) * (0.7 + 0.5 * wRng.f()), phase: nextPhase() })
+      });
+    }
   }
 
   // =========================================================================
