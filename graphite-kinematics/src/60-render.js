@@ -161,8 +161,44 @@
    * rendered segment plus one for the palm. Parts are rasterised at very
    * nearly full size: with identities there is nothing to protect against.
    */
+  /**
+   * A sphere's silhouette under an orthographic projection is a circle, and
+   * every point on it lies at the centre's own depth - it is the great circle
+   * square-on to the eye. So there is nothing to search for.
+   */
+  function ballOutline(ball, view, n) {
+    const c = view.px(ball.C), z = view.near(ball.C), r = ball.r * view.scale;
+    const out = [];
+    for (let i = 0; i <= (n || 96); i++) {
+      const a = (i / (n || 96)) * Math.PI * 2;
+      out.push([c[0] + Math.cos(a) * r, c[1] + Math.sin(a) * r, z]);
+    }
+    return out;
+  }
+
+  /** the sphere as a solid, so it occludes the hand and the hand occludes it */
+  function rasteriseBall(ball, view, df, id) {
+    const NU = 28, NV = 18;
+    const P = (iu, iv) => {
+      const th = (iu / NU) * Math.PI * 2, ph = (iv / NV) * Math.PI;
+      const q = [
+        ball.C[0] + ball.r * Math.sin(ph) * Math.cos(th),
+        ball.C[1] + ball.r * Math.sin(ph) * Math.sin(th),
+        ball.C[2] + ball.r * Math.cos(ph)
+      ];
+      const p = view.px(q);
+      return [p[0], p[1], view.near(q)];
+    };
+    for (let iv = 0; iv < NV; iv++) {
+      for (let iu = 0; iu < NU; iu++) {
+        df.quad(P(iu, iv), P(iu + 1, iv), P(iu + 1, iv + 1), P(iu, iv + 1), id);
+      }
+    }
+  }
+
   function rasterise(rig, view, df, shrink, ids) {
     const A = rig.anatomy;
+    if (rig.ball) rasteriseBall(rig.ball, view, df, ids.ball);
     shrink = shrink === undefined ? 0.965 : shrink;
     const NA = 20;
     for (let d = 0; d < 5; d++) {
@@ -251,6 +287,7 @@
       ids.digit.push(row);
     }
     rig.palm.pid = 0;
+    if (rig.ball) ids.ball = next++;
     ids.count = next;
     return ids;
   }
@@ -432,6 +469,10 @@
       const pose = state.contacts === false ? state.pose
         : this.settle(A, state.pose, (state.quality || 0) >= 1 ? 20 : 10);
       const rig = RG.solve(A, pose);
+      // Something the hand is holding rides on the rig, so everything that
+      // walks the scene - the framing, the depth field, the contours - meets
+      // it the same way it meets the hand.
+      rig.ball = state.ball || pose.ball || null;
       const V = state.view;
       const view = new RG.View(V.az, V.el, V.roll || 0, 1, [0, 0, 0], 0, 0);
 
@@ -452,9 +493,16 @@
         const c = RG.digitContour(rig, view, d, { steps: 5 });
         swallow(c.left); swallow(c.right); swallow(c.cap);
         for (const r of c.rings) swallow(r);
+        // The two union outlines can reach outside the rails they replace -
+        // a fingertip's pulp overhangs the bone it sits on - and framing to
+        // the rails alone clips exactly the digits that are pointing at the
+        // eye, which are the ones the unions exist for.
+        const tu = RG.tipUnion(rig, view, d); if (tu.use) swallow(tu.outline);
+        const du = RG.digitUnion(rig, view, d); if (du.use) swallow(du.outline);
       }
       const fsil = RG.palmSilhouette(rig, view, { nu: 20, nb: 44, u0: -0.44, u1: 1.03 });
       swallow(fsil.sideA); swallow(fsil.sideB); swallow(fsil.cap);
+      if (rig.ball) swallow(ballOutline(rig.ball, view));
 
       const margin = state.margin === undefined ? 0.88 : state.margin;
       const zoom = V.zoom === undefined ? 1 : V.zoom;
@@ -769,6 +817,11 @@
       // commissure — where it bulges most, and where a bare mid-sheet had
       // nothing to show at all. selfTest buries whatever part of that band
       // faces away behind the part that covers it.
+      if (rig.ball) {
+        const bo = ballOutline(rig.ball, view).map(p => [p[0], p[1], p[2], ids.ball, 1]);
+        emit(bo, F.st(F.S.contour, { tone: 0.86, weight: 1.05, taper: 0.5, phase: 300 }),
+          { noSearch: true, maxJump: jump });
+      }
       emit(fw.band, F.st(F.S.contour, { tone: 1.05, weight: 1.18, taper: 0.5, phase: 208 }),
         { maxJump: jump, selfTest: true });
       // the free margins of the webs, spanning finger to finger
@@ -793,5 +846,5 @@
     }
   }
 
-  GK.render = { Renderer, DepthField, rasterise, buildIds, projectCurve, runs, DEFAULT_LAYERS };
+  GK.render = { Renderer, DepthField, rasterise, buildIds, projectCurve, runs, ballOutline, DEFAULT_LAYERS };
 })(window.GK = window.GK || {});

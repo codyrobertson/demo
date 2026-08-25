@@ -1099,7 +1099,7 @@
    * angle too, so a caller can pull another construction toward it point by
    * point rather than cutting from one to the other.
    */
-  function radialOutline(pts, pid) {
+  function radialOutline(pts, pid, passes) {
     let cx = 0, cy = 0;
     for (const p of pts) { cx += p[0]; cy += p[1]; }
     cx /= pts.length; cy /= pts.length;
@@ -1128,7 +1128,7 @@
       rad[b] = (a + c2) * 0.5;
       dep[b] = (dep[((lo % NB) + NB) % NB] + dep[hi % NB]) * 0.5;
     }
-    for (let pass = 0; pass < 3; pass++) {
+    for (let pass = 0; pass < (passes || 3); pass++) {
       const src = Float64Array.from(rad);
       const sd = Float64Array.from(dep);
       for (let b = 0; b < NB; b++) {
@@ -1193,11 +1193,23 @@
       }
     };
     // enough of the bone before it that the outline leaves the tip already
-    // running along the tube, rather than meeting it at a seam of its own
+    // running along the tube, rather than meeting it at a seam of its own -
+    // but only just. Reaching further back drags in a stretch that bends away
+    // from the tip, and the point cloud stops being star-shaped about its own
+    // centroid, which is the one thing a radial maximum needs.
     const prev = segs.length > 1 ? segs[segs.length - 2] : null;
-    if (prev) add(prev, lerp(prev.sMin, prev.sMax, 0.62), prev.sMax, 4);
+    if (prev) add(prev, lerp(prev.sMin, prev.sMax, 0.80), prev.sMax, 3);
     add(last, last.sMin, last.sMax, 9);
-    const ro = radialOutline(pts, last.pid);
+    // and if it still is not compact, say so rather than returning a scallop
+    let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+    for (const q of pts) {
+      if (q[0] < x0) x0 = q[0]; if (q[0] > x1) x1 = q[0];
+      if (q[1] < y0) y0 = q[1]; if (q[1] > y1) y1 = q[1];
+    }
+    const w = Math.max(1e-6, x1 - x0), h = Math.max(1e-6, y1 - y0);
+    const aspect = Math.max(w / h, h / w);
+    if (aspect > 2.1) return { use: false, tipOn: 0 };
+    const ro = radialOutline(pts, last.pid, 5);
     if (!ro.use) return { use: false, tipOn: 0 };
     return { use: true, tipOn, outline: ro.outline, cx: ro.cx, cy: ro.cy, at: ro.at };
   }
