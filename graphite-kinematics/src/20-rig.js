@@ -769,6 +769,19 @@
    * to the sheet's own screen tangent. That is well defined in every view —
    * face-on it returns the two borders, edge-on it returns the palmar and
    * dorsal faces — and it never degenerates.
+   *
+   * Except the tangent itself can, the same way digitUnion's rails do: near
+   * az 180 with the camera rising toward the fingertips, the sheet's u-axis
+   * points almost straight at the eye, so a 0.012 step in u is nearly all
+   * curvature and no slope, and the perpendicular built from it swings
+   * wherever that curvature noise points rather than tracking the form. A
+   * column can't fall back to a whole separate outline the way a digit does —
+   * the palm never gets small enough on screen for a centroid-relative union
+   * to mean anything, it just gets thin — so instead each column distrusts
+   * its own tangent exactly as far as a wide-baseline reading of the same
+   * slope disagrees with it, and leans toward the wide one by that amount.
+   * That is continuous in the disagreement, so nothing switches or pops; at
+   * elevation 0, where the two already agree, it reproduces the old rails.
    */
   function palmSilhouette(rig, view, opts) {
     opts = opts || {};
@@ -776,37 +789,68 @@
     const u0 = opts.u0 !== undefined ? opts.u0 : -0.44;
     const u1 = opts.u1 !== undefined ? opts.u1 : 1.03;
     const sideA = [], sideB = [];
-    let betaA1 = 0, betaB1 = 0.5;
     let prevA = null, prevB = null;
     const d2 = (a, b) => (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]);
+    const WIDE = 0.28;
+    const tangentAt = (u, h) => {
+      const lo = Math.max(u0, u - h), hi = Math.min(u1, u + h);
+      const t = view.dir(vsub(palmSurface(rig, hi, 0.25).P, palmSurface(rig, lo, 0.25).P));
+      const tl = Math.hypot(t[0], t[1]);
+      return tl > 1e-6 ? [t[0] / tl, t[1] / tl] : null;
+    };
+    const distrust = [];
     for (let i = 0; i <= NU; i++) {
       const u = lerp(u0, u1, i / NU);
-      const c0 = palmSurface(rig, u - 0.012, 0.25).P;
-      const c1 = palmSurface(rig, u + 0.012, 0.25).P;
-      let t = view.dir(vsub(c1, c0));
-      let tl = Math.hypot(t[0], t[1]);
-      if (tl < 1e-6) { t = [0, 1]; tl = 1; }
-      const nx = -t[1] / tl, ny = t[0] / tl;
-      let minD = 1e18, maxD = -1e18, minP = null, maxP = null, bMin = 0, bMax = 0.5;
+      const tight = tangentAt(u, 0.012) || [0, 1];
+      const wide = tangentAt(u, WIDE);
+      let tx = tight[0], ty = tight[1], w = 0;
+      if (wide) {
+        const drift = Math.acos(clamp(tx * wide[0] + ty * wide[1], -1, 1)) * (180 / Math.PI);
+        w = smoothstep(clamp01((drift - 8) / (30 - 8)));
+        if (w > 0) {
+          tx = lerp(tx, wide[0], w); ty = lerp(ty, wide[1], w);
+          const tl = Math.hypot(tx, ty) || 1;
+          tx /= tl; ty /= tl;
+        }
+      }
+      distrust.push(w);
+      const nx = -ty, ny = tx;
+      let minD = 1e18, maxD = -1e18, minP = null, maxP = null;
       for (let k = 0; k < NB; k++) {
         const beta = k / NB;
         const q = palmSurface(rig, u, beta).P;
         const p = view.px(q);
         const dd = p[0] * nx + p[1] * ny;
-        if (dd < minD) { minD = dd; minP = [p[0], p[1], view.near(q)]; bMin = beta; }
-        if (dd > maxD) { maxD = dd; maxP = [p[0], p[1], view.near(q)]; bMax = beta; }
+        if (dd < minD) { minD = dd; minP = [p[0], p[1], view.near(q)]; }
+        if (dd > maxD) { maxD = dd; maxP = [p[0], p[1], view.near(q)]; }
       }
       // Keep each side of the outline continuous. The extremum can hand off
       // between the palmar and dorsal faces as the sheet turns, and an
       // unordered pair leaves a chord stitched across the form.
       if (prevA && prevB && d2(minP, prevA) + d2(maxP, prevB) > d2(maxP, prevA) + d2(minP, prevB)) {
-        const t = minP; minP = maxP; maxP = t;
-        const tb = bMin; bMin = bMax; bMax = tb;
+        const swap = minP; minP = maxP; maxP = swap;
       }
       sideA.push(minP); sideB.push(maxP);
       prevA = minP; prevB = maxP;
-      if (i === NU) { betaA1 = bMin; betaB1 = bMax; }
     }
+    // A distrusted tangent still leaves a column free to pick between two
+    // nearly-tied points on the loop, which is where the last of the jitter
+    // survives. Leaning each point on its neighbours exactly as far as its
+    // own tangent was distrusted mops that up without softening a column
+    // that was never in question.
+    const relax = (side) => {
+      for (let pass = 0; pass < 3; pass++) {
+        const src = side.map(p => p.slice());
+        for (let i = 1; i < side.length - 1; i++) {
+          const w = distrust[i] * 0.5;
+          if (w <= 0) continue;
+          for (let c = 0; c < 3; c++) {
+            side[i][c] = lerp(src[i][c], (src[i - 1][c] + src[i][c] * 2 + src[i + 1][c]) * 0.25, w);
+          }
+        }
+      }
+    };
+    relax(sideA); relax(sideB);
 
     // The palm has no distal end to close: four digits leave through it. The
     // only real boundary there is the web margin on the palmar face, running
