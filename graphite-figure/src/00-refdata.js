@@ -1,32 +1,26 @@
 /* ============================================================================
    GRAPHITE FIGURE — 00 · refdata
-   Whole-body reference data: segment proportions, population variance, joint
-   range-of-motion, and girths. Pure numbers and the pure functions that
-   resolve them for a given (stature, build) — no rendering, no geometry, no
-   rig, no seeded generation. This is the whole-body counterpart of what
-   graphite-kinematics/src/10-anatomy.js is for the hand (NOMINAL + LIMITS +
-   the per-seed build), except the figure project already splits "reference
-   data" from "seeded generation" into two files — src/10-skeleton.js says so
-   explicitly ("Lengths, girths and joint ranges come from src/00-refdata.js,
-   resolved per seed by buildFigure()") — so the seeded draw of stature/build
-   and the per-part jitter belong in 20-build.js's buildFigure(seed), and this
-   file stops at the pure resolvers that function calls into: segments(stature,
-   build), girths(stature, build), romFor(joint, axis, context). That is also
-   exactly the signature the brief for this file asked for (segments(stature,
-   build), not segments(seed)) so the two requirements agree.
+   Joint range-of-motion: measured active range per joint per axis, the
+   couplings between joints that matter more than any single range does, and
+   the small pure functions that resolve both. No rendering, no geometry, no
+   rig, no segment lengths or girths — those are a fitted statistical model
+   built directly from anthropometric survey data elsewhere; this file is the
+   part that data cannot give, because it was never in it: no population
+   survey measures how far a hip flexes with the knee bent. That has to come
+   from the biomechanics and orthopaedic-goniometry literature instead, joint
+   by joint, and that is what this file is.
 
-   Every number below is either a published anthropometric/biomechanical
-   value — the comment above its block names the source — or is explicitly
-   marked `est`. Where two sources disagree, the comment says so and says
-   which was used. A number with neither a citation nor an `est` tag does not
-   belong in this file.
+   Every number below is either a published biomechanical/orthopaedic value —
+   the comment above its block names the source — or is explicitly marked
+   `est`. Where two sources disagree, the comment says so and says which was
+   taken. A number with neither a citation nor an `est` tag does not belong
+   in this file.
 
-   Units. Every LITERAL table is in degrees or in fractions of stature,
-   because that is how the source literature reports them and checking a
-   number against its paper is the point of citing one. toRad() is the one
-   place a degree becomes a radian; nowhere else in this file re-derives that
-   conversion. Every function that returns an angle to a caller returns
-   radians.
+   Units. Every LITERAL table is in DEGREES, because that is how the source
+   literature reports them and checking a number against its paper is the
+   point of citing one. toRad() is the one place a degree becomes a radian;
+   nowhere else in this file re-derives that conversion. Every function that
+   returns an angle to a caller returns radians.
 
    Sign convention (every joint, unless a block says otherwise):
      sagittal   : flexion +, extension -              (0 = anatomical position)
@@ -36,21 +30,25 @@
      transverse : external/lateral rotation +, internal/medial -
                   (forearm: pronation +, supination -; subtalar: inversion +,
                   eversion -)
-   Two exceptions, both noted again at their own block: forearm neutral is
+   Three exceptions, each also noted at its own block: forearm neutral is
    mid-rotation (thumb up), not palms-forward; carrying angle and screw-home
    rotation are not free ranges, they are a single coupled VALUE at a given
-   flexion, returned by their own function rather than by romFor().
+   flexion, returned by their own function rather than by romFor(); the
+   shoulder's acromion-clearance rotation is likewise a single required
+   minimum, not a range.
 
-   Two body-shape axes, both continuous, both independent of the stature
-   scale:
-     build : -1 (gynoid/pear: hips > shoulders) .. 0 (average) .. +1 (android/
-             inverted-triangle: shoulders > hips). Calibrated against the real
-             sex-mean difference in biacromial and girth measures below, so a
-             build of +-1 lands near the male/female population mean, not at
-             its tail.
-     size  : there is no separate unitless size factor the way the hand has
-             one — stature (mm) already IS the literal, measured quantity the
-             hand's `size` stands in for, and it is the function argument.
+   COUPLINGS. A joint's range is frequently not a constant — it is a function
+   of where a DIFFERENT joint sits, because the muscle that limits it crosses
+   both. Four are modelled here, each because a real, named, biarticular (or
+   geometric) mechanism drives it, not because coupling everything to
+   everything looked thorough:
+     hip flexion   <- knee flexion   (hamstrings slacken)
+     hip extension <- knee extension (rectus femoris slackens)
+     shoulder rotation range <- abduction angle (capsule/torso clearance)
+     shoulder elevation ceiling <- axial rotation (acromion clearance)
+     ankle dorsiflexion <- knee flexion (gastrocnemius slackens)
+   Every one of these is exposed as a function taking the OTHER joint's angle
+   in context, never as prose alone.
    ========================================================================== */
 (function (GK) {
   'use strict';
@@ -58,57 +56,25 @@
   // ---------------------------------------------------------------- constants
   // Prefers GK.math, which is already on the shared namespace by the time
   // this file loads in the one place that actually loads it today
-  // (tools/stick.js requires the hand's 00-math.js before anything in this
-  // project) — same Rng, same DEG, no drift between the two projects' random
-  // streams. Falls back to a private, equivalent copy so this file also
-  // stands up completely alone (`global.window={}; require(...)`), which is
-  // how its own self-check below is actually run.
+  // (tools/stick.js requires the hand project's 00-math.js before anything
+  // in this project). Falls back to a private, equivalent copy of just the
+  // four primitives actually used here, so this file also stands up
+  // completely alone (`global.window={}; require(...)`), which is how its
+  // own self-check below is actually run.
   const M = GK.math || (function () {
     const DEG = Math.PI / 180;
     const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
     const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
     const lerp = (a, b, t) => a + (b - a) * t;
     const smoothstep = (t) => { t = clamp01(t); return t * t * (3 - 2 * t); };
-    function mulberry32(a) {
-      a = a >>> 0;
-      return function () {
-        a = (a + 0x6D2B79F5) >>> 0;
-        let t = a;
-        t = Math.imul(t ^ (t >>> 15), t | 1);
-        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-      };
-    }
-    class Rng {
-      constructor(seed) { this.reseed(seed); }
-      reseed(seed) { this.seed = (seed >>> 0) || 1; this._f = mulberry32(this.seed * 2654435761 % 4294967296); this._spare = null; return this; }
-      f() { return this._f(); }
-      range(a, b) { return a + (b - a) * this._f(); }
-      gauss(mu = 0, sd = 1) {
-        if (this._spare !== null) { const s = this._spare; this._spare = null; return mu + sd * s; }
-        let u = 0, v = 0, s = 0;
-        do { u = this._f() * 2 - 1; v = this._f() * 2 - 1; s = u * u + v * v; } while (s >= 1 || s === 0);
-        const m = Math.sqrt(-2 * Math.log(s) / s);
-        this._spare = v * m;
-        return mu + sd * u * m;
-      }
-      gaussIn(mu, sd, lo, hi) {
-        for (let i = 0; i < 12; i++) { const g = this.gauss(mu, sd); if (g >= lo && g <= hi) return g; }
-        return clamp(mu, lo, hi);
-      }
-    }
-    return { DEG, clamp, clamp01, lerp, smoothstep, mulberry32, Rng };
+    return { DEG, clamp, lerp, smoothstep };
   })();
-  const { DEG, clamp, lerp, Rng } = M;
+  const { DEG, clamp, lerp } = M;
 
   // -------------------------------------------------------------- provenance
   // Short citations, referenced by key from the block comments below rather
   // than repeated in full at every table.
   const SOURCES = {
-    drillisContini: 'Drillis & Contini 1966, Body Segment Parameters (NYU); reproduced as Winter, Biomechanics and Motor Control of Human Movement, Fig. 4.1 — segment length as a fraction of stature. The most-reproduced table in the field; treated as high-confidence.',
-    ansurII: 'Gordon, Blackwell et al. 2014, 2012 Anthropometric Survey of U.S. Army Personnel (ANSUR II), Natick Soldier RD&E Center — a fit adult military sample, not general population; absolute means in cm, by sex.',
-    spineLength: 'radiographic spinal-length literature (adult T1-T12 anterior column commonly ~250-300mm, L1-S1 ~150-180mm) — approximate, not a single named table.',
-    vertebralMorphometry: 'general vertebral-body-height morphometry (the same craniocaudal-increase fact osteoporotic-fracture Genant grading leans on) — used only for the SHAPE of the per-vertebra split, not for absolute per-level numbers.',
     whitePanjabi: 'White & Panjabi, Clinical Biomechanics of the Spine (1978/1990) — in-vitro segmental spine ROM under a standardised pure moment. C0-C1 and C1-C2 rows below are this table directly; the subaxial rows (C2-C3..C7-T1) are the commonly-reproduced values from the same table, not independently re-confirmed against the primary source this pass.',
     lumbarSegmental: 'a multivariate radiographic study of 42 intact lumbar spines, level-by-level flexion-extension arc (L1-2 through L5-S1) — used directly for that one column; lateral bending and rotation per level are not from this study.',
     thoracicSegmental: 'an in-vitro segmental-flexibility study of the thoracic spine — T1-2 and T11-12 are that study\'s own reported means; the other ten levels are this file\'s interpolation along the well-attested regional pattern (stiff through the rib-braced mid-thoracic, loose at both transition zones).',
@@ -117,246 +83,17 @@
     screwHome: 'orthopaedic consensus on the knee screw-home mechanism: ~15deg of obligate external tibial rotation develops over the terminal ~20-30deg of extension (the larger medial femoral condyle running out of articular surface), locking the knee for standing.',
     silfverskiold: 'the Silfverskiold-test literature — ankle dorsiflexion measured with the knee extended (gastrocnemius, which crosses both joints, on stretch) versus flexed (gastrocnemius slack) — the standard clinical way to tell a tight gastrocnemius from a tight soleus.',
     hipRotationPosition: 'goniometric studies comparing hip rotation measured seated (~90deg hip flexion) against prone (hip near neutral extension) — both a measured mean and an SD, not a single textbook number.',
-    carryingAngle: 'radiographic/goniometric carrying-angle studies (pooled measured means ~9.3deg male / ~18.5deg female, both with several degrees of SD) — used in preference to the rounder 5-15/10-20 textbook rule-of-thumb because it is an actual measured sample.'
+    hipSagittalCoupling: 'the Thomas-test / Ely-test literature: hip flexion range increases as the knee flexes because the hamstrings (crossing both joints posteriorly) slacken, and hip extension range decreases as the knee flexes because rectus femoris (crossing both joints anteriorly) tightens — the direction and the mechanism are standard orthopaedic-exam findings; the specific degree figures at each knee-flexed anchor are this file\'s own est, not this literature\'s numbers.',
+    carryingAngle: 'radiographic/goniometric carrying-angle studies (pooled measured means ~9.3deg male / ~18.5deg female, both with several degrees of SD) — used in preference to the rounder 5-15/10-20 textbook rule-of-thumb because it is an actual measured sample.',
+    shoulderClearance: 'subacromial-impingement biomechanics: past roughly 90-120deg of elevation the greater tuberosity approaches the acromion/coracoacromial arch, and clearing it needs external rotation — why full overhead elevation is pain-free and achievable in the externally-rotated "full can" position and mechanically blocks well short of 180deg in the internally-rotated "empty can" position (the basis of Neer\'s impingement sign). The threshold and the qualitative mechanism are standard; the specific ramp (linear, 0deg of required rotation at 120deg of elevation to a defensible ceiling at 180deg) is this file\'s own reasoned model, since no single source publishes it as a curve.'
   };
 
   const toRad = (deg) => deg * DEG;
 
   // ============================================================================
-  // 1. SEGMENT PROPORTIONS — fraction of stature (H)
-  // ============================================================================
-  // Isometric throughout: segment = fraction * stature. Real allometry bends
-  // slightly away from a straight line across the full height range, but
-  // that is the same simplification Drillis & Contini's own table makes, and
-  // it is exact enough over the range of statures a figure generator needs.
-
-  // ---- head, neck (SOURCES.drillisContini) -----------------------------------
-  const HEAD = 0.130;        // vertex to chin
-  const HEAD_NECK = 0.182;   // vertex to C7/suprasternale — the other commonly
-                              // tabulated figure. Neck is never its own D&C
-                              // entry; it is this minus HEAD.
-  const NECK = HEAD_NECK - HEAD;
-
-  // ---- spine: cervical, thoracic, lumbar — whole and per-vertebra -----------
-  // D&C has no spine breakdown at all; it treats the trunk as one segment.
-  // The three regional totals below come from radiographic spinal-length
-  // literature instead (SOURCES.spineLength — approx; converting an absolute
-  // mm figure to a fraction of H assumes a ~1750mm reference stature, so
-  // treat the third decimal as soft). Cervical's total is NECK again, repeated
-  // here so a consumer building all three chains the same way (as
-  // graphite-figure's own 10-skeleton.js does — seven C-bones, twelve T-bones,
-  // five L-bones) has one uniform shape instead of a special case for the neck.
-  const SPINE_CERVICAL = NECK;   // = 0.052H — independently cross-checked below:
-                                  // 10-skeleton.js's own provisional cervicalSeg
-                                  // total (7 * 0.00743) is 0.0520H, an exact match.
-  const SPINE_THORACIC = 0.157;  // approx — ~275mm @ ~1750mm stature. 10-skeleton.js's
-                                  // own provisional thoracicSeg total is 0.158H — close.
-  const SPINE_LUMBAR = 0.095;    // approx — ~165mm @ ~1750mm stature. 10-skeleton.js's
-                                  // own provisional lumbarSeg total is 0.100H — close.
-
-  // Per-vertebra split: real vertebral bodies are NOT uniform height — anterior
-  // body height increases craniocaudally through both the thoracic and lumbar
-  // columns because the lower vertebrae carry more load (SOURCES.vertebralMorphometry).
-  // The cervical column is its own shape: C1/C2 form a compact, specialised
-  // craniocervical junction (the atlas has no real body; the axis is dominated
-  // by the odontoid) rather than following the plain increasing gradient, then
-  // C3-C7 increase gradually like the rest of the spine.
-  // What follows in each *_RAW array is a set of RELATIVE weights on that
-  // documented shape, normalised to sum to 1 and then scaled by the regional
-  // total above — not independently measured per-vertebra fractions; there is
-  // no source at that grain. est, for the shape only (the totals they sum to
-  // are the real, cited numbers above).
-  // Order: superior to inferior — C1..C7, T1..T12, L1..L5 (i.e. skull-to-sacrum
-  // reading order). graphite-figure's own skeleton tree walks the opposite way
-  // (T1 upward from the sacrum, so C7 first) — reverse the array if that is
-  // the walk a consumer needs.
-  const CERVICAL_RAW = [9, 10, 12, 13, 13.5, 14, 14.5];                       // C1..C7
-  const THORACIC_RAW = [16, 17, 18, 19, 20, 21, 21.5, 22, 23, 24, 25.5, 27];  // T1..T12
-  const LUMBAR_RAW = [25, 26, 27, 28, 30];                                    // L1..L5
-  const normalizeWeights = (arr) => { const s = arr.reduce((a, b) => a + b, 0); return arr.map((v) => v / s); };
-  const CERVICAL_VERTEBRA_WEIGHT = normalizeWeights(CERVICAL_RAW);
-  const THORACIC_VERTEBRA_WEIGHT = normalizeWeights(THORACIC_RAW);
-  const LUMBAR_VERTEBRA_WEIGHT = normalizeWeights(LUMBAR_RAW);
-
-  // ---- shoulder / pelvis breadth: where `build` actually lives ---------------
-  // Biacromial breadth computed from ANSUR II absolute means (ANSUR does not
-  // itself publish these as stature fractions): male 41.1cm / 175.6cm stature
-  // = 0.234H, female 36.7cm / 162.5cm = 0.226H (SOURCES.ansurII; the two
-  // statures are the commonly-cited ANSUR II means, not independently
-  // re-verified to the millimetre this pass — see STATURE_MM below).
-  // The classic D&C figure for shoulder breadth commonly runs closer to
-  // 0.25H, plausibly because it is bideltoid (over the muscle) rather than
-  // biacromial (bone to bone) — a different landmark, not a contradiction —
-  // and the skeleton is what this table is for, so biacromial is used.
-  const SHOULDER_BREADTH_BASE = 0.230;     // (0.234 + 0.226) / 2
-  const SHOULDER_BREADTH_BUILD = 0.004;    // half the male/female spread, ANSUR-derived
-
-  // Bi-iliac (bony pelvis) breadth has no ANSUR-derived anchor here — ANSUR's
-  // hip figure below is a soft-tissue circumference, a different landmark
-  // entirely (see GIRTH). est throughout, from the general and well-attested
-  // androgyny/Tanner-index fact that the pelvis is relatively — not
-  // necessarily absolutely — wider than the shoulders in a gynoid build: a
-  // roughly stature-independent ~280mm bi-iliac breadth in both sexes reads
-  // as a LARGER fraction of the shorter female reference stature, which is
-  // the direction this number encodes even without a firm absolute source.
-  const BI_ILIAC_BASE = 0.165;             // est
-  const BI_ILIAC_BUILD = -0.0065;          // est — opposite sign to shoulder: higher
-                                            // build (more android) narrows it
-
-  // Adult clavicle length from orthopaedic implant-sizing literature runs
-  // ~150-155mm; 152/1750 ~ 0.087H. Flagged explicitly because graphite-figure's
-  // own 20-build.js currently carries a PROVISIONAL clavicle fraction of
-  // 0.105H, noticeably longer — that number is doing double duty as "half the
-  // biacromial reach the shoulder needs to span" rather than measured bone
-  // length (its own file says so: "biacromial breadth is carried by the
-  // clavicle's length"). The two are different quantities; this file gives
-  // the measured bone length, and a future integration should derive the
-  // shoulder's lateral reach from SHOULDER_BREADTH above instead of from
-  // clavicle length directly.
-  const CLAVICLE = 0.087;
-
-  const PELVIS_HEIGHT = 0.108; // est — iliac crest to symphysis/ischial level, no
-                                // direct source found. NOT the same quantity as
-                                // graphite-figure's own skeleton-tree `pelvis` key
-                                // (sacral-promontory-to-L5, a small chain connector,
-                                // ~0.030H) — same word, different landmark.
-
-  // ---- limbs (SOURCES.drillisContini — the part of the table reproduced
-  // verbatim in every kinesiology course, and the part with the least reason
-  // to doubt). These four also match graphite-figure's own 20-build.js
-  // provisional FRAC table exactly (humerus/forearm/femur/tibia), which is
-  // expected: both ultimately come from the same Winter table.
-  const UPPER_ARM = 0.186;   // acromion to lateral epicondyle
-  const FOREARM = 0.146;     // lateral epicondyle to radial styloid
-  const HAND = 0.108;        // stylion to dactylion — the CLINICAL landmark, wrist
-                              // crease to fingertip pad. Will not equal the sum of
-                              // graphite-kinematics' own per-bone metacarpal/phalanx
-                              // lengths, which are radiographic bone-to-bone and
-                              // start distal to the wrist crease and stop short of
-                              // the fingertip pulp — different landmarks, not a bug.
-  const THIGH = 0.245;       // greater trochanter to knee joint line
-  const SHANK = 0.246;       // knee joint line to lateral malleolus
-  const FOOT_LENGTH = 0.152;
-  const FOOT_HEIGHT = 0.041; // est — instep/malleolus height off the ground. D&C
-                              // tabulates foot BREADTH (0.055H) here, not height.
-
-  const SEGMENT_FRACTION = {
-    head: HEAD, neck: NECK,
-    spine: {
-      cervical: SPINE_CERVICAL, cervicalVertebraWeight: CERVICAL_VERTEBRA_WEIGHT,
-      thoracic: SPINE_THORACIC, thoracicVertebraWeight: THORACIC_VERTEBRA_WEIGHT,
-      lumbar: SPINE_LUMBAR, lumbarVertebraWeight: LUMBAR_VERTEBRA_WEIGHT
-    },
-    shoulderBreadth: SHOULDER_BREADTH_BASE,
-    biIliacBreadth: BI_ILIAC_BASE,
-    clavicle: CLAVICLE,
-    pelvisHeight: PELVIS_HEIGHT,
-    upperArm: UPPER_ARM, forearm: FOREARM, hand: HAND,
-    thigh: THIGH, shank: SHANK, footLength: FOOT_LENGTH, footHeight: FOOT_HEIGHT
-  };
-
-  // build shifts breadth, not length: the sex/build differences the literature
-  // documents are in shoulder and pelvis WIDTH, not in limb or trunk length as
-  // a fraction of stature — deliberately not extending `build` to lengths
-  // beyond what the evidence above actually supports.
-  const SEGMENT_BUILD = { shoulderBreadth: SHOULDER_BREADTH_BUILD, biIliacBreadth: BI_ILIAC_BUILD };
-
-  // ---- variance ---------------------------------------------------------------
-  // Two classes of coefficient-of-variation, not one, because the best
-  // evidence for "how much does a segment vary at a given stature" is the
-  // forensic stature-ESTIMATION literature (Trotter & Gleser-style long-bone-
-  // to-stature regressions): the standard error of a stature estimate built
-  // from a limb long bone is consistently smaller than one built from a
-  // trunk/vertebral measurement. That is the actual evidence behind "limb
-  // segments co-vary with stature more tightly than trunk does" (the same
-  // claim graphite-figure's own 20-build.js makes in its buildFigure()
-  // comment) — it is not an invented percentage. The CV values pinning that
-  // pattern down numerically below are themselves est, sized off the general
-  // magnitude of those regression errors rather than one named table.
-  const LIMB_CV = 0.035;     // est
-  const TRUNK_CV = 0.070;    // est
-  const BREADTH_CV = 0.045;  // est — skeletal like a limb, but `build` above already
-                              // carries the biggest part of the shoulder/pelvis spread,
-                              // so this is only the residual jitter on top of build.
-
-  const SEGMENT_CV = {
-    head: TRUNK_CV, neck: TRUNK_CV,
-    spine: { cervical: TRUNK_CV, thoracic: TRUNK_CV, lumbar: TRUNK_CV },
-    shoulderBreadth: BREADTH_CV, biIliacBreadth: BREADTH_CV,
-    clavicle: LIMB_CV, pelvisHeight: TRUNK_CV,
-    upperArm: LIMB_CV, forearm: LIMB_CV, hand: LIMB_CV,
-    thigh: LIMB_CV, shank: LIMB_CV, footLength: LIMB_CV, footHeight: LIMB_CV
-  };
-
-  // ---- stature itself -----------------------------------------------------
-  const STATURE_MM = { male: 1756, female: 1625 };  // approx, SOURCES.ansurII —
-                                                      // commonly-cited means, not
-                                                      // re-verified to the mm this pass
-  const STATURE_SD_MM = { male: 66, female: 61 };    // approx, SOURCES.ansurII —
-                                                      // both ~3.7-3.8% CV, which is
-                                                      // this file's evidence for how
-                                                      // tight an overall-size draw
-                                                      // should be before any per-part
-                                                      // residual is added on top
-
-  // ============================================================================
-  // 2. GIRTHS — fraction of stature (H), at the landmarks a surface loft needs
-  // ============================================================================
-  // ANSUR II (SOURCES.ansurII) publishes these as absolute cm, by sex, not as
-  // stature fractions — the fractions below are this file's own division of
-  // the commonly-cited ANSUR II absolute means by the commonly-cited ANSUR II
-  // mean statures above, so they inherit that same "approx" softness. Girths
-  // are also a genuinely worse fit for "fraction of stature" than lengths
-  // are: waist and chest track adiposity as much as skeleton, which is why
-  // their CV further down is the highest in the file, not an authoring slip.
-  const GIRTH_ANSUR_CM = {
-    male: { neck: 39.8, chestNipple: 105.9, waist: 103.0, hips: 105.6, midThigh: 62.5, upperArmRelaxed: 35.8, forearmMax: 31.0, wrist: 17.6, calf: 39.2 },
-    female: { neck: 33.0, chestNipple: 94.7, waist: 97.9, hips: 109.8, midThigh: 61.6 }
-    // ANSUR II female calf and wrist weren't recovered this pass; filled in
-    // just below from the male value, scaled by a ratio est from the OTHER
-    // sex-matched pairs above (which run 0.90-1.0, segment-dependent) rather
-    // than left blank, so `build` still has something real to interpolate
-    // against for every girth.
-  };
-  GIRTH_ANSUR_CM.female.calf = GIRTH_ANSUR_CM.male.calf * 0.95;    // est
-  GIRTH_ANSUR_CM.female.wrist = GIRTH_ANSUR_CM.male.wrist * 0.93;  // est
-
-  function girthFractionFromAnsur(sex, key) {
-    return (GIRTH_ANSUR_CM[sex][key] * 10) / STATURE_MM[sex]; // cm -> mm, / stature mm
-  }
-
-  const GIRTH_KEYS = ['neck', 'chestNipple', 'waist', 'hips', 'midThigh', 'upperArmRelaxed', 'forearmMax', 'wrist', 'calf'];
-  const GIRTH_FRACTION = {}, GIRTH_BUILD = {};
-  for (const k of GIRTH_KEYS) {
-    const m = girthFractionFromAnsur('male', k), f = girthFractionFromAnsur('female', k);
-    GIRTH_FRACTION[k] = (m + f) / 2;
-    GIRTH_BUILD[k] = (m - f) / 2;   // same convention as SEGMENT_BUILD: +1 build ~ male-typical
-  }
-  // Two landmarks ANSUR doesn't carry at all: knee and ankle girth. Both are
-  // est, from commonly-quoted tape-measurement reference figures (knee
-  // ~37cm, ankle ~23cm at a ~176cm reference stature) rather than a named
-  // survey, and carry no build slope for lack of any sex-differenced source.
-  GIRTH_FRACTION.knee = 0.210; GIRTH_BUILD.knee = 0;
-  GIRTH_FRACTION.ankle = 0.131; GIRTH_BUILD.ankle = 0;
-  // Flexing necessarily adds bulk over relaxed — the direction is not in
-  // question, only the size of the increment, which is why this is a flat
-  // add rather than its own sex-differenced anchor. est increment.
-  GIRTH_FRACTION.upperArmFlexed = GIRTH_FRACTION.upperArmRelaxed + 0.014; // ~+2.5cm @ 1750mm
-  GIRTH_BUILD.upperArmFlexed = GIRTH_BUILD.upperArmRelaxed;
-
-  // est throughout — no per-measure SD was recovered from ANSUR this pass, so
-  // this follows the well-attested general pattern instead: waist and chest,
-  // adiposity-driven, vary far more across a population than a tape around
-  // the wrist or ankle, which is mostly bone, ever does.
-  const GIRTH_CV = {
-    neck: 0.06, chestNipple: 0.09, waist: 0.13, hips: 0.09, midThigh: 0.10, knee: 0.07,
-    calf: 0.08, ankle: 0.055, upperArmRelaxed: 0.10, upperArmFlexed: 0.10, forearmMax: 0.08, wrist: 0.05
-  };
-
-  // ============================================================================
-  // 3. RANGE OF MOTION — degrees in every literal table; toRad() is the one
-  //    place that becomes radians. Neutral = anatomical standing position for
-  //    every joint except where a block says otherwise.
+  // RANGE OF MOTION — degrees in every literal table; toRad() is the one
+  // place that becomes radians. Neutral = anatomical standing position for
+  // every joint except where a block says otherwise.
   // ============================================================================
 
   // ---- cervical spine (SOURCES.whitePanjabi). flex/ext are each their own
@@ -365,10 +102,13 @@
   // side" and treated as left-right symmetric, matching how the source
   // itself reports them. `src` marks which rows are the directly-cited
   // measurement and which are the commonly-reproduced-but-not-reverified
-  // subaxial figures.
+  // subaxial figures. C1-2 alone carries roughly HALF of the neck's total
+  // axial rotation (38.9 of the ~98deg the eight rows below sum to, one
+  // side) — the reason a realistic neck rig cannot spread rotation evenly
+  // across its seven bones.
   const CERVICAL_LEVELS = [
     { level: 'C0-C1', flex: 3.5, ext: 21.0, lat: 5.5, rot: 7.2, src: 'measured' },
-    { level: 'C1-C2', flex: 11.5, ext: 10.9, lat: 6.7, rot: 38.9, src: 'measured' }, // most of the neck's own axial rotation lives right here
+    { level: 'C1-C2', flex: 11.5, ext: 10.9, lat: 6.7, rot: 38.9, src: 'measured' },
     { level: 'C2-C3', flex: 5.0, ext: 5.0, lat: 10.0, rot: 9.0, src: 'est' },
     { level: 'C3-C4', flex: 7.5, ext: 7.5, lat: 11.0, rot: 11.0, src: 'est' },
     { level: 'C4-C5', flex: 10.0, ext: 10.0, lat: 11.0, rot: 12.0, src: 'est' },
@@ -387,11 +127,11 @@
   // range); the peak location (T4-6) is est. These twelve levels sum to
   // ~58deg combined flexion-extension, well above the ~28deg a systematic
   // review reports for skin-surface/goniometer-measured whole-region
-  // clinical ROM — the same well-documented gap as the cervical table above:
-  // in-vitro segmental sums (pure applied moment, no muscular or soft-tissue
-  // limit) run higher than in-vivo global measurement. Both are real
-  // numbers measuring different things; this table is the segmental one,
-  // because that is what a per-vertebra rig needs.
+  // clinical ROM — the same well-documented gap noted again below for the
+  // cervical total: in-vitro segmental sums (pure applied moment, no
+  // muscular or soft-tissue limit) run higher than in-vivo global
+  // measurement. Both are real numbers measuring different things; this
+  // table is the segmental one, because that is what a per-vertebra rig needs.
   const THORACIC_LEVELS = [
     { level: 'T1-T2', flexExt: 13.8, lat: 4.4, rot: 4.0, src: 'measured' },
     { level: 'T2-T3', flexExt: 7.0, lat: 3.8, rot: 4.6, src: 'est' },
@@ -429,11 +169,12 @@
   const LUMBAR_FLEX_SHARE = 0.75;
 
   // ---- shoulder (SOURCES.aaos for the headline numbers; SOURCES.inman for
-  // the rhythm ratio). Rotation range is abduction-dependent, measured
-  // consistently larger with the arm elevated than at the side; AAOS's
-  // 70/90 IR/ER figures are the ~90deg-abduction convention most clinics
-  // use. The at-the-side anchor is est, by the same capsular/torso-clearance
-  // logic documented for external rotation specifically.
+  // the rhythm ratio; SOURCES.shoulderClearance for the elevation ceiling).
+  // Rotation range is abduction-dependent, measured consistently larger with
+  // the arm elevated than at the side; AAOS's 70/90 IR/ER figures are the
+  // ~90deg-abduction convention most clinics use. The at-the-side anchor is
+  // est, by the same capsular/torso-clearance logic documented for external
+  // rotation specifically.
   const SHOULDER = {
     flex: 180, ext: 60, abd: 180, add: 30,   // add: est, AAOS's chart omits it
     rotAtSide: { int: 60, ext: 60 },          // est, abduction ~0
@@ -441,7 +182,7 @@
   };
   // The classic scalar ratio (SOURCES.inman): scapulothoracic motion is 1/3
   // of total humeral elevation, glenohumeral the other 2/3 — a single ratio
-  // applied across the whole 0-180deg arc, which is the simplification most
+  // applied across the whole 0-180deg arc, the simplification most
   // consistent with the commonly-cited "120deg GH / 60deg ST over the full
   // 180" headline result. Inman's own data also describes a "setting phase"
   // in the first ~30deg where the scapula moves relatively little; that
@@ -449,11 +190,19 @@
   // (a hard early-zero followed by a steeper post-30 ratio does NOT actually
   // reconcile back to the cited 120/60 endpoint under simple linear
   // arithmetic, so rather than encode an inconsistency this file uses the
-  // single ratio that does match the cited number, and keeps the phase as
-  // a documented qualitative note via SCAPULA_SETTING_PHASE below).
+  // single ratio that does match the cited number, and keeps the phase as a
+  // documented qualitative note via SCAPULA_SETTING_PHASE below).
   const SCAPULOHUMERAL_RATIO = 2;
   const SCAPULA_SETTING_PHASE = 30; // deg of humeral elevation before the scapula
                                      // meaningfully joins in — informational, SOURCES.inman
+  // Acromion clearance (SOURCES.shoulderClearance): below the threshold,
+  // elevation needs no particular rotation; past it, the minimum external
+  // rotation needed to keep elevating ramps up to rotationAt180 by full
+  // overhead reach. rotationAt180 is deliberately smaller than
+  // rotAt90Abd.ext (90deg) above — that number is the muscular/capsular
+  // ROM ceiling for rotation, a different and larger quantity than the
+  // minimum bony clearance modelled here.
+  const SHOULDER_CLEARANCE = { elevationThreshold: 120, rotationAt180: 40 }; // rotationAt180: est
 
   // ---- elbow (SOURCES.aaos for flex/ext; SOURCES.carryingAngle for the
   // valgus angle, which AAOS's chart doesn't carry at all). The angle closes
@@ -462,10 +211,8 @@
   // itself is this file's own smoothstep, not a digitised source curve.
   const ELBOW = { flex: 145, hyperext: 8 }; // hyperext: est, physiologic laxity,
                                              // larger in women and children
-  const CARRYING_ANGLE = { base: 13.9, build: -4.6 }; // deg; SOURCES.carryingAngle pooled
-                                                        // means (~9.3 male, ~18.5 female)
-                                                        // -> base = their mean, build =
-                                                        // half their spread
+  const CARRYING_ANGLE = { male: 9.3, female: 18.5, average: 13.9 }; // deg, SOURCES.carryingAngle
+                                                                      // pooled measured means
   const CARRYING_ANGLE_CLOSE_BY = 100; // deg of flexion by which the angle has closed to ~0. est.
 
   // ---- forearm (SOURCES.aaos). Some sources (Norkin/Levangie-style
@@ -475,23 +222,31 @@
   // Neutral here is mid-rotation (thumb up), NOT palms-forward.
   const FOREARM_ROM = { pron: 80, sup: 80 };
 
-  // ---- hip. Flexion is knee-position-coupled (rectus femoris and the
-  // hamstrings slacken as the knee bends, letting the hip fold further — the
-  // same reason a tucked cannonball jump folds deeper than a straight-leg
-  // toe touch); rotation is hip-flexion-position-coupled (seated ~90deg
-  // flexion versus prone ~neutral extension give measurably different
-  // rotation — SOURCES.hipRotationPosition, mean and SD both real). Flex/ext/
-  // abd/add envelope numbers are SOURCES.aaos except where noted.
+  // ---- hip. Both sagittal directions are knee-position-coupled, by two
+  // different biarticular muscles (SOURCES.hipSagittalCoupling): flexion
+  // range grows as the knee flexes (hamstrings, crossing both joints
+  // posteriorly, slacken); extension range SHRINKS as the knee flexes
+  // (rectus femoris, crossing both joints anteriorly, tightens — the Ely's-
+  // test mechanism). Both anchors share the same knee-flexion input, because
+  // it is the same knee. Rotation is instead hip-flexion-position-coupled
+  // (seated ~90deg flexion versus prone ~neutral extension give measurably
+  // different rotation — SOURCES.hipRotationPosition, mean and SD both
+  // real). Abd/add envelope numbers are SOURCES.aaos except where noted.
   const HIP = {
-    flexKneeExt: 95,     // est synthesis — AAOS's flat 120 doesn't distinguish knee
-                          // position; ~90-100 is the commonly quoted knee-extended
-                          // figure (straight-leg-raise territory)
-    flexKneeFlex: 122,    // est synthesis — ~120-125 is the commonly quoted
-                          // knee-flexed figure (heel toward hip)
-    ext: 30,              // SOURCES.aaos; pelvis-stabilised (Thomas-test-controlled)
-                          // measures commonly read lower, ~10-20 — AAOS's less-
-                          // controlled 30 is used as the primary figure
-    abd: 45, add: 25,     // abd: SOURCES.aaos; add: est, AAOS's chart omits it
+    flexKneeExt: 95,      // est synthesis — AAOS's flat 120 doesn't distinguish knee
+                           // position; ~90-100 is the commonly quoted knee-extended
+                           // figure (straight-leg-raise territory)
+    flexKneeFlex: 122,     // est synthesis — ~120-125 is the commonly quoted
+                           // knee-flexed figure (heel toward hip)
+    extKneeExt: 30,        // SOURCES.aaos, at the knee-extended position that
+                           // chart implicitly assumes; pelvis-stabilised
+                           // (Thomas-test-controlled) measures commonly read
+                           // lower, ~10-20 — AAOS's less-controlled 30 is used
+                           // as the primary figure
+    extKneeFlex: 10,       // est — reduced by rectus femoris tension; direction and
+                           // mechanism are SOURCES.hipSagittalCoupling, the specific
+                           // figure is this file's own estimate
+    abd: 45, add: 25,      // abd: SOURCES.aaos; add: est, AAOS's chart omits it
     rotSeated: { int: 33, ext: 36 },  // SOURCES.hipRotationPosition, +-7deg SD both
     rotProne: { int: 36, ext: 45 }    // SOURCES.hipRotationPosition, +-9/+-10deg SD
   };
@@ -516,56 +271,25 @@
   // self-check below to confirm a coupled query can never walk outside the
   // envelope its own two anchors define.
   const ROM_ENVELOPE = {
-    hipFlex: { min: -toRad(HIP.ext), max: toRad(HIP.flexKneeFlex) },
+    hipFlex: { min: -toRad(HIP.extKneeExt), max: toRad(HIP.flexKneeFlex) },
     hipRot: { min: -toRad(Math.max(HIP.rotSeated.int, HIP.rotProne.int)), max: toRad(Math.max(HIP.rotSeated.ext, HIP.rotProne.ext)) },
     shoulderRot: { min: -toRad(Math.max(SHOULDER.rotAtSide.int, SHOULDER.rotAt90Abd.int)), max: toRad(Math.max(SHOULDER.rotAtSide.ext, SHOULDER.rotAt90Abd.ext)) },
     ankleDorsi: { min: -toRad(ANKLE.plantar), max: toRad(ANKLE.dorsiKneeFlex) }
   };
 
   // ============================================================================
-  // 4. RESOLVERS — the small pure functions
+  // RESOLVERS — the small pure functions
   // ============================================================================
-
-  /** resolved segment lengths in mm for a given stature (mm) and build (-1..1) */
-  function segments(stature, build) {
-    build = build || 0;
-    const s = SEGMENT_FRACTION;
-    const cervicalLen = stature * s.spine.cervical;
-    const thoracicLen = stature * s.spine.thoracic;
-    const lumbarLen = stature * s.spine.lumbar;
-    return {
-      head: stature * s.head,
-      neck: stature * s.neck,
-      spine: {
-        cervical: cervicalLen, cervicalPerVertebra: s.spine.cervicalVertebraWeight.map((w) => w * cervicalLen),
-        thoracic: thoracicLen, thoracicPerVertebra: s.spine.thoracicVertebraWeight.map((w) => w * thoracicLen),
-        lumbar: lumbarLen, lumbarPerVertebra: s.spine.lumbarVertebraWeight.map((w) => w * lumbarLen)
-      },
-      shoulderBreadth: stature * (s.shoulderBreadth + SEGMENT_BUILD.shoulderBreadth * build),
-      biIliacBreadth: stature * (s.biIliacBreadth + SEGMENT_BUILD.biIliacBreadth * build),
-      clavicle: stature * s.clavicle,
-      pelvisHeight: stature * s.pelvisHeight,
-      upperArm: stature * s.upperArm, forearm: stature * s.forearm, hand: stature * s.hand,
-      thigh: stature * s.thigh, shank: stature * s.shank,
-      footLength: stature * s.footLength, footHeight: stature * s.footHeight
-    };
-  }
-
-  /** resolved girths in mm for a given stature (mm) and build (-1..1) */
-  function girths(stature, build) {
-    build = build || 0;
-    const out = {};
-    for (const k in GIRTH_FRACTION) out[k] = stature * (GIRTH_FRACTION[k] + (GIRTH_BUILD[k] || 0) * build);
-    return out;
-  }
 
   function findLevel(table, level) { return table.find((r) => r.level === level) || null; }
 
   /**
    * romFor(joint, axis, context) -> {min, max} in RADIANS about the joint's
-   * neutral (see the header comment for sign convention and the two
-   * exceptions). `context` carries whatever a coupling needs (level,
-   * kneeFlexionRad, abductionRad, hipFlexionRad) — every context input is
+   * neutral (see the header comment for sign convention and the three
+   * exceptions). `context` carries whatever a coupling needs — kneeFlexionRad
+   * (hip flexExt, ankle dorsiPlantar), hipFlexionRad (hip rotation),
+   * abductionRad (shoulder rotation), axialRotationRad (shoulder flexExt,
+   * for the acromion-clearance ceiling) — and every context input is
    * clamped, so an out-of-range caller cannot walk the result outside
    * ROM_ENVELOPE. Returns null for an axis a joint doesn't have.
    */
@@ -584,7 +308,20 @@
         { const flex = row.flexExt * LUMBAR_FLEX_SHARE; return { min: -toRad(row.flexExt - flex), max: toRad(flex) }; }
       }
       case 'shoulder': {
-        if (axis === 'flexExt') return { min: -toRad(SHOULDER.ext), max: toRad(SHOULDER.flex) };
+        if (axis === 'flexExt') {
+          // Acromion-clearance coupling: past SHOULDER_CLEARANCE.elevationThreshold,
+          // the achievable ceiling depends on how much axial rotation is available
+          // (context.axialRotationRad) — invert shoulderClearanceRotation() to find
+          // the largest elevation that rotation clears. Omitted context = the full
+          // static range, i.e. rotation is assumed sufficient.
+          let maxElev = SHOULDER.flex;
+          if (context.axialRotationRad !== undefined) {
+            const rot = Math.abs(context.axialRotationRad) / DEG;
+            const t = clamp(rot / SHOULDER_CLEARANCE.rotationAt180, 0, 1);
+            maxElev = Math.min(maxElev, SHOULDER_CLEARANCE.elevationThreshold + t * (SHOULDER.flex - SHOULDER_CLEARANCE.elevationThreshold));
+          }
+          return { min: -toRad(SHOULDER.ext), max: toRad(maxElev) };
+        }
         if (axis === 'abdAdd') return { min: -toRad(SHOULDER.add), max: toRad(SHOULDER.abd) };
         if (axis === 'rotation') {
           // abduction 0..90deg spans the two anchors; beyond 90 this file has
@@ -601,9 +338,11 @@
       case 'forearm': return axis === 'pronSup' ? { min: -toRad(FOREARM_ROM.sup), max: toRad(FOREARM_ROM.pron) } : null;
       case 'hip': {
         if (axis === 'flexExt') {
+          // one knee-flexion input drives both anchors, in opposite directions
           const t = clamp(context.kneeFlexionRad || 0, 0, toRad(KNEE.flex)) / toRad(KNEE.flex);
           const flexMax = lerp(HIP.flexKneeExt, HIP.flexKneeFlex, M.smoothstep(t));
-          return { min: -toRad(HIP.ext), max: toRad(flexMax) };
+          const extMax = lerp(HIP.extKneeExt, HIP.extKneeFlex, M.smoothstep(t));
+          return { min: -toRad(extMax), max: toRad(flexMax) };
         }
         if (axis === 'abdAdd') return { min: -toRad(HIP.add), max: toRad(HIP.abd) };
         if (axis === 'rotation') {
@@ -641,12 +380,26 @@
     return { glenohumeral: toRad(glenohumeral), scapulothoracic: toRad(scapular) };
   }
 
-  /** elbow carrying angle (radians) at a given flexion and build; the valgus
-   *  angle present at extension closes toward 0 as the elbow flexes past
+  /** minimum external rotation (radians, unsigned) needed to reach a given
+   *  elevation without impinging the greater tuberosity on the acromion —
+   *  0 at/below SHOULDER_CLEARANCE.elevationThreshold, ramping to
+   *  rotationAt180 by full overhead elevation (SOURCES.shoulderClearance).
+   *  romFor('shoulder','flexExt',{axialRotationRad}) is this function
+   *  inverted: given the rotation you HAVE, how high you can go. */
+  function shoulderClearanceRotation(elevationRad) {
+    const elevDeg = clamp(elevationRad / DEG, 0, SHOULDER.flex);
+    const span = SHOULDER.flex - SHOULDER_CLEARANCE.elevationThreshold;
+    const t = span > 0 ? clamp((elevDeg - SHOULDER_CLEARANCE.elevationThreshold) / span, 0, 1) : 0;
+    return toRad(SHOULDER_CLEARANCE.rotationAt180 * t);
+  }
+
+  /** elbow carrying angle (radians) at a given flexion and sex ('male' |
+   *  'female' | omitted for the pooled average); the valgus angle present at
+   *  extension closes toward 0 as the elbow flexes past
    *  ~CARRYING_ANGLE_CLOSE_BY degrees (SOURCES.carryingAngle for the base
    *  figure; the closing curve is this file's own model). */
-  function carryingAngle(flexionRad, build) {
-    const full = CARRYING_ANGLE.base + CARRYING_ANGLE.build * (build || 0);
+  function carryingAngle(flexionRad, sex) {
+    const full = sex === 'male' ? CARRYING_ANGLE.male : sex === 'female' ? CARRYING_ANGLE.female : CARRYING_ANGLE.average;
     const t = clamp((flexionRad / DEG) / CARRYING_ANGLE_CLOSE_BY, 0, 1);
     return toRad(full) * (1 - M.smoothstep(t));
   }
@@ -660,59 +413,29 @@
   }
 
   // ============================================================================
-  // 5. SELF-CHECK
+  // SELF-CHECK
   // ============================================================================
   /**
    * Internal consistency, not truth — this cannot tell a mis-transcribed
    * citation from a correct one, only that the numbers agree with each other
-   * the way real anatomy has to. Four kinds of check: (a) weight arrays and
-   * derived totals sum the way their own construction promises; (b) every
-   * static ROM entry has min <= max; (c) every coupled ROM query stays
-   * inside its own envelope across a sweep of contexts, and still has
-   * min <= max at each one; (d) girths and a small sampled population of
-   * seeded bodies come out mechanically sane (positive, correctly ordered,
-   * plausible). The seeded sampling in (d) is exactly the "seeded generator
-   * perturbs within real limits" the variance tables exist for — kept local
-   * to this check rather than exported, because graphite-figure's own
-   * 20-build.js.buildFigure(seed) is the project's actual seeded generator
-   * and this file supplies it data, not a second generator to compete with it.
+   * the way real anatomy has to. Two kinds of check, as asked: (a) every
+   * static ROM entry has min <= max; (b) every coupled ROM query, swept
+   * across its whole input range, still has min <= max and never escapes the
+   * envelope its own two uncoupled anchors define. A few cheap extra
+   * consistency checks (the scapulohumeral split summing back to its input,
+   * the clearance ramp being monotonic) are folded in alongside those two
+   * because they were already sitting right there once the joints above
+   * were being exercised anyway.
    */
   function selfCheck() {
     const issues = [];
     const near = (a, b, tol, msg) => { if (Math.abs(a - b) > tol) issues.push(msg + ` (${a.toFixed(4)} vs ${b.toFixed(4)})`); };
 
-    // -- (a) weight arrays sum to 1, and lengths match their construction --
-    near(CERVICAL_VERTEBRA_WEIGHT.reduce((a, b) => a + b, 0), 1, 1e-9, 'cervicalVertebraWeight does not sum to 1');
-    near(THORACIC_VERTEBRA_WEIGHT.reduce((a, b) => a + b, 0), 1, 1e-9, 'thoracicVertebraWeight does not sum to 1');
-    near(LUMBAR_VERTEBRA_WEIGHT.reduce((a, b) => a + b, 0), 1, 1e-9, 'lumbarVertebraWeight does not sum to 1');
-    if (CERVICAL_VERTEBRA_WEIGHT.length !== 7) issues.push('cervical vertebra count != 7');
-    if (THORACIC_VERTEBRA_WEIGHT.length !== 12) issues.push('thoracic vertebra count != 12');
-    if (LUMBAR_VERTEBRA_WEIGHT.length !== 5) issues.push('lumbar vertebra count != 5');
     if (CERVICAL_LEVELS.length !== 8) issues.push('cervical ROM level count != 8 (C0-C1..C7-T1)');
+    if (THORACIC_LEVELS.length !== 12) issues.push('thoracic ROM level count != 12 (T1-T2..T12-L1)');
+    if (LUMBAR_LEVELS.length !== 5) issues.push('lumbar ROM level count != 5 (L1-L2..L5-S1)');
 
-    near(SEGMENT_FRACTION.head + SEGMENT_FRACTION.neck, HEAD_NECK, 1e-9, 'head+neck drifted from the source head-and-neck figure');
-
-    // classic total-leg-length cross-check: thigh+shank+footHeight ~ 0.53H
-    const legSum = SEGMENT_FRACTION.thigh + SEGMENT_FRACTION.shank + SEGMENT_FRACTION.footHeight;
-    near(legSum, 0.530, 0.012, 'thigh+shank+footHeight drifted from the classic ~0.53H total leg length');
-
-    // per-vertebra lengths sum to the regional total, at an arbitrary stature
-    const S = segments(1750, 0);
-    near(S.spine.cervicalPerVertebra.reduce((a, b) => a + b, 0), S.spine.cervical, 1e-6, 'cervical per-vertebra does not sum to the regional total');
-    near(S.spine.thoracicPerVertebra.reduce((a, b) => a + b, 0), S.spine.thoracic, 1e-6, 'thoracic per-vertebra does not sum to the regional total');
-    near(S.spine.lumbarPerVertebra.reduce((a, b) => a + b, 0), S.spine.lumbar, 1e-6, 'lumbar per-vertebra does not sum to the regional total');
-
-    // scapulohumeral split: components sum to the input at every sampled elevation,
-    // and the classic 180deg endpoint reproduces the cited 60deg scapular share
-    for (let i = 0; i <= 6; i++) {
-      const el = (i / 6) * toRad(SHOULDER.flex);
-      const sp = scapulohumeralSplit(el);
-      if (sp.glenohumeral < -1e-9 || sp.scapulothoracic < -1e-9) issues.push('scapulohumeralSplit produced a negative share at i=' + i);
-      near(sp.glenohumeral + sp.scapulothoracic, el, 1e-6, 'scapulohumeralSplit components do not sum to the input at i=' + i);
-    }
-    near(scapulohumeralSplit(toRad(180)).scapulothoracic, toRad(60), 1e-6, 'scapulohumeralSplit(180deg) drifted from the cited 60deg scapular share');
-
-    // -- (b) every static ROM entry: min <= max --
+    // -- (a) every static ROM entry: min <= max --
     const staticChecks = [
       ...CERVICAL_LEVELS.flatMap((r) => ['flexExt', 'lateral', 'rotation'].map((axis) => ['cervical', axis, { level: r.level }])),
       ...THORACIC_LEVELS.flatMap((r) => ['flexExt', 'lateral', 'rotation'].map((axis) => ['thoracic', axis, { level: r.level }])),
@@ -728,11 +451,12 @@
       if (r.min > r.max) issues.push(`romFor(${joint},${axis},${JSON.stringify(ctx)}) has min > max`);
     }
 
-    // -- (c) coupled ranges: min<=max at every sampled context, and never
-    // escape the envelope those two anchors define --
+    // -- (b) coupled ranges: min<=max at every sampled context, and never
+    // escape the envelope their own two uncoupled anchors define --
     const N = 9;
     for (let i = 0; i < N; i++) {
       const t = i / (N - 1);
+
       const hipFlex = romFor('hip', 'flexExt', { kneeFlexionRad: t * toRad(KNEE.flex) });
       if (hipFlex.min > hipFlex.max) issues.push('hip flexExt min>max at t=' + t);
       if (hipFlex.max > ROM_ENVELOPE.hipFlex.max + 1e-9 || hipFlex.min < ROM_ENVELOPE.hipFlex.min - 1e-9) issues.push('hip flexExt escaped its envelope at t=' + t);
@@ -745,71 +469,73 @@
       if (shRot.min > shRot.max) issues.push('shoulder rotation min>max at t=' + t);
       if (shRot.max > ROM_ENVELOPE.shoulderRot.max + 1e-9 || shRot.min < ROM_ENVELOPE.shoulderRot.min - 1e-9) issues.push('shoulder rotation escaped its envelope at t=' + t);
 
+      const shElev = romFor('shoulder', 'flexExt', { axialRotationRad: t * toRad(SHOULDER_CLEARANCE.rotationAt180) });
+      if (shElev.min > shElev.max) issues.push('shoulder flexExt min>max at t=' + t);
+      if (shElev.max > toRad(SHOULDER.flex) + 1e-9 || shElev.max < toRad(SHOULDER_CLEARANCE.elevationThreshold) - 1e-6) issues.push('shoulder flexExt clearance cap outside its expected band at t=' + t);
+
       const dorsi = romFor('ankle', 'dorsiPlantar', { kneeFlexionRad: t * toRad(90) });
       if (dorsi.min > dorsi.max) issues.push('ankle dorsiPlantar min>max at t=' + t);
       if (dorsi.max > ROM_ENVELOPE.ankleDorsi.max + 1e-9 || dorsi.min < ROM_ENVELOPE.ankleDorsi.min - 1e-9) issues.push('ankle dorsiPlantar escaped its envelope at t=' + t);
 
-      const carry = carryingAngle(t * toRad(150), 0);
-      if (carry < -1e-9 || carry > toRad(CARRYING_ANGLE.base) + 1e-6) issues.push('carryingAngle out of bounds at t=' + t);
+      const carryM = carryingAngle(t * toRad(150), 'male'), carryF = carryingAngle(t * toRad(150), 'female');
+      if (carryM < -1e-9 || carryM > toRad(CARRYING_ANGLE.male) + 1e-6) issues.push('carryingAngle(male) out of bounds at t=' + t);
+      if (carryF < -1e-9 || carryF > toRad(CARRYING_ANGLE.female) + 1e-6) issues.push('carryingAngle(female) out of bounds at t=' + t);
 
       const screw = screwHomeRotation(t * toRad(KNEE.flex));
       if (screw < -1e-9 || screw > toRad(SCREW_HOME.deg) + 1e-9) issues.push('screwHomeRotation out of bounds at t=' + t);
+
+      const clr = shoulderClearanceRotation(t * toRad(SHOULDER.flex));
+      if (clr < -1e-9 || clr > toRad(SHOULDER_CLEARANCE.rotationAt180) + 1e-9) issues.push('shoulderClearanceRotation out of bounds at t=' + t);
     }
 
-    // -- (d) girths: mechanically required orderings, and all positive --
-    const g175 = girths(1750, 0);
-    if (g175.upperArmFlexed < g175.upperArmRelaxed) issues.push('flexed upper arm girth is smaller than relaxed');
-    if (g175.forearmMax < g175.wrist) issues.push('forearm max girth is smaller than wrist girth');
-    for (const k in g175) if (!(g175[k] > 0)) issues.push('girth ' + k + ' is non-positive');
-    for (const k in S) if (typeof S[k] === 'number' && !(S[k] > 0)) issues.push('segment ' + k + ' is non-positive');
-
-    // seeded sampling: draw stature/build the way a caller (graphite-figure's
-    // own buildFigure) would, jitter every segment by its own SEGMENT_CV on
-    // top, and confirm a population of seeds stays plausible and internally
-    // consistent — this is the actual exercise of "a seeded generator can
-    // perturb within real limits", just not exported as one.
-    const rng = new Rng(90210);
-    const jitter = (cv) => rng.gaussIn(1, cv, 1 - 3 * cv, 1 + 3 * cv);
-    let sampled = 0;
-    for (const sex of ['male', 'female']) {
-      for (let n = 0; n < 40; n++) {
-        sampled++;
-        const mu = STATURE_MM[sex], sd = STATURE_SD_MM[sex];
-        const stature = rng.gaussIn(mu, sd, mu - 3.2 * sd, mu + 3.2 * sd);
-        const buildMu = sex === 'male' ? 0.6 : -0.6;
-        const build = rng.gaussIn(buildMu, 0.55, -2.2, 2.2);
-        const nominal = segments(stature, build);
-        const thigh = nominal.thigh * jitter(SEGMENT_CV.thigh);
-        const shank = nominal.shank * jitter(SEGMENT_CV.shank);
-        const shoulderBreadth = nominal.shoulderBreadth * jitter(SEGMENT_CV.shoulderBreadth);
-        const biIliacBreadth = nominal.biIliacBreadth * jitter(SEGMENT_CV.biIliacBreadth);
-        if (!(stature > 1300 && stature < 2100)) issues.push(`sampled ${sex} stature implausible: ${stature.toFixed(0)}mm`);
-        if (!(thigh > 0 && shank > 0)) issues.push(`sampled ${sex} produced a non-positive leg segment`);
-        if (!(shoulderBreadth > 0 && biIliacBreadth > 0)) issues.push(`sampled ${sex} produced a non-positive breadth`);
+    // -- hip sagittal coupling: flexion strictly grows and extension strictly
+    // shrinks (or holds, never reverses) as the knee flexes -- the whole
+    // point of SOURCES.hipSagittalCoupling being two DIFFERENT muscles
+    {
+      let prevFlexMax = null, prevExtMag = null;
+      for (let i = 0; i <= 8; i++) {
+        const r = romFor('hip', 'flexExt', { kneeFlexionRad: (i / 8) * toRad(KNEE.flex) });
+        const extMag = -r.min; // r.min <= 0 by construction, so extMag >= 0
+        if (prevFlexMax !== null && r.max < prevFlexMax - 1e-9) issues.push('hip flexion range is not monotonic non-decreasing with knee flexion at i=' + i);
+        if (prevExtMag !== null && extMag > prevExtMag + 1e-9) issues.push('hip extension range is not monotonic non-increasing with knee flexion at i=' + i);
+        prevFlexMax = r.max; prevExtMag = extMag;
       }
     }
-    // build's documented direction: pooled male draws should read broader in
-    // the shoulder-to-pelvis relationship than pooled female draws, on
-    // average, since that relationship is the entire reason build exists
+
+    // -- scapulohumeral split: components sum to the input at every sampled
+    // elevation, and the classic 180deg endpoint reproduces the cited 60deg
+    // scapular share --
+    for (let i = 0; i <= 6; i++) {
+      const el = (i / 6) * toRad(SHOULDER.flex);
+      const sp = scapulohumeralSplit(el);
+      if (sp.glenohumeral < -1e-9 || sp.scapulothoracic < -1e-9) issues.push('scapulohumeralSplit produced a negative share at i=' + i);
+      near(sp.glenohumeral + sp.scapulothoracic, el, 1e-6, 'scapulohumeralSplit components do not sum to the input at i=' + i);
+    }
+    near(scapulohumeralSplit(toRad(180)).scapulothoracic, toRad(60), 1e-6, 'scapulohumeralSplit(180deg) drifted from the cited 60deg scapular share');
+
+    // -- shoulderClearanceRotation: monotonic, ~0 at/below threshold --
     {
-      const trial = (sex) => { const b = sex === 'male' ? 0.6 : -0.6; const s = segments(1700, b); return s.shoulderBreadth / s.biIliacBreadth; };
-      if (!(trial('male') > trial('female'))) issues.push('build does not separate male/female-typical shoulder:hip ratio in the expected direction');
+      let prev = -1;
+      for (let i = 0; i <= 12; i++) {
+        const el = (i / 12) * toRad(SHOULDER.flex);
+        const v = shoulderClearanceRotation(el);
+        if (v < prev - 1e-9) issues.push('shoulderClearanceRotation is not monotonic at i=' + i);
+        prev = v;
+      }
+      if (shoulderClearanceRotation(toRad(SHOULDER_CLEARANCE.elevationThreshold)) > 1e-9) issues.push('shoulderClearanceRotation is not ~0 at the threshold elevation');
     }
 
-    return { ok: issues.length === 0, issueCount: issues.length, sampledBodies: sampled, issues };
+    return { ok: issues.length === 0, issueCount: issues.length, issues };
   }
 
   GK.ref = {
     SOURCES,
-    SEGMENT_FRACTION, SEGMENT_CV, SEGMENT_BUILD,
-    STATURE_MM, STATURE_SD_MM,
-    GIRTH_FRACTION, GIRTH_BUILD, GIRTH_CV,
     CERVICAL_LEVELS, THORACIC_LEVELS, LUMBAR_LEVELS, LUMBAR_FLEX_SHARE,
-    SHOULDER, SCAPULOHUMERAL_RATIO, SCAPULA_SETTING_PHASE,
+    SHOULDER, SCAPULOHUMERAL_RATIO, SCAPULA_SETTING_PHASE, SHOULDER_CLEARANCE,
     ELBOW, CARRYING_ANGLE, CARRYING_ANGLE_CLOSE_BY, FOREARM_ROM,
     HIP, KNEE, SCREW_HOME, ANKLE, SUBTALAR,
     ROM_ENVELOPE,
-    segments, girths, romFor, scapulohumeralSplit, carryingAngle, screwHomeRotation,
+    romFor, scapulohumeralSplit, shoulderClearanceRotation, carryingAngle, screwHomeRotation,
     selfCheck
   };
 })(window.GK = window.GK || {});
