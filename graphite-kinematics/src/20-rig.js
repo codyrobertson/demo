@@ -1095,15 +1095,23 @@
    * A closed outline around a cloud of projected surface points: the radial
    * maximum about their centroid, binned by angle, empty bins filled from
    * their neighbours and the profile smoothed circularly, since a per-bin
-   * maximum taken straight out comes back a sawtooth. Returns a lookup by
-   * angle too, so a caller can pull another construction toward it point by
-   * point rather than cutting from one to the other.
+   * maximum taken straight out comes back a sawtooth.
+   *
+   * The ratio of samples to bins is the whole game. A maximum over two or
+   * three samples is a noisy estimate of a maximum, and the noise does not
+   * average out - it is one-sided, so the profile ripples outward at about a
+   * percent of the radius per bin, which on a fingertip reads as a scalloped
+   * edge and looks like a rendering fault rather than a sampling one. Feed it
+   * ten or more per bin.
+   *
+   * Returns a lookup by angle too, so a caller can pull another construction
+   * toward it point by point rather than cutting from one to the other.
    */
-  function radialOutline(pts, pid, passes) {
+  function radialOutline(pts, pid, passes, bins) {
     let cx = 0, cy = 0;
     for (const p of pts) { cx += p[0]; cy += p[1]; }
     cx /= pts.length; cy /= pts.length;
-    const NB = 128;
+    const NB = bins || 128;
     const rad = new Float64Array(NB).fill(-1);
     const dep = new Float64Array(NB);
     for (const p of pts) {
@@ -1182,7 +1190,7 @@
     if (tipOn <= 0.004) return { use: false, tipOn: 0 };
     const pts = [];
     const add = (sg, s0, s1, NS) => {
-      const NA = 26;
+      const NA = 64;
       for (let i = 0; i <= NS; i++) {
         const sv = lerp(s0, s1, i / NS);
         for (let k = 0; k < NA; k++) {
@@ -1198,8 +1206,8 @@
     // from the tip, and the point cloud stops being star-shaped about its own
     // centroid, which is the one thing a radial maximum needs.
     const prev = segs.length > 1 ? segs[segs.length - 2] : null;
-    if (prev) add(prev, lerp(prev.sMin, prev.sMax, 0.80), prev.sMax, 3);
-    add(last, last.sMin, last.sMax, 9);
+    if (prev) add(prev, lerp(prev.sMin, prev.sMax, 0.80), prev.sMax, 5);
+    add(last, last.sMin, last.sMax, 14);
     // and if it still is not compact, say so rather than returning a scallop
     let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
     for (const q of pts) {
@@ -1209,7 +1217,7 @@
     const w = Math.max(1e-6, x1 - x0), h = Math.max(1e-6, y1 - y0);
     const aspect = Math.max(w / h, h / w);
     if (aspect > 2.1) return { use: false, tipOn: 0 };
-    const ro = radialOutline(pts, last.pid, 5);
+    const ro = radialOutline(pts, last.pid, 5, 80);
     if (!ro.use) return { use: false, tipOn: 0 };
     return { use: true, tipOn, outline: ro.outline, cx: ro.cx, cy: ro.cy, at: ro.at };
   }
@@ -1264,7 +1272,7 @@
     // sample the whole digit's surface and take the radial maximum
     const pts = [];
     for (const sg of segs) {
-      const NS = 9, NA = 24;
+      const NS = 11, NA = 44;
       for (let i = 0; i <= NS; i++) {
         const sv = sg.sMin + (sg.sMax - sg.sMin) * (i / NS);
         if (thumbBase(sg, sv)) continue;
@@ -1275,7 +1283,7 @@
         }
       }
     }
-    const ro = radialOutline(pts, segs[0].pid);
+    const ro = radialOutline(pts, segs[0].pid, 3, 96);
     if (!ro.use) return { use: false, edgeOn: 0 };
     return { use: true, edgeOn, outline: ro.outline, cx: ro.cx, cy: ro.cy, at: ro.at };
   }
