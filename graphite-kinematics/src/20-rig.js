@@ -284,24 +284,59 @@
     }
     // Where does the thumb metacarpal sit, in the sheet's own coordinates?
     // The radial border is pulled out to meet it, so the thenar opens and
-    // closes with the thumb instead of being a fixed lobe.
+    // closes with the thumb instead of being a fixed lobe. One representative
+    // point (the old approach) stands in fine for a thumb near rest, but
+    // opposition and cupping swing the metacarpal enough that a single sample
+    // stops speaking for the rest of it, and the border reaches for the wrong
+    // place while the base of the bone goes uncovered. Track several points
+    // along its length instead, and let each u pull toward whichever of them
+    // is relevant there.
     const tmc = rig.digits[0].segs[0];
-    const tMid = vmad(tmc.A, tmc.t, tmc.len * 0.62);
     const palmRef = {
       grid, norms, nu: PALM_NU, u0: PALM_U0, u1: PALM_U1, knots: V_KNOTS,
       vLo: () => -3, vHi: () => 3
     };
     rig.palm = palmRef;
-    let thumbV = -0.55, thumbU = 0.55, best = 1e18;
-    for (let iu = 0; iu <= 14; iu++) {
-      for (let iv = 0; iv <= 30; iv++) {
-        const uu = lerp(0.1, 1.0, iu / 14), vv = lerp(-1.4, 0.05, iv / 30);
-        const q = palmSpine(rig, uu, vv).P;
-        const dd = (q[0] - tMid[0]) ** 2 + (q[1] - tMid[1]) ** 2 + (q[2] - tMid[2]) ** 2;
-        if (dd < best) { best = dd; thumbV = vv; thumbU = uu; }
+    const samples = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0].map((sv) => {
+      const P = vmad(tmc.A, tmc.t, tmc.len * sv);
+      let bestD = 1e18, bu = 0.5, bv = -0.5;
+      for (let iu = 0; iu <= 16; iu++) {
+        for (let iv = 0; iv <= 32; iv++) {
+          const uu = lerp(-0.15, 1.05, iu / 16), vv = lerp(-1.45, 0.05, iv / 32);
+          const q = palmSpine(rig, uu, vv).P;
+          const dd = (q[0] - P[0]) ** 2 + (q[1] - P[1]) ** 2 + (q[2] - P[2]) ** 2;
+          if (dd < bestD) { bestD = dd; bu = uu; bv = vv; }
+        }
       }
-    }
-    thumbV = clamp(thumbV, -1.25, -0.24);
+      return { sv, u: bu, v: clamp(bv, -1.35, -0.10) };
+    });
+    const head = samples[samples.length - 1];   // the metacarpal head
+    const track = samples.slice().sort((p, q) => p.u - q.u);
+    // v the border should reach for at a given u, held flat past either end
+    // of the tracked span rather than extrapolated, which is what lets the
+    // wrist taper (below) and the web pinch (in vHi) still have the last word
+    const thumbVAt = (u) => {
+      if (u <= track[0].u) return track[0].v;
+      if (u >= track[track.length - 1].u) return track[track.length - 1].v;
+      for (let i = 0; i < track.length - 1; i++) {
+        const a = track[i], b = track[i + 1];
+        if (u <= b.u) return lerp(a.v, b.v, inv(u, a.u, b.u));
+      }
+      return track[track.length - 1].v;
+    };
+    const thumbV = thumbVAt(0.55), thumbU = 0.55;
+    // The thenar's resting profile: a lobe over the thumb metacarpal that
+    // returns to the rim at both ends - into the wrist proximally, into the
+    // first web distally.
+    const lobe = (u, c, wProx, wDist) =>
+      Math.exp(-Math.pow((u - c) / (u < c ? wProx : wDist), 2));
+    // wider proximally, where the eminence runs back to the wrist, than
+    // distally, where it has to be off the sheet by the metacarpal heads -
+    // past them the space between the rays is web, not palm, and a border
+    // still carrying thenar width out there draws as a straight radial edge
+    const REF_C = 0.46, REF_W = 0.54, REF_WD = 0.34, REF_A = 0.52;
+    /** furthest the border may be drawn beyond that resting profile */
+    const EMAX = 0.30;
 
     rig.palm = {
       grid, norms,
@@ -312,16 +347,27 @@
       // hypothenar. Extrapolating past the outer metacarpals does the work.
       vLo: (u) => {
         const uu = clamp(u, -0.6, 1.3);
-        // the radial border swings out to meet the thumb metacarpal, so the
-        // thenar and the first web open and close with the thumb itself
-        const reach = Math.min(0, (thumbV * 1.04) + 0.10);
-        const raw = -0.20 + reach * Math.exp(-Math.pow((uu - 0.46) / 0.54, 2));
+        const ref = -0.20 - REF_A * lobe(uu, REF_C, REF_W, REF_WD);
+        // Muscle does not follow bone wherever the bone goes. The thenar is
+        // anchored on the carpus and tethered across the first web, so an
+        // abducting thumb draws it out only so far before the web - not the
+        // palm - takes up the rest, and however the thumb is held the border
+        // must still come back to the rim past the metacarpal head, or the
+        // sheet keeps its full width out through the knuckles and reads as a
+        // flat wedge. So the tracked bone enters as a saturating excursion
+        // beyond the resting lobe, through a lobe of its own centred on the
+        // head, and never as a position. Opposition, which swings the bone
+        // back across the palm, leaves the resting thenar standing rather
+        // than flattening it: the muscle bunches, it does not vanish.
+        const want = Math.min(0, thumbVAt(uu) - ref);
+        const extra = -EMAX * (1 - Math.exp(want / EMAX));
+        const raw = Math.min(-0.20, ref + extra * lobe(uu, head.u, 0.46, 0.24));
         return VMID - (VMID - raw) * wristNarrow(uu);
       },
       /** where the radial border sits for a hand with the thumb at rest */
       vLoRef: (u) => {
         const uu = clamp(u, -0.6, 1.3);
-        const raw = -0.20 - 0.52 * Math.exp(-Math.pow((uu - 0.46) / 0.54, 2));
+        const raw = -0.20 - REF_A * lobe(uu, REF_C, REF_W, REF_WD);
         return VMID - (VMID - raw) * wristNarrow(uu);
       },
       /**
@@ -474,12 +520,22 @@
     const sg = rig.digits[d].segs[seg];
     const pr = AN.segmentProfile(A, d, seg, s);
     const ca = Math.cos(alpha), sa = Math.sin(alpha);
+    // pr[2]/pr[3], when present, displace the section's centre off the bone
+    // axis (see segmentProfile) - zero for every digit but the thumb's thenar
+    const offU = pr[2] || 0, offD = pr[3] || 0;
     const P = [
-      sg.A[0] + sg.t[0] * sg.len * s + sg.ul[0] * pr[0] * ca + sg.dor[0] * pr[1] * sa,
-      sg.A[1] + sg.t[1] * sg.len * s + sg.ul[1] * pr[0] * ca + sg.dor[1] * pr[1] * sa,
-      sg.A[2] + sg.t[2] * sg.len * s + sg.ul[2] * pr[0] * ca + sg.dor[2] * pr[1] * sa
+      sg.A[0] + sg.t[0] * sg.len * s + sg.ul[0] * (pr[0] * ca + offU) + sg.dor[0] * (pr[1] * sa + offD),
+      sg.A[1] + sg.t[1] * sg.len * s + sg.ul[1] * (pr[0] * ca + offU) + sg.dor[1] * (pr[1] * sa + offD),
+      sg.A[2] + sg.t[2] * sg.len * s + sg.ul[2] * (pr[0] * ca + offU) + sg.dor[2] * (pr[1] * sa + offD)
     ];
     return { P, a: pr[0], b: pr[1], seg: sg };
+  }
+
+  /** section centre of a digit segment, including any offset from segmentProfile */
+  function sectionCenter(rig, d, seg, s) {
+    const sg = rig.digits[d].segs[seg];
+    const pr = AN.segmentProfile(rig.anatomy, d, seg, s);
+    return vmad(vmad(vmad(sg.A, sg.t, sg.len * s), sg.ul, pr[2] || 0), sg.dor, pr[3] || 0);
   }
 
   /** outward surface normal on a digit segment */
@@ -490,6 +546,8 @@
     const p0 = AN.segmentProfile(A, d, seg, s);
     const p1 = AN.segmentProfile(A, d, seg, s + h);
     const da = (p1[0] - p0[0]) / h, db = (p1[1] - p0[1]) / h;
+    // the section-centre offset (see segmentProfile) can also move with s
+    const dOffU = ((p1[2] || 0) - (p0[2] || 0)) / h, dOffD = ((p1[3] || 0) - (p0[3] || 0)) / h;
     const ca = Math.cos(alpha), sa = Math.sin(alpha);
     // dP/dalpha
     const Pa = [
@@ -499,9 +557,9 @@
     ];
     // dP/ds
     const Ps = [
-      sg.t[0] * sg.len + sg.ul[0] * da * ca + sg.dor[0] * db * sa,
-      sg.t[1] * sg.len + sg.ul[1] * da * ca + sg.dor[1] * db * sa,
-      sg.t[2] * sg.len + sg.ul[2] * da * ca + sg.dor[2] * db * sa
+      sg.t[0] * sg.len + sg.ul[0] * (da * ca + dOffU) + sg.dor[0] * (db * sa + dOffD),
+      sg.t[1] * sg.len + sg.ul[1] * (da * ca + dOffU) + sg.dor[1] * (db * sa + dOffD),
+      sg.t[2] * sg.len + sg.ul[2] * (da * ca + dOffU) + sg.dor[2] * (db * sa + dOffD)
     ];
     let N = vnorm(vcross(Pa, Ps));
     // guarantee outward orientation against the radial direction of the section
@@ -531,7 +589,9 @@
     const ts = view.dir(sg.t);
     const nx = -ts[1], ny = ts[0];
     const q1 = digitSurface(rig, d, seg, s, a1).P;
-    const c = vmad(sg.A, sg.t, sg.len * s);
+    // the offset centre, not the bare bone axis: for the thumb's thenar the
+    // two are mm apart, enough to flip which side reads as left and right
+    const c = sectionCenter(rig, d, seg, s);
     const p1 = view.px(q1), pc = view.px(c);
     const side = (p1[0] - pc[0]) * nx + (p1[1] - pc[1]) * ny;
     return side >= 0 ? [a2, a1] : [a1, a2];
@@ -586,8 +646,16 @@
         // suppress whatever is buried in the interdigital web
         const okA = sg.seg !== 1 || s >= AN.webStart(A, d, aA);
         const okB = sg.seg !== 1 || s >= AN.webStart(A, d, aB);
-        if (okA) { left.push([pA[0], pA[1], nA, sg.pid, 1]); prevL = pA; }
-        if (okB) { right.push([pB[0], pB[1], nB, sg.pid, 1]); prevR = pB; }
+        // The thumb's metacarpal is thenar, not a tube: it belongs to the
+        // palm's mass over its proximal two-thirds, and stepBehind already
+        // fades its line where the palm sits close behind it, but a hand
+        // reads by contour count before it reads by contour weight, so the
+        // rail itself is faded out there too rather than left for the depth
+        // test alone - a real thumb never shows this as a third segment.
+        const railGain = (d === AN.THUMB && sg.seg === 0)
+          ? smoothstep(clamp01((s - 0.42) / 0.26)) : 1;
+        if (okA && railGain > 0.01) { left.push([pA[0], pA[1], nA, sg.pid, railGain]); prevL = pA; }
+        if (okB && railGain > 0.01) { right.push([pB[0], pB[1], nB, sg.pid, railGain]); prevR = pB; }
       }
     }
 
@@ -812,7 +880,7 @@
     for (const sg of segs) {
       for (let i = 0; i <= 4; i++) {
         const sv = sg.sMin + (sg.sMax - sg.sMin) * (i / 4);
-        const p = view.px(vmad(sg.A, sg.t, sg.len * sv));
+        const p = view.px(sectionCenter(rig, d, sg.seg, sv));
         if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0];
         if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
         wSum += AN.segmentProfile(A, d, sg.seg, Math.min(sv, 1))[0] * view.scale * 2;
@@ -911,17 +979,36 @@
     };
     const aTh = facingAlpha(0, 1, 0.30, ixMCP);
     const aIx = facingAlpha(1, 1, 0.30, thMCP);
+    const aThM = facingAlpha(0, 0, 0.75, ixMCP);
 
-    // The sheet runs from deep in the palm out to a free margin between the
-    // two digits. Sample it as a ladder: thumb side, index side, one rung per
-    // step, with the margin the last rung.
-    const NR = 9;
+    // The sheet runs from deep in the commissure out to a free margin between
+    // the two digits. Deep matters: the thumb metacarpal stands some 30mm off
+    // the palm's sheet, so no radial border drawn on that sheet can ever meet
+    // it, and a web strung only between the two proximal phalanges leaves the
+    // whole space between the rays open - which is what makes a thumb read as
+    // a finger stuck on the side of the hand. So each side is a chain. The
+    // thumb's climbs its metacarpal, crosses the MCP and runs onto the
+    // phalanx; the index's starts on the palm's own radial border, so the two
+    // solids meet with no seam, and sweeps onto the phalanx the same way.
+    // Sample the pair as a ladder, one rung per step, the margin last.
+    const HALF = 0.42;
+    const sIxEnd = AN.webStart(A, 1, aIx) * 0.95;
+    const atBorder = palmSurface(rig, 1.0, 0).P;
+    const thRail = (t) => t < HALF
+      ? digitSurface(rig, 0, 0, lerp(0.44, 1.0, t / HALF), aThM).P
+      : digitSurface(rig, 0, 1, lerp(0, 0.38, (t - HALF) / (1 - HALF)), aTh).P;
+    const ixRail = (t) => {
+      if (t < HALF) return palmSurface(rig, lerp(0.42, 1.0, t / HALF), 0).P;
+      const k = (t - HALF) / (1 - HALF);
+      const onDigit = digitSurface(rig, 1, 1, lerp(0, sIxEnd, k), aIx).P;
+      return M.vlerp(atBorder, onDigit, M.smoothstep(k));
+    };
+    const NR = 16;
     const thSide = [], ixSide = [];
     for (let i = 0; i <= NR; i++) {
       const t = i / NR;
-      thSide.push(digitSurface(rig, 0, 1, lerp(-0.25, 0.38, t), aTh).P);
-      const sIx = lerp(-0.24, AN.webStart(A, 1, aIx) * 0.95, t);
-      ixSide.push(digitSurface(rig, 1, 1, sIx, aIx).P);
+      thSide.push(thRail(t));
+      ixSide.push(ixRail(t));
     }
     // free margin: the distal rung, sagging back toward the palm
     const PT = thSide[NR], PI = ixSide[NR];
@@ -942,7 +1029,7 @@
   GK.rig = {
     FLEX, ABD, TWIST, IDENT, View, solve, abdGate,
     palmSpine, palmSurface, palmNormal, palmThickPalmar, palmThickDorsal, palmWrap,
-    digitSurface, digitNormal, silhouetteAlphas, digitContour, digitUnion, palmContour, palmSilhouette, webContours, firstWeb,
+    digitSurface, digitNormal, sectionCenter, silhouetteAlphas, digitContour, digitUnion, palmContour, palmSilhouette, webContours, firstWeb,
     PALM_NU, V_KNOTS
   };
 })(window.GK = window.GK || {});

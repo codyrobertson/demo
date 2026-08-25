@@ -42,8 +42,11 @@
   //   tilt : how far palmar the metacarpal head sits (rotY), builds the arch
   //   roll : axial set of the metacarpal (rotX)
   const CMC_BASE = [
-    // thumb — sits far radial and palmar, and is rolled ~80 deg out of the palm plane
-    { pos: [10.0, -20.0, 10.0], fan: -42 * DEG, tilt: 20 * DEG, roll: -86 * DEG },
+    // thumb — the trapezium is in the DISTAL carpal row, so CMC1 sits at
+    // roughly the same proximodistal level as CMC2 (index), not behind it;
+    // it is far radial and palmar, and rolled ~63 deg out of the palm plane
+    // so the nail faces radially and a little dorsally at rest, not palmar.
+    { pos: [17.5, -20.0, 10.0], fan: -42 * DEG, tilt: 20 * DEG, roll: -63 * DEG },
     { pos: [20.0, -11.5, -2.5], fan: -9.5 * DEG, tilt: 4 * DEG, roll: -8 * DEG },
     { pos: [21.0, -1.5, -3.5], fan: -0.5 * DEG, tilt: 0 * DEG, roll: 0 * DEG },
     { pos: [18.5, 7.5, -1.5], fan: 8.0 * DEG, tilt: 5 * DEG, roll: 9 * DEG },
@@ -275,8 +278,16 @@
   // ------------------------------------------------------ cross-section shape
   /**
    * Half-breadth (a, along the mediolateral axis) and half-depth (b, along the
-   * dorsopalmar axis) at parameter s of segment `seg` of digit `d`.
-   * s runs 0..1 over the bone and beyond 1 into the fingertip dome.
+   * dorsopalmar axis) at parameter s of segment `seg` of digit `d`. s runs
+   * 0..1 over the bone and beyond 1 into the fingertip dome.
+   *
+   * A third and fourth value, when present, displace the cross-section's
+   * CENTRE off the bone axis (medio-lateral, dorso-palmar) without changing
+   * a/b. Every digit is centred (0,0) except the thumb's metacarpal, whose
+   * flesh is not a tube around the bone: the thenar muscles sit palmar and
+   * radial to it, and its dorsal aspect is subcutaneous bone you can feel
+   * through the skin. Centring that mass on the bone draws a sausage; the
+   * offset is what makes it read as a hand's thenar instead.
    */
   function segmentProfile(A, d, seg, s) {
     const bone = A.bones[d];
@@ -290,9 +301,17 @@
         // The thumb's metacarpal is not buried: it is the thenar eminence,
         // a muscular mass that swells at mid-shaft and narrows to the knuckle.
         const a = W * M.profile(
-          [[0, 1.42], [0.26, 1.66 * A.palm.thenar], [0.56, 1.58 * A.palm.thenar],
-           [0.82, 1.22], [1, bone.jw[0]]], s) * A.palm.padding;
-        return [a, a * lerp(0.70, 0.92, s)];
+          [[0, 1.95], [0.26, 2.29 * A.palm.thenar], [0.56, 2.18 * A.palm.thenar],
+           [0.82, 1.55], [1, bone.jw[0]]], s) * A.palm.padding;
+        const b = a * lerp(0.70, 0.92, s);
+        // The mass is not centred on the bone: abductor/flexor/opponens
+        // pollicis brevis pile onto its palmar-radial side, while the dorsal
+        // side is just skin over bone. Push the cross-section centre palmar
+        // (positive dor) so the palmar half-thickness grows and the dorsal
+        // half shrinks, tapering to zero by the knuckle where the thumb's
+        // own column takes over and has to sit back on the bone axis again.
+        const offD = -b * M.profile([[0, 0.32], [0.30, 0.46], [0.62, 0.40], [1, 0]], s);
+        return [a, b, 0, offD];
       }
       // finger metacarpals are buried in the palm; only the head reads as form
       const a = W * lerp(1.18, bone.jw[0], s);

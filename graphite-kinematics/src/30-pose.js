@@ -167,7 +167,7 @@
     'grip': {
       label: 'Cylinder grip',
       spec: {
-        wrist: [0.02, 0.08, 0], arch: 0.48, thumb: [0.64, 0.20, 0.46, 0.58, 0.55],
+        wrist: [0.02, 0.08, 0], arch: 0.48, thumb: [0.57, 0.00, 0.54, 0.61, 0.76],
         f: [[0.60, 0.66, 0.44, -0.10], [0.63, 0.70, 0.47, 0], [0.66, 0.73, 0.49, 0.05], [0.70, 0.76, 0.51, 0.12]]
       }
     },
@@ -177,14 +177,14 @@
     'pinch': {
       label: 'Pinch',
       spec: {
-        wrist: [0, 0, 0], arch: 0.36, thumb: [0.70, 0.35, 0.61, 0.22, -0.02],
+        wrist: [0, 0, 0], arch: 0.36, thumb: [0.73, 0.24, 0.74, 0.01, -0.19],
         f: [[0.49, 0.42, 0.24, -0.25], [0.62, 0.70, 0.48, 0], [0.72, 0.82, 0.56, 0.05], [0.78, 0.86, 0.58, 0.10]]
       }
     },
     'ok': {
       label: 'OK',
       spec: {
-        wrist: [-0.05, 0, 0], arch: 0.22, thumb: [0.83, 0.43, 0.78, 0.14, 0.00],
+        wrist: [-0.05, 0, 0], arch: 0.22, thumb: [0.79, 0.25, 0.95, 0.16, -0.02],
         f: [[0.70, 0.22, 0.13, -0.30], [-0.10, -0.15, -0.25, 0.30], [-0.10, -0.20, -0.30, 0.35], [-0.05, -0.20, -0.30, 0.55]]
       }
     },
@@ -219,14 +219,14 @@
     'cup': {
       label: 'Cup',
       spec: {
-        wrist: [0.10, 0, 0], arch: 0.78, thumb: [0.30, 0.66, 0.54, 0.24, 0.10],
+        wrist: [0.10, 0, 0], arch: 0.78, thumb: [0.35, 0.30, 0.50, 0.28, 0.12],
         f: [[0.30, 0.34, 0.22, -0.45], [0.32, 0.36, 0.24, -0.20], [0.34, 0.40, 0.26, -0.20], [0.38, 0.46, 0.30, -0.40]]
       }
     },
     'tripod': {
       label: 'Writing grip',
       spec: {
-        wrist: [0.06, 0.14, 0], arch: 0.46, thumb: [0.79, 0.46, 0.51, 0.30, -0.09],
+        wrist: [0.06, 0.14, 0], arch: 0.46, thumb: [0.83, 0.40, 0.69, 0.16, -0.22],
         f: [[0.44, 0.40, 0.20, -0.20], [0.58, 0.49, 0.09, 0], [0.72, 0.84, 0.56, 0.10], [0.80, 0.90, 0.60, 0.18]]
       }
     },
@@ -261,7 +261,7 @@
     'clenchMax': {
       label: 'Full flexion',
       spec: {
-        wrist: [0.55, 0.20, 0], arch: 0.85, thumb: [0.95, 0.05, 0.55, 0.95, 0.90],
+        wrist: [0.55, 0.20, 0], arch: 0.85, thumb: [0.70, 0.05, 0.62, 0.85, 0.75],
         f: [[1, 1, 1, -0.2], [1, 1, 1, -0.05], [1, 1, 1, 0.05], [1, 1, 1, 0.2]]
       }
     }
@@ -520,8 +520,14 @@
     for (let i = 0; i <= 13; i++) {
       const u = lerp(-0.02, 1.01, i / 13);
       const lo = rig.palm.vLo(u), hi = rig.palm.vHi(u);
-      for (let j = 0; j <= 9; j++) {
-        const v = lerp(lo + 0.06, hi - 0.06, j / 9);
+      // The thumb-side border now swings out to track the thumb itself (see
+      // rig.js vLo), so its span is no longer fixed - a thumb pulled well
+      // clear widens it a lot. Sample count has to keep pace or the far
+      // (ulnar) side of the same fixed budget gets too sparse to hold the
+      // little finger in contact resolution.
+      const NJ = Math.max(9, Math.round(9 * (hi - lo) / 1.5));
+      for (let j = 0; j <= NJ; j++) {
+        const v = lerp(lo + 0.06, hi - 0.06, j / NJ);
         const sp = R.palmSpine(rig, u, v);
         // the palm's pad compresses under a fingertip; it is not a wall
         out.push({ P: sp.P, n: sp.n, t: R.palmThickPalmar(A, u, v) * 0.82 });
