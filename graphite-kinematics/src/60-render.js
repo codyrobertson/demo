@@ -573,6 +573,8 @@
       const det = state.detail || {};
       const q = state.quality === undefined ? 1 : state.quality;
       const curves = [];
+      // so the same hand drawn twice is the same drawing
+      F.resetPhase();
       if (L.crease || L.fold) F.digitFolds(rig, curves);
       if (L.crease) F.webs(rig, curves);
       if (L.nail) F.nails(rig, curves);
