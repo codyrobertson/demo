@@ -3196,6 +3196,40 @@
     return cs;
   }
 
+  // The most any one contact may move any one joint in one iteration. This is
+  // a trust region, not a damping constant: the step's DIRECTION is usually
+  // right even where its length is nonsense, and twenty iterations of a
+  // bounded step get to the same place as one unbounded one without ever
+  // passing through the nonsense. Eight degrees is loose enough that a
+  // maximal clench still resolves its own pads out of its palm inside the
+  // iteration budget, and tight enough that the thirty-degree throw measured
+  // below cannot happen.
+  //
+  // A fixed damping term was tried first and is the wrong shape. The step is
+  // lambda * depth / sum(w g^2), and `w` is the joint's compliance - splay is
+  // deliberately the stiffest thing the hand has, at 0.035 against flexion's
+  // 0.55, so `sum` for a contact resolved by abduction is naturally small.
+  // Damping keyed on `sum` therefore swamps exactly the contacts that keep
+  // adjacent fingers out of each other: measured, four presets went from
+  // clean to 37% interpenetration between the middle and ring.
+  const CONTACT_STEP = 8.0 * DEG;
+
+  /**
+   * Push the hand out of its contacts, one Jacobian-transpose step.
+   *
+   * `g` is how fast the contact point moves along the contact normal per
+   * radian of each joint, so the step is lambda * depth / sum(w g^2) - and
+   * every g goes to zero together in exactly the case a hand meets most
+   * often, a fingertip arriving square on a ball. Flexing the finger there
+   * moves the tip ACROSS the contact normal rather than along it, so the hand
+   * genuinely cannot push itself off that contact by bending, and the
+   * unbounded step reads that as needing an enormous one.
+   *
+   * Measured before this: the ring finger touching a 26mm ball 0.3mm deep was
+   * thrown thirty degrees back out of its own grip in a single iteration, and
+   * because holdBall had latched it as arrived, it stayed there - the finger
+   * finished 32mm off a ball it was supposed to be holding.
+   */
   function applyContacts(A, pose, rig, cs, lambda) {
     for (const c of cs) {
       const dofs = jointDofs(rig, pose, c.d).filter(x => x.seg <= c.seg);
@@ -3209,7 +3243,13 @@
       }
       if (sum < 1e-7) continue;
       const k = lambda * c.depth / sum;
-      for (let i = 0; i < dofs.length; i++) dofs[i].add(k * dofs[i].w * g[i]);
+      let biggest = 0;
+      for (let i = 0; i < dofs.length; i++) {
+        const step = Math.abs(k * dofs[i].w * g[i]);
+        if (step > biggest) biggest = step;
+      }
+      const scale = biggest > CONTACT_STEP ? CONTACT_STEP / biggest : 1;
+      for (let i = 0; i < dofs.length; i++) dofs[i].add(k * dofs[i].w * g[i] * scale);
     }
   }
 
@@ -3228,31 +3268,86 @@
     const R = GK.rig;
     const sp = R.palmSurface(rig, 0.52, 0.22);
     const n = R.palmNormal(rig, 0.52, 0.22);
-    return { C: M.vmad(sp.P, n, radius * 0.92), r: radius };
+    // Not a fraction of the radius. Sinking the centre to 92% of the radius
+    // buries a big ball proportionally deeper than a small one - at 38mm that
+    // is three millimetres of palm, which puts the metacarpal heads inside the
+    // sphere, and a proximal phalanx whose base rim is inside a ball cannot be
+    // pushed out of it by bending: the rim sweeps about the joint, so rotating
+    // only moves the penetration round. It has to be got right here.
+    //
+    // So the ball is lowered onto the hand instead: start clear, and settle it
+    // until the deepest thing it touches is one soft-tissue allowance in. The
+    // palm is what it lands on - the fingers are still open at this point,
+    // which is the whole reason this runs before the hand closes.
+    const ALLOW = 1.6;
+    const deepest = (C) => {
+      let pen = -1e9;
+      for (let i = 0; i <= 16; i++) {
+        const u = lerp(-0.05, 1.02, i / 16);
+        for (let k = 0; k <= 12; k++) {
+          const P = R.palmSurface(rig, u, (k / 12) * 0.5).P;
+          const v = radius - M.vdist(P, C);
+          if (v > pen) pen = v;
+        }
+      }
+      return pen;
+    };
+    let t = radius + 8;
+    for (let it = 0; it < 18; it++) {
+      const step = deepest(M.vmad(sp.P, n, t)) - ALLOW;
+      if (Math.abs(step) < 0.05) break;
+      t += step * 0.75;
+    }
+    return { C: M.vmad(sp.P, n, t), r: radius };
   }
 
   /**
-   * Contacts against something the hand is holding, in the same record its own
-   * contacts use, so the settle loop needs to know nothing about it: a digit
-   * inside the sphere is pushed out along the radius, which is the sphere's
-   * outward normal there.
+   * Where the hand meets a ball, measured on the surface rather than the axis.
+   *
+   * Taking the bone's axis and calling the segment a cylinder of one radius is
+   * a fair test for a fingertip, whose section is nearly round, and a poor one
+   * everywhere else: a proximal phalanx is a flattened ellipse, so the axis
+   * test clears it while its palmar face is already several millimetres
+   * inside the ball. Measured on a 38mm ball: the ring and little proximal
+   * phalanges sat 3.7 and 5.5mm through a sphere the axis test called
+   * untouched, which is a solid passing through a solid.
+   *
+   * So sample the surface, and keep the deepest point per segment - one
+   * contact per segment, because a segment resting flat on a ball touches it
+   * along a whole line and feeding twenty near-identical records to the
+   * solver just multiplies the same correction by twenty.
    */
   function ballContacts(A, rig, ball, tol) {
     const AN2 = GK.anatomy;
     const cs = [];
     for (let d = 0; d < 5; d++) {
       for (const sg of rig.digits[d].segs) {
-        if (!sg.rendered || sg.seg < 1) continue;
-        for (const sv of [0.3, 0.7, 1.0]) {
-          const C = M.vmad(sg.A, sg.t, sg.len * sv);
-          const r = AN2.segmentProfile(A, d, sg.seg, Math.min(sv, 1))[1];
-          const away = M.vsub(C, ball.C);
-          const dist = M.vlen(away);
-          if (dist < 1e-6) continue;
-          const pen = (ball.r + r) - dist;
-          if (pen <= tol) continue;
-          cs.push({ d, seg: sg.seg, P: C, n: M.vmul(away, 1 / dist), depth: pen });
+        if (!sg.rendered) continue;
+        // A finger's metacarpal lives inside the palm and the palm's own
+        // contacts answer for it. The thumb's is thenar mass out on its own,
+        // and a ball pressed into the first web meets it directly - untested,
+        // it took 8.4mm of a 38mm ball straight through the ball of the thumb.
+        if (sg.seg < 1 && d !== 0) continue;
+        // cheap reject: could this segment reach the ball at all?
+        const mid = GK.rig.sectionCenter(rig, d, sg.seg, (sg.sMin + sg.sMax) * 0.5);
+        const pr = AN2.segmentProfile(A, d, sg.seg, 0.5);
+        const reach = sg.len * 0.5 + Math.max(pr[0], pr[1]) + ball.r;
+        if (M.vdist(mid, ball.C) > reach) continue;
+        let best = null;
+        for (let i = 0; i <= 6; i++) {
+          const sv = lerp(sg.sMin, sg.sMax, i / 6);
+          for (let k = 0; k < 10; k++) {
+            const P = GK.rig.digitSurface(rig, d, sg.seg, sv, (k / 10) * Math.PI * 2).P;
+            const away = M.vsub(P, ball.C);
+            const dist = M.vlen(away);
+            if (dist < 1e-6) continue;
+            const pen = ball.r - dist;
+            if (!best || pen > best.depth) {
+              best = { d, seg: sg.seg, P, n: M.vmul(away, 1 / dist), depth: pen };
+            }
+          }
         }
+        if (best && best.depth > tol) cs.push(best);
       }
     }
     return cs;
@@ -3279,6 +3374,10 @@
     const ball = opts.ball || ballOnPalm(A, R.solve(A, p), radius);
     const scene = { ball };
     const rested = [false, false, false, false, false];
+    const bestGap = [1e9, 1e9, 1e9, 1e9, 1e9];
+    const bestAt = [null, null, null, null, null];
+    const past = [0, 0, 0, 0, 0];
+    let settled = 0;
     const STEPS = opts.steps === undefined ? 26 : opts.steps;
     const rate = opts.rate === undefined ? 0.13 : opts.rate;
     const shut = clampPose(A, mk(A, PRESETS[opts.toward || 'fist'].spec));
@@ -3293,13 +3392,41 @@
       const onBall = {};
       for (const c of ballContacts(A, rig, ball, -0.4))
         if (c.seg >= rig.digits[c.d].segs.length - 1) onBall[c.d] = 1;
+      // Arriving is not a one-way door. The contact solver runs between
+      // closing steps and can push a digit that has just touched back off the
+      // ball again; latched on first contact, that digit then stands there
+      // for the remaining twenty iterations with its pad in mid-air, which is
+      // what left the ring finger 32mm off a ball it was holding. So the test
+      // is re-read every step, with enough hysteresis that a digit resting on
+      // the surface does not chatter in and out of the closing schedule.
+      //
+      // And a digit stops at its closest approach whether it arrived or not.
+      // On a small ball a long finger curls straight past it, and from there
+      // every further degree of flexion takes the pad further away - so a
+      // rule that only watches for contact never fires and the finger closes
+      // into a fist beside a marble it was supposed to be holding. Measured:
+      // the middle finger finished 13.6mm past a 16mm ball.
       for (let d = 0; d < 5; d++) {
-        if (rested[d]) continue;
         const dg = rig.digits[d];
         const pad = GK.anatomy.segmentProfile(A, d, dg.segs.length - 1, 0.9)[1];
-        if (onBall[d] || M.vdist(dg.tip, ball.C) <= ball.r + pad) rested[d] = true;
+        const gap = M.vdist(dg.tip, ball.C) - ball.r - pad;
+        if (gap < bestGap[d] - 0.05) {
+          bestGap[d] = gap;
+          bestAt[d] = JSON.parse(JSON.stringify(p.digits[d]));
+          past[d] = 0;
+        } else if (gap > bestGap[d] + 0.4 && ++past[d] >= 2 && !rested[d]) {
+          // it has turned away from the ball twice running: put it back where
+          // it was nearest and leave it there
+          if (bestAt[d]) p.digits[d] = JSON.parse(JSON.stringify(bestAt[d]));
+          rested[d] = true;
+          continue;
+        }
+        if (onBall[d] || gap <= 0.4) rested[d] = true;
+        else if (gap > 2.5) rested[d] = false;
       }
-      if (rested.every(Boolean)) break;
+      // and since a digit can un-rest, only stop once the whole hand has
+      // been resting for two steps together
+      if (rested.every(Boolean)) { if (settled++) break; } else settled = 0;
       // Close along an authored trajectory rather than an invented one. Which
       // joints move, and in what proportion, is exactly what the grip preset
       // already encodes - it was fitted and then hand-corrected - and a
@@ -3320,7 +3447,22 @@
     // object. So finish the thumb by aiming it: the reach solver respects the
     // joint stops, so if the thumb genuinely cannot get there it stays where
     // it is rather than being forced.
-    for (const d of (opts.aim || [0])) {
+    // ...and so does any digit the closing schedule left short. Flexing a
+    // long finger onto a small ball sweeps its pad along an arc that can miss
+    // the thing entirely - a hand closing on a marble flexes at the two
+    // interphalangeal joints and hardly at the knuckle, which is not a
+    // proportional close and is not what any single authored grip encodes.
+    // The reach solver already knows how to put a pad somewhere; ask it.
+    const short = [];
+    {
+      const rig = R.solve(A, p);
+      for (let d = 0; d < 5; d++) {
+        const dg = rig.digits[d];
+        const pad = GK.anatomy.segmentProfile(A, d, dg.segs.length - 1, 0.9)[1];
+        if (M.vdist(dg.tip, ball.C) - ball.r - pad > 1.2) short.push(d);
+      }
+    }
+    for (const d of (opts.aim || short)) {
       const rig = R.solve(A, p);
       const dg = rig.digits[d];
       const away = M.vsub(dg.tip, ball.C);
@@ -3330,7 +3472,12 @@
       const target = M.vmad(ball.C, M.vmul(away, 1 / len), ball.r + pad * 0.6);
       p = reach(A, p, d, target, { iters: 20, kappa: 0.006 });
     }
-    const out = resolveContacts(A, p, { iters: 20, scene });
+    // Settle with the spring almost off. The default pull toward the authored
+    // pose is what stops a contact turning a fist into a splayed claw, but the
+    // authored pose here is a fist and the ball is the whole point - at full
+    // strength it holds the proximal phalanges several millimetres inside a
+    // large ball rather than letting them ride up onto it.
+    const out = resolveContacts(A, p, { iters: 40, scene, kappa: 0.012 });
     out.ball = ball;
     out.held = rested;
     return out;
