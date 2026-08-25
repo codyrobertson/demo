@@ -126,4 +126,40 @@ console.log('\n— the first web —');
   }
 }
 
+console.log('\n— the thenar, as the radial border of the palm —');
+{
+  // The border is what the eye reads as the outline of the palm on the thumb
+  // side. It has to swell over the thenar, open a bounded amount when the
+  // thumb abducts, survive opposition, and be off the sheet by the metacarpal
+  // heads - past them the space between the rays is web, not palm.
+  for (const k of ['rest', 'flat', 'spread', 'ok', 'fist']) {
+    const rig = rigFor(k);
+    let peak = 0, peakU = 0;
+    for (let i = 0; i <= 40; i++) {
+      const u = i / 40, r = -rig.palm.vLo(u);
+      if (r > peak) { peak = r; peakU = u; }
+    }
+    check('thenar width at its widest (' + k + ')', peak, 0.60, 1.10, 'v');
+    check('...and that widest point sits over the thenar (' + k + ')', peakU, 0.20, 0.70, 'u');
+    check('border back to the rim by the heads (' + k + ')', -rig.palm.vLo(1.0), 0.15, 0.40, 'v');
+  }
+}
+
+console.log('\n— the commissure runs deep —');
+{
+  // A web strung only between the two proximal phalanges leaves the space
+  // between the metacarpals open, and a thumb with open space beside it reads
+  // as a finger stuck on the side of the hand.
+  for (const k of ['flat', 'spread', 'ok']) {
+    const rig = rigFor(k);
+    const view = new RG.View(0, 0, 0, 1, [0, 0, 0], 0, 0);
+    const w = RG.firstWeb(rig, view);
+    const thMCP = rig.digits[0].segs[1].A;
+    check('web starts down the metacarpal, not at the MCP (' + k + ')',
+      M.vdist(w.thSide[0], thMCP), 18, 45, 'mm');
+    check('commissure apex spans thumb ray to palm border (' + k + ')',
+      M.vdist(w.thSide[0], w.ixSide[0]), 10, 40, 'mm');
+  }
+}
+
 console.log('\n' + pass + ' pass, ' + fail + ' fail\n');
