@@ -8527,6 +8527,10 @@
     markDirty();
   };
 
+  /* local-only:start — cut from dist/artifact.html by build.mjs. The host
+     sandbox grants no page the right to hand the viewer a file, so this
+     whole path is dead there; left in, its object-URL fallback is still
+     an offer of a download the page cannot keep. */
   /**
    * Hand the plate to the viewer. Inside the Artifact viewer a page cannot
    * download anything itself — the host mediates it and the viewer confirms —
@@ -8589,6 +8593,7 @@
       if (btn) btn.disabled = false;
     }
   };
+  /* local-only:end */
 
   // A small seam for the headless driver: where the handles actually are on
   // the plate. Guessing at them from outside made a drag test that passed by

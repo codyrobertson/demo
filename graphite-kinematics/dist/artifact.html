@@ -8519,68 +8519,6 @@
     markDirty();
   };
 
-  /**
-   * Hand the plate to the viewer. Inside the Artifact viewer a page cannot
-   * download anything itself — the host mediates it and the viewer confirms —
-   * so ask for the capability first and fall back to an object URL only when
-   * we are running as an ordinary page.
-   */
-  async function savePlate(blob, filename) {
-    let dl = null;
-    try {
-      if (window.claude && typeof window.claude.use === 'function') {
-        dl = await window.claude.use('downloads');
-      }
-    } catch (e) { dl = null; }
-    if (dl) {
-      try { await dl.save({ filename, data: blob }); return 'Saved'; }
-      catch (err) {
-        const code = err && err.code;
-        if (code === 'declined') return 'Cancelled';
-        if (code === 'too_large') return 'Too large';
-        if (code === 'rate_limited') return 'Try again';
-        return 'Unavailable';
-      }
-    }
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.download = filename;
-    a.href = url;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
-    return 'Saved';
-  }
-
-  window.downloadPNG = async function (ev) {
-    const btn = ev && ev.currentTarget ? ev.currentTarget : null;
-    const label = btn ? btn.textContent : null;
-    if (btn) { btn.textContent = 'Drawing the plate…'; btn.disabled = true; }
-    // let the button repaint before the renderer takes the thread
-    await new Promise(r => setTimeout(r, 30));
-    try {
-      // a proper plate: higher resolution, supersampled, full detail
-      const N = 1400;
-      const big = new RE.Renderer(N, N);
-      const A = big.anatomyFor(params.seed);
-      big.draw({
-        seed: params.seed, pose: posedFor(A), view: params.view,
-        style: params.style, detail: params.detail, layers: params.layers, quality: 2
-      });
-      const px = big.resolve({ style: params.style });
-      const cv = document.createElement('canvas');
-      cv.width = cv.height = N;
-      cv.getContext('2d').putImageData(new ImageData(px, N, N), 0, 0);
-      const blob = await new Promise(res => cv.toBlob(res, 'image/png'));
-      const name = 'graphite-kinematics-' + params.seed + '-' + params.presetKey + '.png';
-      const status = await savePlate(blob, name);
-      if (btn) { btn.textContent = status; setTimeout(() => { btn.textContent = label; }, 1800); }
-    } catch (e) {
-      if (btn) { btn.textContent = 'Failed'; setTimeout(() => { btn.textContent = label; }, 1800); }
-      throw e;
-    } finally {
-      if (btn) btn.disabled = false;
-    }
-  };
 
   // A small seam for the headless driver: where the handles actually are on
   // the plate. Guessing at them from outside made a drag test that passed by

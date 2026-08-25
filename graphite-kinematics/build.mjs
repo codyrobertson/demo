@@ -27,9 +27,16 @@ const bodyParts = dropScripts(bodyInner).trim();
 // Replace via a function, never a string: a plain string replacement expands
 // $&, $' and $`, and minified sources are full of them.
 const esc = (js) => js.replace(/<\/script>/gi, '<\\/script>');
-const bundle = ['vendor/p5.min.js', ...SRC.map(n => 'src/' + n + '.js')]
-  .map(p => '<script>\n' + esc(read(p)) + '\n</script>')
-  .join('\n');
+// The same rule as data-local-only, applied to source rather than markup.
+// Stripping only the button would leave the save path in the artifact as
+// unreachable text - and unreachable or not, an <a download> with a blob:
+// href in a published page is still an offer the host will never honour.
+const dropLocalOnlyJS = (js) =>
+  js.replace(/^[ \t]*\/\* local-only:start[\s\S]*?local-only:end \*\/[ \t]*\n?/gm, '');
+const sources = ['vendor/p5.min.js', ...SRC.map(n => 'src/' + n + '.js')];
+const wrap = (js) => '<script>\n' + esc(js) + '\n</script>';
+const bundle = sources.map(p => wrap(read(p))).join('\n');
+const bundleShared = sources.map(p => wrap(dropLocalOnlyJS(read(p)))).join('\n');
 
 fs.mkdirSync(path.join(root, 'dist'), { recursive: true });
 
@@ -51,7 +58,7 @@ const dropLocalOnly = (s) => s.replace(/^[ \t]*<[^>]*\sdata-local-only[\s\S]*?<\
 const artifact = headParts
   .split('\n').filter(l => !/<meta\s/i.test(l)).join('\n').trim();
 fs.writeFileSync(path.join(root, 'dist/artifact.html'),
-  artifact + '\n' + dropLocalOnly(bodyParts) + '\n' + bundle + '\n');
+  artifact + '\n' + dropLocalOnly(bodyParts) + '\n' + bundleShared + '\n');
 
 const kb = (p) => (fs.statSync(path.join(root, p)).size / 1024).toFixed(0) + ' kB';
 console.log('dist/graphite-kinematics.html  ' + kb('dist/graphite-kinematics.html'));
