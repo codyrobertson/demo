@@ -514,15 +514,35 @@
   //  DIGIT SURFACE
   // =========================================================================
 
+  /**
+   * Where a section's centre sits off its bone axis, in the bone's own frame.
+   *
+   * Only the thumb's metacarpal uses this: the thenar is muscle piled on the
+   * palmar-radial side of the HAND, not a sleeve centred on the bone. Which
+   * frame that displacement belongs to matters as soon as the metacarpal's
+   * axial set changes - tie it to the bone's own dorsal axis and the muscle
+   * rotates with the roll and slides off the bone it is there to cover. So
+   * segmentProfile gives the magnitude and this resolves the direction, out
+   * of the hand's palmar axis and into the section's plane.
+   */
+  function sectionOffset(rig, d, seg, pr) {
+    const m = -(pr[3] || 0), u = pr[2] || 0;
+    if (!m) return [u, 0];
+    const sg = rig.digits[d].segs[seg];
+    const cu = vdot(rig.root[2], sg.ul), cd = vdot(rig.root[2], sg.dor);
+    const n = Math.hypot(cu, cd);
+    if (n < 1e-6) return [u, -m];
+    return [u + m * (cu / n), m * (cd / n)];
+  }
+
   /** surface point on a digit segment; alpha 0 = ulnar, +pi/2 = dorsal */
   function digitSurface(rig, d, seg, s, alpha) {
     const A = rig.anatomy;
     const sg = rig.digits[d].segs[seg];
     const pr = AN.segmentProfile(A, d, seg, s);
     const ca = Math.cos(alpha), sa = Math.sin(alpha);
-    // pr[2]/pr[3], when present, displace the section's centre off the bone
-    // axis (see segmentProfile) - zero for every digit but the thumb's thenar
-    const offU = pr[2] || 0, offD = pr[3] || 0;
+    const off = sectionOffset(rig, d, seg, pr);
+    const offU = off[0], offD = off[1];
     const P = [
       sg.A[0] + sg.t[0] * sg.len * s + sg.ul[0] * (pr[0] * ca + offU) + sg.dor[0] * (pr[1] * sa + offD),
       sg.A[1] + sg.t[1] * sg.len * s + sg.ul[1] * (pr[0] * ca + offU) + sg.dor[1] * (pr[1] * sa + offD),
@@ -535,7 +555,8 @@
   function sectionCenter(rig, d, seg, s) {
     const sg = rig.digits[d].segs[seg];
     const pr = AN.segmentProfile(rig.anatomy, d, seg, s);
-    return vmad(vmad(vmad(sg.A, sg.t, sg.len * s), sg.ul, pr[2] || 0), sg.dor, pr[3] || 0);
+    const off = sectionOffset(rig, d, seg, pr);
+    return vmad(vmad(vmad(sg.A, sg.t, sg.len * s), sg.ul, off[0]), sg.dor, off[1]);
   }
 
   /** outward surface normal on a digit segment */
@@ -546,8 +567,9 @@
     const p0 = AN.segmentProfile(A, d, seg, s);
     const p1 = AN.segmentProfile(A, d, seg, s + h);
     const da = (p1[0] - p0[0]) / h, db = (p1[1] - p0[1]) / h;
-    // the section-centre offset (see segmentProfile) can also move with s
-    const dOffU = ((p1[2] || 0) - (p0[2] || 0)) / h, dOffD = ((p1[3] || 0) - (p0[3] || 0)) / h;
+    // the section-centre offset (see sectionOffset) can also move with s
+    const o0 = sectionOffset(rig, d, seg, p0), o1 = sectionOffset(rig, d, seg, p1);
+    const dOffU = (o1[0] - o0[0]) / h, dOffD = (o1[1] - o0[1]) / h;
     const ca = Math.cos(alpha), sa = Math.sin(alpha);
     // dP/dalpha
     const Pa = [

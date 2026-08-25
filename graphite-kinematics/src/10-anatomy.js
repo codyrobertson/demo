@@ -48,12 +48,16 @@
     // so the nail faces radially and a little dorsally at rest, not palmar.
     // Measured, the nail comes out radial and a little PALMAR, and the pad
     // ends up near enough edge-on that a palmar view of the hand shows the
-    // thumb's flank instead of its print and creases. Rolling to about -50
-    // fixes both, but the thenar's cross-section offset is expressed along
-    // the bone's own dorsal axis, so it rotates with the roll and stops
-    // covering the metacarpal in opposition. Reference that offset to the
-    // hand's palmar direction first, then roll, then refit the opposition
-    // chains - in that order, or the fist starts interpenetrating.
+    // thumb's flank instead of its print and creases. Rolling to about -48
+    // fixes both, and the thenar now follows: its offset is resolved out of
+    // the hand's frame, so it no longer slides off the metacarpal when this
+    // angle moves. What still stops it is the four opposition presets, whose
+    // chains were authored against this set. Refitting them by inverse
+    // kinematics does hit its targets - pads in contact, each facing the
+    // other, every measurement in range - and still draws worse: pinch, ok,
+    // tripod and grip all come out cramped and lumpy where the authored
+    // poses read cleanly. That trade is a loss, so the pad stays edge-on.
+    // Whoever takes this on should plan to author the four by hand.
     { pos: [17.5, -20.0, 10.0], fan: -42 * DEG, tilt: 20 * DEG, roll: -63 * DEG },
     { pos: [20.0, -11.5, -2.5], fan: -9.5 * DEG, tilt: 4 * DEG, roll: -8 * DEG },
     { pos: [21.0, -1.5, -3.5], fan: -0.5 * DEG, tilt: 0 * DEG, roll: 0 * DEG },

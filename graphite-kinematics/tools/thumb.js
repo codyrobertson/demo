@@ -60,8 +60,19 @@ console.log('\n— the thenar is palmar-radial, not a sleeve —');
   const mid = M.vmad(mc.A, mc.t, mc.len * 0.5);
   const palmarPt = RG.digitSurface(rig, 0, 0, 0.5, -Math.PI / 2).P;
   const dorsalPt = RG.digitSurface(rig, 0, 0, 0.5, Math.PI / 2).P;
-  check('surface palmar of the MC1 axis', M.vdist(mid, palmarPt), 13, 24, 'mm');
-  check('surface dorsal of the MC1 axis', M.vdist(mid, dorsalPt), 4, 11, 'mm');
+  // Measured in the HAND's frame, which is the frame the anatomy is stated
+  // in: the bone you feel through the skin is on the back of the hand, not
+  // on some axis of the metacarpal's own that swings with its axial set.
+  // Take the furthest the flesh reaches either way, over the whole section.
+  const pal = rig.root[2], dor = M.vmul(rig.root[2], -1);
+  let reachP = -1e9, reachD = -1e9;
+  for (let i = 0; i < 64; i++) {
+    const q = M.vsub(RG.digitSurface(rig, 0, 0, 0.5, (i / 64) * M.TAU).P, mid);
+    reachP = Math.max(reachP, M.vdot(q, pal));
+    reachD = Math.max(reachD, M.vdot(q, dor));
+  }
+  check('flesh palmar of the MC1 axis', reachP, 13, 24, 'mm');
+  check('flesh dorsal of the MC1 axis', reachD, 4, 11, 'mm');
 }
 
 console.log('\n— is the ray attached to the hand? —');
