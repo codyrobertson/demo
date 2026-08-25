@@ -283,7 +283,6 @@
                     <button class="button" onclick="regenerate()">Regenerate</button>
                     <button class="button" onclick="resetParameters()">Reset</button>
                 </div>
-                <button class="button tertiary" onclick="downloadPNG(event)">Download plate (PNG)</button>
             </div>
         </div>
 
@@ -2453,6 +2452,10 @@
     // Back to pixels, then filtered: a walk over cells is a staircase, and a
     // staircase drawn with a pencil is a burr on every step.
     let pts = border.map(([bx, by]) => [(bx - PAD + 0.5) * cell + x0, (by - PAD + 0.5) * cell + y0]);
+    // A tap for tools that want to see the construction rather than its
+    // result: the coverage mask, and the staircase before it is filtered.
+    // Off the hot path entirely - nothing here runs unless one is passed.
+    if (opts.tap) opts.tap({ cell, x0, y0, pad: PAD, w: W, h: H, cov: m.cov, own: m.own, raw: pts.map(q => q.slice()) });
     const N = pts.length;
     for (let pass = 0; pass < (opts.smooth === undefined ? 4 : opts.smooth); pass++) {
       const src = pts;
@@ -2522,6 +2525,7 @@
       const sg = segs.find(z => z.seg === own) || segs[0];
       out.push([px, py, dz, sg.pid, gn]);
     }
+    if (opts.tap) opts.tap({ final: out });
     return { use: true, outline: out, area: total };
   }
 

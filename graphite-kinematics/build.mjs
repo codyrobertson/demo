@@ -37,13 +37,21 @@ fs.writeFileSync(path.join(root, 'dist/graphite-kinematics.html'),
   '<!DOCTYPE html>\n<html lang="en">\n<head>\n' + headParts + '\n</head>\n<body>\n' +
   bodyParts + '\n' + bundle + '\n</body>\n</html>\n');
 
+// Anything marked data-local-only is dropped from the artifact build. The
+// artifact host runs the page in a sandbox that blocks any download the page
+// starts itself - both an <a download> and a script-driven save - so a save
+// button there is not a feature that is switched off, it is a control that
+// reports success and does nothing. It stays in the standalone build, where
+// the file is opened directly and it works.
+const dropLocalOnly = (s) => s.replace(/^[ \t]*<[^>]*\sdata-local-only[\s\S]*?<\/[a-zA-Z]+>[ \t]*\n?/gm, '');
+
 // The artifact host supplies doctype, html, head and body. Hand it the title
 // first so it is found inside the scanned prefix, then styles, then markup,
 // then the scripts.
 const artifact = headParts
   .split('\n').filter(l => !/<meta\s/i.test(l)).join('\n').trim();
 fs.writeFileSync(path.join(root, 'dist/artifact.html'),
-  artifact + '\n' + bodyParts + '\n' + bundle + '\n');
+  artifact + '\n' + dropLocalOnly(bodyParts) + '\n' + bundle + '\n');
 
 const kb = (p) => (fs.statSync(path.join(root, p)).size / 1024).toFixed(0) + ' kB';
 console.log('dist/graphite-kinematics.html  ' + kb('dist/graphite-kinematics.html'));
