@@ -152,6 +152,21 @@
         }
         .loading { display: flex; align-items: center; justify-content: center; height: 400px; font-size: 16px; color: var(--anthropic-mid-gray); }
         .hint { font-size: 11.5px; color: var(--anthropic-mid-gray); line-height: 1.5; margin-top: -4px; margin-bottom: 12px; }
+        /* Keyboard focus has to stay visible: the range inputs below drop
+           their default ring to take a custom thumb. */
+        .button:focus-visible,
+        .chip:focus-visible,
+        select:focus-visible,
+        input[type="range"]:focus-visible,
+        input[type="color"]:focus-visible,
+        .check input:focus-visible,
+        details > summary:focus-visible {
+            outline: 2px solid var(--anthropic-orange);
+            outline-offset: 2px;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            * { transition: none !important; animation: none !important; }
+        }
         @media (max-width: 820px) {
             .container { flex-direction: column; }
             .sidebar { width: 100%; max-height: none; }
@@ -270,7 +285,7 @@
                     <button class="button" onclick="regenerate()">Regenerate</button>
                     <button class="button" onclick="resetParameters()">Reset</button>
                 </div>
-                <button class="button tertiary" onclick="downloadPNG()">Download plate (PNG)</button>
+                <button class="button tertiary" onclick="downloadPNG(event)">Download plate (PNG)</button>
             </div>
         </div>
 
@@ -1707,8 +1722,13 @@
     const N = 56;
     for (let i = 0; i <= N; i++) {
       const beta = wrap(from + dir * span * (i / N));
+      const palmar = beta < 0.5;
       const v = palmSurface(rig, uD, beta).v;
-      const q = palmSurface(rig, rig.palm.uDistal(v, beta < 0.5), beta).P;
+      // The solid runs a little past the metacarpal heads so a hyperextended
+      // digit still merges into it, but the drawn margin must stop at the
+      // heads: carried further it lays a chord straight across the knuckles.
+      const uEnd = Math.min(rig.palm.uDistal(v, palmar), palmar ? 1.18 : 1.012);
+      const q = palmSurface(rig, uEnd, beta).P;
       const p = view.px(q);
       cap.push([p[0], p[1], view.near(q)]);
     }
@@ -4249,8 +4269,9 @@
       const jump = Math.max(14, this.w * 0.035);
       emit(tagPalm(sil.sideA), F.st(F.S.contour, { tone: 0.90, phase: 200 }), { maxJump: jump, selfTest: true });
       emit(tagPalm(sil.sideB), F.st(F.S.contour, { tone: 0.90, phase: 201 }), { maxJump: jump, selfTest: true });
+      // the knuckle margin is a transition, not an edge
       emit(tagPalm(sil.cap, false),
-        F.st(F.S.contourSoft, { tone: 0.28, taper: 0.86, phase: 202 }), { noSearch: true, selfTest: true });
+        F.st(F.S.contourSoft, { tone: 0.16, taper: 0.90, phase: 202 }), { noSearch: true, selfTest: true });
     }
 
     resolve(state) {
@@ -4771,23 +4792,67 @@
     markDirty();
   };
 
-  window.downloadPNG = function () {
-    // a proper plate: double resolution, supersampled, full detail
-    const N = 1400;
-    const big = new RE.Renderer(N, N);
-    const A = big.anatomyFor(params.seed);
-    big.draw({
-      seed: params.seed, pose: posedFor(A), view: params.view,
-      style: params.style, detail: params.detail, layers: params.layers, quality: 2
-    });
-    const px = big.resolve({ style: params.style });
-    const cv = document.createElement('canvas');
-    cv.width = cv.height = N;
-    cv.getContext('2d').putImageData(new ImageData(px, N, N), 0, 0);
+  /**
+   * Hand the plate to the viewer. Inside the Artifact viewer a page cannot
+   * download anything itself — the host mediates it and the viewer confirms —
+   * so ask for the capability first and fall back to an object URL only when
+   * we are running as an ordinary page.
+   */
+  async function savePlate(blob, filename) {
+    let dl = null;
+    try {
+      if (window.claude && typeof window.claude.use === 'function') {
+        dl = await window.claude.use('downloads');
+      }
+    } catch (e) { dl = null; }
+    if (dl) {
+      try { await dl.save({ filename, data: blob }); return 'Saved'; }
+      catch (err) {
+        const code = err && err.code;
+        if (code === 'declined') return 'Cancelled';
+        if (code === 'too_large') return 'Too large';
+        if (code === 'rate_limited') return 'Try again';
+        return 'Unavailable';
+      }
+    }
+    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.download = 'graphite-kinematics-' + params.seed + '-' + params.presetKey + '.png';
-    a.href = cv.toDataURL('image/png');
+    a.download = filename;
+    a.href = url;
     a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    return 'Saved';
+  }
+
+  window.downloadPNG = async function (ev) {
+    const btn = ev && ev.currentTarget ? ev.currentTarget : null;
+    const label = btn ? btn.textContent : null;
+    if (btn) { btn.textContent = 'Drawing the plate…'; btn.disabled = true; }
+    // let the button repaint before the renderer takes the thread
+    await new Promise(r => setTimeout(r, 30));
+    try {
+      // a proper plate: higher resolution, supersampled, full detail
+      const N = 1400;
+      const big = new RE.Renderer(N, N);
+      const A = big.anatomyFor(params.seed);
+      big.draw({
+        seed: params.seed, pose: posedFor(A), view: params.view,
+        style: params.style, detail: params.detail, layers: params.layers, quality: 2
+      });
+      const px = big.resolve({ style: params.style });
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = N;
+      cv.getContext('2d').putImageData(new ImageData(px, N, N), 0, 0);
+      const blob = await new Promise(res => cv.toBlob(res, 'image/png'));
+      const name = 'graphite-kinematics-' + params.seed + '-' + params.presetKey + '.png';
+      const status = await savePlate(blob, name);
+      if (btn) { btn.textContent = status; setTimeout(() => { btn.textContent = label; }, 1800); }
+    } catch (e) {
+      if (btn) { btn.textContent = 'Failed'; setTimeout(() => { btn.textContent = label; }, 1800); }
+      throw e;
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   };
 
   window.addEventListener('load', () => { updateSeedDisplay(); });
