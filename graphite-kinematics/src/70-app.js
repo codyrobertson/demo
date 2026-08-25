@@ -27,7 +27,7 @@
     view: { az: -32 * DEG, el: 14 * DEG, roll: 0, zoom: 1 },
     style: {
       grade: 3, tone: 1, wobble: 1, ghost: 0.14, search: 0.35,
-      ballRough: 0.3, ballAniso: 0,
+      ballRough: 0.3, ballAniso: 0, ballGive: 1,
       paper: [244, 241, 232], ink: [26, 25, 23]
     },
     detail: { print: 1, ridge: 0.5, lattice: 0.55, hair: 1, vein: 1 },
@@ -135,6 +135,7 @@
     const built = renderer.draw({
       seed: params.seed, pose,
       ball: held ? held.ball : null,
+      soft: params.style.ballGive,
       view: params.view,
       style: params.style,
       // holdBall has already settled the hand against the ball and against
@@ -537,6 +538,10 @@
       v => { params.style.ballRough = v; ballKey = null; pickKey = null; });
     slider(art, 'ballAniso', 'Ball grain', 0, 1, 0.01, 0, f2,
       v => { params.style.ballAniso = v; ballKey = null; pickKey = null; });
+    // How much the hand gives under it, not how soft the ball is: the ball
+    // stays a sphere and the skin is what moves.
+    slider(art, 'ballGive', 'Skin gives', 0, 1.6, 0.01, 1, f2,
+      v => { params.style.ballGive = v; });
     const man = document.createElement('label');
     man.className = 'check';
     man.innerHTML = '<input type="checkbox"><span>Drag the fingertips</span>';

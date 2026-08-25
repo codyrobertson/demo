@@ -473,6 +473,12 @@
       // walks the scene - the framing, the depth field, the contours - meets
       // it the same way it meets the hand.
       rig.ball = state.ball || pose.ball || null;
+      // ...and it presses in. Set before anything reads the surface, since
+      // the surface is where the deformation lives - the framing pass walks
+      // it too, and a hand squeezing hard is a different shape to frame.
+      RG.softContact(rig, rig.ball
+        ? (state.soft === undefined ? (rig.ball.soft === undefined ? 1 : rig.ball.soft) : state.soft)
+        : 0);
       const V = state.view;
       const view = new RG.View(V.az, V.el, V.roll || 0, 1, [0, 0, 0], 0, 0);
 

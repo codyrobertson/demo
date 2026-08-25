@@ -1573,7 +1573,8 @@
     const thick = palmar ? palmThickPalmar(A, u, v) : palmThickDorsal(A, u, v);
     const off = thick * wrap * Math.abs(s);
     const P = vmad(sp.P, sp.n, palmar ? off : -off);
-    return { P, v, palmar, spine: sp.P, n: sp.n, off, thick, wrap };
+    // palmNormal is a difference of these, so the dent turns the normal too
+    return { P: rig.soft ? softPoint(rig, P) : P, v, palmar, spine: sp.P, n: sp.n, off, thick, wrap };
   }
 
   /** numeric surface normal on the palm */
@@ -1628,7 +1629,125 @@
       sg.A[1] + sg.t[1] * sg.len * s + sg.ul[1] * (pr[0] * ca + offU) + sg.dor[1] * (pr[1] * sa + offD),
       sg.A[2] + sg.t[2] * sg.len * s + sg.ul[2] * (pr[0] * ca + offU) + sg.dor[2] * (pr[1] * sa + offD)
     ];
-    return { P, a: pr[0], b: pr[1], seg: sg };
+    return { P: rig.soft ? softPoint(rig, P) : P, a: pr[0], b: pr[1], seg: sg };
+  }
+
+
+  // =========================================================================
+  //  SOFT CONTACT — WHAT THE BALL DOES TO THE HAND
+  //
+  //  A hand holding a ball is not a hand with a ball drawn next to it. Skin
+  //  gives: the pads flatten where they take the weight, and the tissue that
+  //  went out of the dent has to go somewhere, so it stands up in a low ring
+  //  around it. Without that the ball reads as pasted on however carefully
+  //  the fingers are placed around it, because every edge stays exactly as
+  //  round as it was when nothing was touching it.
+  //
+  //  Done here - in the surface itself - rather than as marks laid over the
+  //  top, so everything that reads the surface inherits it at once: the
+  //  silhouette bends round the dent because the silhouette is traced from
+  //  this surface, the modelling turns because the normal turns, and a
+  //  crease crossing the contact rides over the ring instead of through it.
+  // =========================================================================
+
+  /**
+   * Set up the ball's deformation of the hand, or clear it.
+   *
+   * The depth is measured against the undeformed hand - which is why `soft`
+   * is cleared before sampling - and everything else scales off that, so a
+   * ball resting on the palm dimples it and a ball squeezed hard dents deep
+   * and throws up a correspondingly bigger ring.
+   */
+  function softContact(rig, amount) {
+    rig.soft = null;
+    const b = rig.ball;
+    if (!b || !(amount > 0.01)) return;
+    let pen = 0;
+    const probe = (P) => {
+      const v = b.r - Math.hypot(P[0] - b.C[0], P[1] - b.C[1], P[2] - b.C[2]);
+      if (v > pen) pen = v;
+    };
+    for (let d = 0; d < 5; d++) {
+      for (const sg of rig.digits[d].segs) {
+        if (!sg.rendered) continue;
+        for (let i = 0; i <= 6; i++) {
+          const s = lerp(sg.sMin, sg.sMax, i / 6);
+          for (let k = 0; k < 12; k++) probe(digitSurface(rig, d, sg.seg, s, (k / 12) * Math.PI * 2).P);
+        }
+      }
+    }
+    for (let i = 0; i <= 14; i++) {
+      for (let k = 0; k <= 10; k++) {
+        probe(palmSurface(rig, lerp(-0.2, 1.02, i / 14), (k / 10) * 0.5).P);
+      }
+    }
+    if (pen < 0.12) return;
+    rig.soft = {
+      C: b.C, r: b.r, amount: clamp(amount, 0, 1.6), pen,
+      // how sharply the skin turns into the contact. Zero would crease it
+      // along the rim like a paper bag; a millimetre or so is knuckle skin.
+      ease: 1.35,
+      // how far out the displaced tissue reaches, and how high it stands
+      rim: clamp(pen * 2.4, 2.4, 11),
+      bulge: pen * 0.42,
+    };
+  }
+
+  /**
+   * The displacement at one point: how far it moves, and which way.
+   *
+   * Straight out along the radius from the ball's centre. Pushed to exactly
+   * the sphere it would crease at the rim, so the press is a smooth minimum
+   * rather than a clamp - deep in the contact it resolves the penetration
+   * completely, and it lets go over the last millimetre instead of stopping
+   * dead. The ring outside is the same tissue arriving, so it rises and
+   * falls over the rim's width and is gone by the end of it.
+   */
+  function softField(sf, P) {
+    const ax = P[0] - sf.C[0], ay = P[1] - sf.C[1], az = P[2] - sf.C[2];
+    const rho = Math.sqrt(ax * ax + ay * ay + az * az);
+    if (rho < 1e-6) return null;
+    const rel = rho - sf.r;
+    if (rel > sf.rim) return null;
+    const e = sf.ease;
+    const root = Math.sqrt(rel * rel + e * e);
+    const press = 0.5 * (root - rel);
+    const t = clamp01(rel / sf.rim);
+    const ring = sf.bulge * 4 * t * (1 - t);
+    const w = (press - ring) * sf.amount;
+    // d/drho of the same, for the normal
+    const dw = (0.5 * (rel / root - 1) - sf.bulge * 4 * (1 - 2 * t) / sf.rim) * sf.amount;
+    return { u: [ax / rho, ay / rho, az / rho], w, dw };
+  }
+
+  /** a surface point, moved by the contact */
+  function softPoint(rig, P) {
+    const sf = rig.soft;
+    if (!sf) return P;
+    const f = softField(sf, P);
+    if (!f) return P;
+    return [P[0] + f.u[0] * f.w, P[1] + f.u[1] * f.w, P[2] + f.u[2] * f.w];
+  }
+
+  /**
+   * The normal, turned by the contact.
+   *
+   * To first order a surface displaced by h along its own normal turns by the
+   * tangential gradient of h, and h here is the radial displacement resolved
+   * onto the normal. That is what makes the dent read: the rim catches the
+   * light on its outer slope and loses it on the inner one, which is the only
+   * thing that separates a pressed pad from a flat one.
+   */
+  function softNormal(rig, P, N) {
+    const sf = rig.soft;
+    if (!sf) return N;
+    const f = softField(sf, P);
+    if (!f) return N;
+    const un = vdot(f.u, N);
+    const g = f.dw * un;
+    const gn = g * un;
+    const t = [f.u[0] * g - N[0] * gn, f.u[1] * g - N[1] * gn, f.u[2] * g - N[2] * gn];
+    return vnorm([N[0] - t[0], N[1] - t[1], N[2] - t[2]]);
   }
 
   /** section centre of a digit segment, including any offset from segmentProfile */
@@ -1671,7 +1790,7 @@
       sg.ul[2] * ca + sg.dor[2] * sa
     ];
     if (vdot(N, ref) < 0) N = vmul(N, -1);
-    return N;
+    return rig.soft ? softNormal(rig, digitSurface(rig, d, seg, s, alpha).P, N) : N;
   }
 
 
@@ -2457,7 +2576,7 @@
   GK.rig = {
     FLEX, ABD, TWIST, IDENT, View, solve, abdGate,
     palmSpine, palmSurface, palmNormal, palmThickPalmar, palmThickDorsal, palmWrap,
-    digitSurface, digitNormal, sectionCenter, knuckleRings, digitSilhouette, palmContour, palmSilhouette, webContours, firstWeb,
+    digitSurface, digitNormal, sectionCenter, softContact, knuckleRings, digitSilhouette, palmContour, palmSilhouette, webContours, firstWeb,
     PALM_NU, V_KNOTS
   };
 })(window.GK = window.GK || {});
@@ -6016,6 +6135,12 @@
       // walks the scene - the framing, the depth field, the contours - meets
       // it the same way it meets the hand.
       rig.ball = state.ball || pose.ball || null;
+      // ...and it presses in. Set before anything reads the surface, since
+      // the surface is where the deformation lives - the framing pass walks
+      // it too, and a hand squeezing hard is a different shape to frame.
+      RG.softContact(rig, rig.ball
+        ? (state.soft === undefined ? (rig.ball.soft === undefined ? 1 : rig.ball.soft) : state.soft)
+        : 0);
       const V = state.view;
       const view = new RG.View(V.az, V.el, V.roll || 0, 1, [0, 0, 0], 0, 0);
 
@@ -6413,7 +6538,7 @@
     view: { az: -32 * DEG, el: 14 * DEG, roll: 0, zoom: 1 },
     style: {
       grade: 3, tone: 1, wobble: 1, ghost: 0.14, search: 0.35,
-      ballRough: 0.3, ballAniso: 0,
+      ballRough: 0.3, ballAniso: 0, ballGive: 1,
       paper: [244, 241, 232], ink: [26, 25, 23]
     },
     detail: { print: 1, ridge: 0.5, lattice: 0.55, hair: 1, vein: 1 },
@@ -6521,6 +6646,7 @@
     const built = renderer.draw({
       seed: params.seed, pose,
       ball: held ? held.ball : null,
+      soft: params.style.ballGive,
       view: params.view,
       style: params.style,
       // holdBall has already settled the hand against the ball and against
@@ -6923,6 +7049,10 @@
       v => { params.style.ballRough = v; ballKey = null; pickKey = null; });
     slider(art, 'ballAniso', 'Ball grain', 0, 1, 0.01, 0, f2,
       v => { params.style.ballAniso = v; ballKey = null; pickKey = null; });
+    // How much the hand gives under it, not how soft the ball is: the ball
+    // stays a sphere and the skin is what moves.
+    slider(art, 'ballGive', 'Skin gives', 0, 1.6, 0.01, 1, f2,
+      v => { params.style.ballGive = v; });
     const man = document.createElement('label');
     man.className = 'check';
     man.innerHTML = '<input type="checkbox"><span>Drag the fingertips</span>';

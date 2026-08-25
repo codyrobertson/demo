@@ -22,7 +22,8 @@ const built = r.draw({
   view: { az, el, roll: 0, zoom: 1 },
   style: { grade: 3, tone: 1, wobble: 1, ghost: 0.2, search: 0.55 },
   detail: { print: 1, ridge: 0.5, lattice: 0.55, hair: 1, vein: 1 },
-  contacts: false, quality: 1
+  contacts: false, quality: 1,
+  soft: process.env.SOFT === undefined ? 1 : +process.env.SOFT
 });
 writePNG(out, r.resolve({ style: {} }), S, S);
 console.log(preset + ' holding r=' + rad + 'mm | curves ' + built.curves.length +

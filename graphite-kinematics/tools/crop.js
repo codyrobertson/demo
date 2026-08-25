@@ -13,9 +13,16 @@ const out = a[7] || '/tmp/crop.png';
 const S = parseInt(a[8] || '2000');
 
 const A = G.anatomy.buildAnatomy(seed);
+// BALL=<radius mm> puts something in the hand; SOFT=<0..1.6> says how hard
+// the skin gives under it
+const ballR = process.env.BALL ? +process.env.BALL : 0;
+const pose = ballR
+  ? G.pose.holdBall(A, G.pose.preset(A, preset), ballR)
+  : G.pose.preset(A, preset);
 const r = new G.render.Renderer(S, S);
 r.draw({
-  seed, pose: G.pose.preset(A, preset),
+  seed, pose, ball: pose.ball || null,
+  soft: process.env.SOFT === undefined ? 1 : +process.env.SOFT,
   view: { az: az * DEG, el: el * DEG, roll: 0, zoom: 1 },
   style: { grade: 3, tone: 1, wobble: 1, ghost: 0.2, search: 0.55 },
   detail: { print: 1, ridge: 0.5, lattice: 0.55, hair: 1, vein: 1 },
