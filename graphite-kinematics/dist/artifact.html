@@ -4051,10 +4051,10 @@
         const taut = clamp01(1 - f * 1.45) * (1 - ext * 0.35);
         if (taut > 0.05) {
           const rows = A.knuckles.wrinkleRows + (jn === 'MCP' ? 1 : 0);
-          const spread = lerp(0.16, 0.30, taut) * (jn === 'MCP' ? 1.35 : 1.0);
+          const spread = lerp(0.20, 0.38, taut) * (jn === 'MCP' ? 1.35 : 1.0);
           const dspan = lerp(0.62, 1.02, taut) * (jn === 'MCP' ? 1.25 : 1.0);
           for (let i = 0; i < rows; i++) {
-            const t = (i + 0.5) / rows;
+            const t = (i + 0.5) / rows + rng.sym(0.10 / rows);
             let useSeg = seg, ss = -spread * 0.5 + spread * t;
             if (ss < 0.012) {
               // a wrinkle set straddles its joint: the proximal half of it
@@ -4064,16 +4064,25 @@
               if (seg > 1) { useSeg = seg - 1; ss = 1 + ss; }
               else ss = 0.012 + spread * t * 0.5;
             }
-            // Each wrinkle reaches its own distance round the finger and sits
-            // at its own height. Equal arcs at equal spacing read as tape.
-            const reach = dspan * rng.range(0.62, 1.06);
+            // Each wrinkle reaches its own distance round the finger, and a
+            // different distance each way. Equal arcs at equal spacing read
+            // as tape wrapped round the finger, and two rows ruled parallel
+            // with a lattice between them read as printed rather than skin.
+            const reachL = dspan * rng.range(0.55, 1.10);
+            const reachR = dspan * rng.range(0.55, 1.10);
             const drift = rng.sym(0.016);
+            // and it bows toward the fingertip in the middle, the way a
+            // crease does over a joint that has to open - always the same
+            // way, because skin gathers on one side of a hinge, not both
+            const bow = lerp(0.012, 0.052, taut) * rng.range(0.7, 1.3);
             const pts = [];
-            for (let k = 0; k <= 14; k++) {
-              const q = k / 14;
-              const a = DORSAL + (q * 2 - 1) * reach + rng.sym(0.012);
-              const kk = 1 - Math.pow(q * 2 - 1, 2);
-              pts.push([ss + drift + 0.014 * kk * (i % 2 ? 1 : -1), a, -0.16]);
+            const NW = 16;
+            for (let k = 0; k <= NW; k++) {
+              const q = k / NW;
+              const x = q * 2 - 1;
+              const a = DORSAL + (x < 0 ? x * reachL : x * reachR) + rng.sym(0.012);
+              const kk = 1 - x * x;
+              pts.push([ss + drift + bow * kk, a, -0.16]);
             }
             out.push({
               on: 'digit', d: d, seg: useSeg, pts,
@@ -4083,29 +4092,63 @@
               })
             });
           }
-          // the oblique cross-set that turns the rows into a diamond lattice
-          // The oblique set that turns the rows into a diamond lattice. Each
-          // oblique crosses the joint, so it has to be emitted as two curves —
+          // The oblique cross-set that turns the rows into a mesh. Each
+          // oblique crosses the joint, so it has to be emitted as two curves -
           // one per bone. Built as a single point list spanning both, the
           // proximal points land at s ~ 0.97 of the WRONG segment and the
           // lattice collapses into a row of brackets at the finger's base.
-          const nObl = Math.round(3 + taut * 4);
+          //
+          // Spaced evenly, slanted alternately and cut to one length, they
+          // come out as a row of identical triangles - which is a diagram of
+          // skin, not skin. Every one gets its own place, slope, length and
+          // height instead, and only some of them get drawn.
+          const nObl = Math.round(4 + taut * 6);
           for (let i = 0; i < nObl; i++) {
-            const sgn = i % 2 ? 1 : -1;
-            const aC = DORSAL + (i / Math.max(1, nObl - 1) - 0.5) * dspan * 1.5;
+            if (rng.f() > 0.34 + 0.55 * taut) continue;
+            const sgn = rng.f() < 0.5 ? 1 : -1;
+            const aC = DORSAL + (rng.f() - 0.5) * dspan * 1.9;
+            const slant = rng.range(0.18, 0.52) * sgn;
+            const len = rng.range(0.55, 1.15);
+            const mid = rng.sym(0.35);
             const here = [], back = [];
             for (let k = 0; k <= 8; k++) {
               const q = k / 8;
-              const ss = -spread * 0.45 + spread * 0.9 * q;
-              const a = aC + sgn * (q - 0.5) * 0.34;
+              const ss = (-spread * 0.45 + spread * 0.9 * q) * len + spread * mid;
+              const a = aC + slant * (q - 0.5) + rng.sym(0.02);
               if (ss >= 0.012) here.push([ss, a, -0.14]);
               else if (seg > 1) back.push([1 + ss, a, -0.14]);
             }
-            const style = st(S.wrinkle, { tone: lerp(0.12, 0.92, taut), phase: nextPhase() });
-            if (here.length > 2) out.push({ on: 'digit', d, seg, pts: here, style });
+            const tone = lerp(0.12, 0.92, taut) * rng.range(0.6, 1.25);
+            if (here.length > 2) out.push({
+              on: 'digit', d, seg, pts: here,
+              style: st(S.wrinkle, { tone, phase: nextPhase() })
+            });
             if (back.length > 2) out.push({
               on: 'digit', d, seg: seg - 1, pts: back,
-              style: st(S.wrinkle, { tone: style.tone / S.wrinkle.tone, phase: nextPhase() })
+              style: st(S.wrinkle, { tone: tone * 0.9, phase: nextPhase() })
+            });
+          }
+        }
+
+        // ---- the shaft between the joints -------------------------------
+        // A phalanx between two creases is not bare. It carries a scatter of
+        // short slack folds, finer and much fainter than the joint's own
+        // rows, running the same way round the finger - which is what stops
+        // the stretch between two knuckles reading as moulded plastic.
+        {
+          const nS = Math.round(3 + rng.f() * 4);
+          for (let i = 0; i < nS; i++) {
+            const ss = rng.range(0.30, 0.80);
+            const aC = DORSAL + rng.sym(0.85);
+            const reach = rng.range(0.18, 0.46);
+            const pts = [];
+            for (let k = 0; k <= 7; k++) {
+              const q = k / 7, x = q * 2 - 1;
+              pts.push([ss + rng.sym(0.006) + 0.012 * (1 - x * x), aC + x * reach, -0.14]);
+            }
+            out.push({
+              on: 'digit', d, seg, pts,
+              style: st(S.wrinkle, { tone: rng.range(0.24, 0.62), weight: 0.52, phase: nextPhase() })
             });
           }
         }
