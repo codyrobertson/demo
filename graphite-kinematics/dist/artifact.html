@@ -1667,168 +1667,46 @@
     return N;
   }
 
-  /**
-   * The two silhouette angles of a digit cross-section for a given view.
-   * Exact for an elliptical section: the normal is perpendicular to the eye
-   * when  cos(a)/A * (ul.e) + sin(a)/B * (dor.e) = 0.
-   * Returns [alphaLeft, alphaRight] ordered by screen position.
-   */
-  function silhouetteAlphas(rig, view, d, seg, s) {
-    const A = rig.anatomy;
-    const sg = rig.digits[d].segs[seg];
-    const pr = AN.segmentProfile(A, d, seg, s);
-    const ue = vdot(sg.ul, view.e), de = vdot(sg.dor, view.e);
-    let a1 = Math.atan2(-pr[1] * ue, pr[0] * de);
-    let a2 = a1 + Math.PI;
-    // order them by which side of the projected bone axis they land on
-    const ts = view.dir(sg.t);
-    const nx = -ts[1], ny = ts[0];
-    const q1 = digitSurface(rig, d, seg, s, a1).P;
-    // the offset centre, not the bare bone axis: for the thumb's thenar the
-    // two are mm apart, enough to flip which side reads as left and right
-    const c = sectionCenter(rig, d, seg, s);
-    const p1 = view.px(q1), pc = view.px(c);
-    const side = (p1[0] - pc[0]) * nx + (p1[1] - pc[1]) * ny;
-    return side >= 0 ? [a2, a1] : [a1, a2];
-  }
 
   // =========================================================================
   //  SILHOUETTE CONTOURS
   // =========================================================================
 
   /**
-   * A continuous outline for one digit, from the web line on one flank, over
-   * the fingertip, and back down the other flank. Returns screen polylines
-   * plus, for each point, the depth and whether it lies on the web boundary.
+   * The knuckle rings of a digit.
+   *
+   * A digit's own outline is traced from its coverage (digitSilhouette), and
+   * the knuckle is inside that trace rather than on it - so where a finger
+   * foreshortens hard enough that the joint reads as a step in the form, the
+   * ring has to be drawn in its own right. Only the metacarpophalangeal one:
+   * a digit tapers along its length, so the proximal rim of a middle or
+   * distal phalanx lies *inside* the segment behind it, and drawn as a ring
+   * it reads as the open end of a pipe.
    */
-  function digitContour(rig, view, d, opts) {
-    opts = opts || {};
+  function knuckleRings(rig, view, d) {
     const A = rig.anatomy;
-    const dg = rig.digits[d];
-    const segs = dg.segs.filter(sg => sg.rendered);
-    const stepsPer = opts.steps || 13;
-    const left = [], right = [];
-    let prevL = null, prevR = null;
-    const d2 = (a, b) => (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]);
-
-    for (let k = 0; k < segs.length; k++) {
-      const sg = segs[k];
-      const isLast = k === segs.length - 1;
-      // The rails close the dome themselves ordinarily (see below), but
-      // where the tip cap is about to take over that same ground, the two
-      // constructions disagree enough on its exact shape to draw as a seam
-      // - a tube sliced flat, not a fingertip. Fade the rails out approaching
-      // the tip on the identical gate the cap fades in on, tapered rather
-      // than cut at s=1, so the handoff is one continuous form instead of
-      // two competing ones drawn on top of each other.
-      const domeGate = isLast ? M.smoothstep(clamp01((Math.abs(vdot(sg.t, view.e)) - 0.58) / 0.20)) : 0;
-      const domeFadeFrom = isLast ? 1 - 1.6 * AN.tipExtent(A, d) : 0;
-      const n = isLast ? Math.round(stepsPer * 2.2) : stepsPer;
-      for (let i = 0; i <= n; i++) {
-        // cluster samples toward the tip, where the dome turns fastest
-        let s;
-        if (isLast) {
-          const q = i / n;
-          s = sg.sMin + (sg.sMax - sg.sMin) * (1 - Math.pow(1 - q, 1.55));
-        } else {
-          s = sg.sMin + (1 - sg.sMin) * (i / n);
-        }
-        const [a1, a2] = silhouetteAlphas(rig, view, d, sg.seg, s);
-        const q1 = digitSurface(rig, d, sg.seg, s, a1).P;
-        const q2 = digitSurface(rig, d, sg.seg, s, a2).P;
-        let pA = view.px(q1), pB = view.px(q2);
-        let nA = view.near(q1), nB = view.near(q2), aA = a1, aB = a2;
-        // Keep each rail continuous: a foreshortened segment swings its
-        // silhouette right around the section, and the naive left/right test
-        // flips. Assign whichever pairing stays nearest the previous points.
-        if (prevL && prevR && d2(pA, prevL) + d2(pB, prevR) > d2(pB, prevL) + d2(pA, prevR)) {
-          let t;
-          t = pA; pA = pB; pB = t;
-          t = nA; nA = nB; nB = t;
-          t = aA; aA = aB; aB = t;
-        }
-        // suppress whatever is buried in the interdigital web
-        const okA = sg.seg !== 1 || s >= AN.webStart(A, d, aA);
-        const okB = sg.seg !== 1 || s >= AN.webStart(A, d, aB);
-        // The thumb's metacarpal is thenar, not a tube: it belongs to the
-        // palm's mass over its proximal two-thirds, and stepBehind already
-        // fades its line where the palm sits close behind it, but a hand
-        // reads by contour count before it reads by contour weight, so the
-        // rail itself is faded out there too rather than left for the depth
-        // test alone - a real thumb never shows this as a third segment.
-        let railGain = (d === AN.THUMB && sg.seg === 0)
-          ? smoothstep(clamp01((s - 0.42) / 0.26)) : 1;
-        if (domeGate > 0 && s > domeFadeFrom) railGain *= 1 - domeGate * inv(s, domeFadeFrom, sg.sMax);
-        if (okA && railGain > 0.01) { left.push([pA[0], pA[1], nA, sg.pid, railGain]); prevL = pA; }
-        if (okB && railGain > 0.01) { right.push([pB[0], pB[1], nB, sg.pid, railGain]); prevR = pB; }
-      }
-    }
-
-    // A segment pointing at the eye has no left and right: its whole cross
-    // section is silhouette. Where a digit foreshortens, its outline is the
-    // ring at the joint — which is exactly what a knuckle is — so emit it and
-    // let the grazing gate and the depth test keep only the visible arc.
     const rings = [];
-    for (let k = 0; k < segs.length; k++) {
-      const sg = segs[k];
-      // Only the knuckle is a real step in the outline. A digit tapers along
-      // its length, so the proximal rim of a middle or distal phalanx lies
-      // *inside* the wider segment behind it — drawn as a ring it reads as the
-      // open end of a pipe, and a foreshortened hand comes out as a bundle of
-      // cut tubes.
-      if (sg.seg !== 1) continue;
+    for (const sg of rig.digits[d].segs) {
+      if (!sg.rendered || sg.seg !== 1) continue;
       const f = Math.abs(vdot(sg.t, view.e));
       if (f < 0.50) continue;
       const gate = M.smoothstep(clamp01((f - 0.50) / 0.26));
-      const sRing = sg.seg === 1 ? -0.02 : 0.055;
+      const sRing = -0.02;
       const ring = [];
       const N = 44;
       for (let i = 0; i <= N; i++) {
         const a = (i / N) * Math.PI * 2;
         const q = digitSurface(rig, d, sg.seg, sRing, a).P;
-        const nrm = digitNormal(rig, d, sg.seg, sRing, a);
-        const fn = vdot(nrm, view.e);
+        const fn = vdot(digitNormal(rig, d, sg.seg, sRing, a), view.e);
+        // only the arc where the surface grazes is an edge
         let g = gate * (1 - M.smoothstep(clamp01((Math.abs(fn) - 0.05) / 0.32)));
-        if (sg.seg === 1 && sRing < AN.webStart(A, d, a)) g *= 0.25;
+        if (sRing < AN.webStart(A, d, a)) g *= 0.25;
         const p = view.px(q);
         ring.push([p[0], p[1], view.near(q), sg.pid, g]);
       }
       rings.push(ring);
     }
-
-    // The rails already trace a rounded fingertip: the profile closes as a
-    // quarter ellipse, so the dome draws itself. Only a strongly foreshortened
-    // digit needs an explicit cap, and there the outline is the widest ring.
-    const tipSeg = segs[segs.length - 1];
-    const fore = Math.abs(vdot(tipSeg.t, view.e));
-    const cap = [];
-    if (fore > 0.58) {
-      let bestS = 1, bestW = -1;
-      for (let i = 0; i <= 12; i++) {
-        const s = 1 + (tipSeg.sMax - 1) * (i / 12);
-        const pr = AN.segmentProfile(A, d, tipSeg.seg, s);
-        const p0 = view.px(digitSurface(rig, d, tipSeg.seg, s, 0).P);
-        const p1 = view.px(digitSurface(rig, d, tipSeg.seg, s, Math.PI * 0.5).P);
-        const c = view.px(vmad(tipSeg.A, tipSeg.t, tipSeg.len * s));
-        const w = Math.max(Math.hypot(p0[0] - c[0], p0[1] - c[1]), Math.hypot(p1[0] - c[0], p1[1] - c[1]));
-        if (w > bestW) { bestW = w; bestS = s; }
-        void pr;
-      }
-      // Only the part of the ring that is actually a silhouette belongs in
-      // the drawing: gate every point on how near its normal is to grazing.
-      const gate = M.smoothstep(clamp01((fore - 0.58) / 0.20));
-      const N = 40;
-      for (let i = 0; i <= N; i++) {
-        const a = (i / N) * Math.PI * 2;
-        const q = digitSurface(rig, d, tipSeg.seg, bestS, a).P;
-        const nrm = digitNormal(rig, d, tipSeg.seg, bestS, a);
-        const f = vdot(nrm, view.e);
-        const g = gate * (1 - M.smoothstep(clamp01((Math.abs(f) - 0.05) / 0.36)));
-        const p = view.px(q);
-        cap.push([p[0], p[1], view.near(q), tipSeg.pid, g]);
-      }
-    }
-    return { left, right, cap, rings, outline: right.concat(cap, left.slice().reverse()) };
+    return rings;
   }
 
   /** closed screen outline of the palm sheet, used for occlusion and contour */
@@ -1880,17 +1758,17 @@
   }
 
   /**
-   * The palm's outline as a union, exactly as digitUnion builds one for a
-   * foreshortened digit: sample the whole sheet, take the radial maximum
-   * about the projected centroid, bin by angle, fill the odd empty bin from
-   * its neighbours. A digit falls back to this outright because end-on it
-   * shrinks to a compact blob; the palm, being wider, never does —
-   * foreshortened it reads as a thin band rather than a blob — but the
-   * construction doesn't actually care about that shape, only that the
-   * surface is sampled densely enough, so it still recovers a clean band
-   * where the rails can't.
+   * The palm's outline as a union: sample the whole sheet, take the radial
+   * maximum about the projected centroid, bin by angle, fill the odd empty
+   * bin from its neighbours. A digit answers the same problem by tracing the
+   * border of what it covers, which assumes nothing about the projection's
+   * shape; the palm can use the cheaper radial construction because,
+   * foreshortened, it reads as a thin band rather than a blob, and a band
+   * about its own centroid is star-shaped. What matters either way is only
+   * that the surface is sampled densely enough to recover a boundary the
+   * per-column extremes can't.
    *
-   * Unlike digitUnion's outline, this one still has to survive palmSilhouette
+   * Unlike a traced border, this one still has to survive palmSilhouette
    * callers' self-occlusion test, so a bin keeps the winning sample verbatim
    * rather than a radius reconstructed from a smoothed profile: a real point
    * is on the palm's own front surface by construction and passes; an
@@ -1990,7 +1868,7 @@
    * face-on it returns the two borders, edge-on it returns the palmar and
    * dorsal faces — and it never degenerates.
    *
-   * Except the tangent itself can, the same way digitUnion's rails do: near
+   * Except the tangent itself can, the same way a per-section rail does: near
    * az 180 with the camera rising toward the fingertips, the sheet's u-axis
    * points almost straight at the eye, so a 0.012 step in u is nearly all
    * curvature and no slope, and the perpendicular built from it swings
@@ -2085,10 +1963,10 @@
     // A steadied tangent still can't save a column once neighbouring columns
     // start projecting on top of each other — past that point u no longer
     // orders the sheet on screen, so no per-column extreme traces a boundary
-    // that doesn't cross itself. That is the same collapse digitUnion exists
-    // for, one level up; the palm just never gets compact enough on screen to
-    // fall back to a union of its own the way a digit does, so instead every
-    // column fades toward one, in proportion to how thin the sheet reads.
+    // that doesn't cross itself. That is the same collapse a digit answers by
+    // tracing its coverage instead, one level up; the palm never gets compact
+    // enough on screen for a blob, so instead every column fades toward the
+    // union ring, in proportion to how thin the sheet reads.
     const ratio = palmAxisRatio(rig, view, u0, u1);
     const edgeOn = 1 - smoothstep(clamp01((ratio - 0.70) / (1.35 - 0.70)));
     if (edgeOn > 0.004) {
@@ -2164,202 +2042,255 @@
     return out;
   }
 
-  /**
-   * A closed outline around a cloud of projected surface points: the radial
-   * maximum about their centroid, binned by angle, empty bins filled from
-   * their neighbours and the profile smoothed circularly, since a per-bin
-   * maximum taken straight out comes back a sawtooth.
-   *
-   * The ratio of samples to bins is the whole game. A maximum over two or
-   * three samples is a noisy estimate of a maximum, and the noise does not
-   * average out - it is one-sided, so the profile ripples outward at about a
-   * percent of the radius per bin, which on a fingertip reads as a scalloped
-   * edge and looks like a rendering fault rather than a sampling one. Feed it
-   * ten or more per bin.
-   *
-   * Returns a lookup by angle too, so a caller can pull another construction
-   * toward it point by point rather than cutting from one to the other.
-   */
-  function radialOutline(pts, pid, passes, bins) {
-    let cx = 0, cy = 0;
-    for (const p of pts) { cx += p[0]; cy += p[1]; }
-    cx /= pts.length; cy /= pts.length;
-    const NB = bins || 128;
-    const rad = new Float64Array(NB).fill(-1);
-    const dep = new Float64Array(NB);
-    for (const p of pts) {
-      const dx = p[0] - cx, dy = p[1] - cy;
-      const r = Math.hypot(dx, dy);
-      let b = Math.floor(((Math.atan2(dy, dx) + Math.PI) / (Math.PI * 2)) * NB) % NB;
-      if (b < 0) b += NB;
-      if (r > rad[b]) { rad[b] = r; dep[b] = p[2]; }
-    }
-    // fill any empty bins from their neighbours, then smooth the profile
-    // circularly: taking a per-bin maximum straight out gives a sawtooth.
-    let filled = 0;
-    for (let b = 0; b < NB; b++) if (rad[b] >= 0) filled++;
-    if (filled < NB * 0.5) return { use: false };
-    for (let b = 0; b < NB; b++) {
-      if (rad[b] >= 0) continue;
-      let lo = b, hi = b, n = 0;
-      while (rad[(lo + NB) % NB] < 0 && n++ < NB) lo--;
-      n = 0;
-      while (rad[hi % NB] < 0 && n++ < NB) hi++;
-      const a = rad[((lo % NB) + NB) % NB], c2 = rad[hi % NB];
-      rad[b] = (a + c2) * 0.5;
-      dep[b] = (dep[((lo % NB) + NB) % NB] + dep[hi % NB]) * 0.5;
-    }
-    for (let pass = 0; pass < (passes || 3); pass++) {
-      const src = Float64Array.from(rad);
-      const sd = Float64Array.from(dep);
-      for (let b = 0; b < NB; b++) {
-        const p0 = src[(b - 1 + NB) % NB], p2 = src[(b + 1) % NB];
-        rad[b] = (p0 + src[b] * 2 + p2) * 0.25;
-        dep[b] = (sd[(b - 1 + NB) % NB] + sd[b] * 2 + sd[(b + 1) % NB]) * 0.25;
+
+
+  // =========================================================================
+  //  THE OUTLINE OF A DIGIT, TRACED FROM ITS OWN COVERAGE
+  //
+  //  Every other way of finding a silhouette here starts from a cross-section
+  //  and asks which way round it faces. That works while a finger runs across
+  //  the picture and stops working the moment it turns to point at the eye:
+  //  the two answers per section swing round and meet, so the rails spiral
+  //  inward instead of ending on an edge, the tip has to be patched in from a
+  //  second construction, and the patch and the rails then disagree about
+  //  where the finger's edge is. Cross-fading between constructions cannot
+  //  fix that, because there is no view in which both are right.
+  //
+  //  A silhouette is the boundary of what the form covers. So cover it: fill
+  //  the digit's whole surface into a small mask, close the pinholes, and
+  //  walk the border. One closed curve, joined by construction, correct from
+  //  any direction, and with no assumption anywhere that the projection is
+  //  star-shaped, convex, or longer than it is wide. The cost is a raster
+  //  step per digit, which at this size is a few hundred microseconds.
+  // =========================================================================
+
+  /** scanline-fill one triangle into a coverage/depth/owner mask */
+  function fillTri(m, ax, ay, az, ag, bx, by, bz, bg, cx, cy, cz, cg, owner) {
+    const W = m.w, H = m.h;
+    let y0 = Math.max(0, Math.floor(Math.min(ay, by, cy)));
+    let y1 = Math.min(H - 1, Math.ceil(Math.max(ay, by, cy)));
+    let x0 = Math.max(0, Math.floor(Math.min(ax, bx, cx)));
+    let x1 = Math.min(W - 1, Math.ceil(Math.max(ax, bx, cx)));
+    if (y1 < y0 || x1 < x0) return;
+    const d = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
+    if (Math.abs(d) < 1e-12) return;
+    for (let y = y0; y <= y1; y++) {
+      const py = y + 0.5;
+      for (let x = x0; x <= x1; x++) {
+        const px = x + 0.5;
+        const l1 = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) / d;
+        if (l1 < -0.002) continue;
+        const l2 = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) / d;
+        if (l2 < -0.002) continue;
+        const l3 = 1 - l1 - l2;
+        if (l3 < -0.002) continue;
+        const zz = l1 * az + l2 * bz + l3 * cz;
+        const i = y * W + x;
+        if (!m.cov[i] || zz > m.dep[i]) {
+          m.dep[i] = zz; m.own[i] = owner;
+          m.gn[i] = l1 * ag + l2 * bg + l3 * cg;
+        }
+        m.cov[i] = 1;
       }
     }
-    const outline = [];
-    for (let b = 0; b <= NB; b++) {
-      const i = b % NB;
-      const th = (i / NB) * Math.PI * 2 - Math.PI;
-      outline.push([cx + Math.cos(th) * rad[i], cy + Math.sin(th) * rad[i], dep[i], pid, 1]);
-    }
-    // Look up this outline by angle about its own centroid, so a caller can
-    // pull the ordinary rail-and-cap treatment toward it point by point
-    // instead of cutting from one construction to the other.
-    const at = (ang) => {
-      let a = ang - Math.floor((ang + Math.PI) / (Math.PI * 2)) * (Math.PI * 2);
-      const fi = (a + Math.PI) / (Math.PI * 2) * NB;
-      const i0 = Math.floor(fi) % NB, i1 = (i0 + 1) % NB, t = fi - Math.floor(fi);
-      const p0 = outline[i0], p1 = outline[i1];
-      return [lerp(p0[0], p1[0], t), lerp(p0[1], p1[1], t), lerp(p0[2], p1[2], t)];
-    };
-    return { use: true, outline, cx, cy, at };
   }
 
   /**
-   * The outline of a digit's last bone, for when that bone points at the eye.
+   * Walk the border of a filled mask, Moore-neighbourhood, once round.
    *
-   * digitUnion answers this for a digit that has gone compact overall, but a
-   * curled finger seen from the palm is not compact - it still spans the
-   * picture, so the ratio it keys on stays high - while its distal phalanx is
-   * dead end-on. Measured, in a resting hand seen palmar: index and middle at
-   * 0.99 and 0.98 of fully end-on, and the union's own gate reading zero for
-   * both.
-   *
-   * There the tip cap IS the silhouette, and it is drawn a size smaller than
-   * the tube behind it, so the finger comes out as a tube with a disc laid on
-   * top - which is what a cut tube looks like. One bone seen end-on is small
-   * and convex whatever the rest of the digit is doing, so the same radial
-   * maximum works on it alone.
+   * Returns cell coordinates in order, once round.
    */
-  function tipUnion(rig, view, d) {
+  function traceBorder(m) {
+    const W = m.w, H = m.h, cov = m.cov;
+    let sx = -1, sy = -1;
+    for (let y = 0; y < H && sy < 0; y++) {
+      for (let x = 0; x < W; x++) if (cov[y * W + x]) { sx = x; sy = y; break; }
+    }
+    if (sy < 0) return null;
+    const DX = [1, 1, 0, -1, -1, -1, 0, 1], DY = [0, 1, 1, 1, 0, -1, -1, -1];
+    const at = (x, y) => (x < 0 || y < 0 || x >= W || y >= H) ? 0 : cov[y * W + x];
+    const out = [];
+    let cxi = sx, cyi = sy, dir = 6, guard = W * H * 4;
+    while (guard-- > 0) {
+      out.push([cxi, cyi]);
+      // the first neighbour clockwise from where we came in
+      let nx = 0, ny = 0, nd = 0, found = false;
+      const from = (dir + 6) % 8;
+      for (let k = 0; k < 8; k++) {
+        const t = (from + k) % 8;
+        const ax = cxi + DX[t], ay = cyi + DY[t];
+        if (at(ax, ay)) { nx = ax; ny = ay; nd = t; found = true; break; }
+      }
+      if (!found) break;
+      // Jacob's criterion: back at the start and about to repeat the first
+      // step, so the loop is closed. Testing the start cell alone would cut
+      // it short at any one-cell isthmus; testing arrival direction alone
+      // walks the whole border twice.
+      if (out.length > 2 && cxi === sx && cyi === sy && nx === out[1][0] && ny === out[1][1]) {
+        out.pop();
+        break;
+      }
+      cxi = nx; cyi = ny; dir = nd;
+    }
+    return out.length > 8 ? out : null;
+  }
+
+  /**
+   * The outline of one digit, as the border of everything it covers.
+   *
+   * `use: false` only when the digit renders to nothing at all. Points carry
+   * screen position, the near-depth of the surface that put them there, the
+   * identity of the bone that owns that surface - so the depth test can skip
+   * the solid a line is the silhouette of - and a weight.
+   */
+  function digitSilhouette(rig, view, d, opts) {
+    opts = opts || {};
     const dg = rig.digits[d];
     const segs = dg.segs.filter(sg => sg.rendered);
-    const last = segs[segs.length - 1];
-    if (!last) return { use: false, tipOn: 0 };
-    const fore = Math.abs(vdot(last.t, view.e));
-    const tipOn = smoothstep(clamp01((fore - 0.72) / 0.21));
-    if (tipOn <= 0.004) return { use: false, tipOn: 0 };
-    const pts = [];
-    const add = (sg, s0, s1, NS) => {
-      const NA = 64;
+    if (!segs.length) return { use: false };
+    const NA = opts.na || 30;
+    const rings = [];
+    for (const sg of segs) {
+      const NS = opts.ns || 13;
       for (let i = 0; i <= NS; i++) {
-        const sv = lerp(s0, s1, i / NS);
+        const s = sg.sMin + (sg.sMax - sg.sMin) * (i / NS);
+        const row = [];
         for (let k = 0; k < NA; k++) {
-          const q = digitSurface(rig, d, sg.seg, sv, (k / NA) * Math.PI * 2).P;
+          const a = (k / NA) * Math.PI * 2;
+          const q = digitSurface(rig, d, sg.seg, s, a).P;
           const p = view.px(q);
-          pts.push([p[0], p[1], view.near(q)]);
+          // The same two places a digit's edge is not its own edge, carried
+          // on the surface itself so the border walk inherits them: the
+          // thumb's metacarpal, which is thenar mass rather than a tube over
+          // its proximal reach, and whatever a proximal phalanx has buried in
+          // the web between it and its neighbour.
+          let gn = 1;
+          if (d === AN.THUMB && sg.seg === 0) gn = smoothstep(clamp01((s - 0.42) / 0.26));
+          if (sg.seg === 1 && s < AN.webStart(rig.anatomy, d, a)) gn *= 0.22;
+          row.push([p[0], p[1], view.near(q), gn]);
         }
+        rings.push({ row, seg: sg.seg, s });
       }
-    };
-    // enough of the bone before it that the outline leaves the tip already
-    // running along the tube, rather than meeting it at a seam of its own -
-    // but only just. Reaching further back drags in a stretch that bends away
-    // from the tip, and the point cloud stops being star-shaped about its own
-    // centroid, which is the one thing a radial maximum needs.
-    const prev = segs.length > 1 ? segs[segs.length - 2] : null;
-    if (prev) add(prev, lerp(prev.sMin, prev.sMax, 0.80), prev.sMax, 5);
-    add(last, last.sMin, last.sMax, 14);
-    // and if it still is not compact, say so rather than returning a scallop
+    }
     let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
-    for (const q of pts) {
-      if (q[0] < x0) x0 = q[0]; if (q[0] > x1) x1 = q[0];
-      if (q[1] < y0) y0 = q[1]; if (q[1] > y1) y1 = q[1];
+    for (const r of rings) for (const p of r.row) {
+      if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0];
+      if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
     }
-    const w = Math.max(1e-6, x1 - x0), h = Math.max(1e-6, y1 - y0);
-    const aspect = Math.max(w / h, h / w);
-    if (aspect > 2.1) return { use: false, tipOn: 0 };
-    const ro = radialOutline(pts, last.pid, 5, 80);
-    if (!ro.use) return { use: false, tipOn: 0 };
-    return { use: true, tipOn, outline: ro.outline, cx: ro.cx, cy: ro.cy, at: ro.at };
-  }
-
-  /**
-   * The outline of a whole digit as one form.
-   *
-   * A digit pointing at the eye has no useful per-segment silhouette: its
-   * rails collapse, its knuckle ring and its tip cap survive as two detached
-   * ellipses, and the drawing comes out as a scatter of cut tubes. What a
-   * draughtsman draws there is the outer boundary of the entire digit. The
-   * projection is compact and near-convex in exactly the case that matters,
-   * so a radial maximum about the projected centroid recovers it.
-   *
-   * Returns `use: false` when the digit reads long enough to draw the ordinary
-   * way, which is most of the time.
-   */
-  function digitUnion(rig, view, d) {
-    const A = rig.anatomy;
-    const dg = rig.digits[d];
-    const segs = dg.segs.filter(sg => sg.rendered);
-    // The thumb's metacarpal is thenar mass, not a tube, over its proximal
-    // reach - digitContour fades its rail out there (railGain) for the same
-    // reason a real thumb never reads as three segments. The union has no
-    // per-point gain to lean on, so it excludes that reach outright: pooled
-    // in, the offset thenar cross-sections compete with the phalanges for
-    // the radial maximum at every angle and the outline comes back jagged.
-    const thumbBase = (sg, sv) => d === AN.THUMB && sg.seg === 0 && sv < 0.42;
-    // how compact is this digit on screen, relative to how thick it is?
-    let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9, wSum = 0, wN = 0;
-    for (const sg of segs) {
-      for (let i = 0; i <= 4; i++) {
-        const sv = sg.sMin + (sg.sMax - sg.sMin) * (i / 4);
-        if (thumbBase(sg, sv)) continue;
-        const p = view.px(sectionCenter(rig, d, sg.seg, sv));
-        if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0];
-        if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
-        wSum += AN.segmentProfile(A, d, sg.seg, Math.min(sv, 1))[0] * view.scale * 2;
-        wN++;
+    if (!(x1 > x0) || !(y1 > y0)) return { use: false };
+    // A cell fine enough that the border is smooth after filtering, and a
+    // two-cell margin so the closing pass has room to work in.
+    const cell = Math.max(0.6, Math.min(2.2, (x1 - x0 + y1 - y0) * 0.5 / 150));
+    const PAD = 3;
+    const W = Math.ceil((x1 - x0) / cell) + PAD * 2;
+    const H = Math.ceil((y1 - y0) / cell) + PAD * 2;
+    if (W < 6 || H < 6 || W * H > 4e6) return { use: false };
+    const m = {
+      w: W, h: H, cov: new Uint8Array(W * H),
+      dep: new Float32Array(W * H), own: new Int16Array(W * H),
+      gn: new Float32Array(W * H),
+    };
+    const gx = (px) => (px - x0) / cell + PAD, gy = (py) => (py - y0) / cell + PAD;
+    for (let r = 0; r + 1 < rings.length; r++) {
+      const a = rings[r], b = rings[r + 1];
+      const owner = a.seg;
+      for (let k = 0; k < NA; k++) {
+        const k2 = (k + 1) % NA;
+        const p0 = a.row[k], p1 = a.row[k2], p2 = b.row[k2], p3 = b.row[k];
+        fillTri(m, gx(p0[0]), gy(p0[1]), p0[2], p0[3], gx(p1[0]), gy(p1[1]), p1[2], p1[3],
+          gx(p2[0]), gy(p2[1]), p2[2], p2[3], owner);
+        fillTri(m, gx(p0[0]), gy(p0[1]), p0[2], p0[3], gx(p2[0]), gy(p2[1]), p2[2], p2[3],
+          gx(p3[0]), gy(p3[1]), p3[2], p3[3], owner);
       }
     }
-    const axisSpan = Math.hypot(x1 - x0, y1 - y0);
-    const width = wSum / Math.max(1, wN);
-    // How much this digit wants the union treatment, continuous rather than
-    // a hard switch on the same 2.1 threshold: an orbit or a range-of-motion
-    // tour crosses it constantly, and a hard switch pops there. Straddling
-    // it with a band lets a caller cross-fade in rather than cut over.
-    const ratio = axisSpan / Math.max(1e-6, width);
-    const edgeOn = 1 - smoothstep(clamp01((ratio - 1.7) / (2.5 - 1.7)));
-    if (edgeOn <= 0.004) return { use: false, edgeOn: 0 };
-
-    // sample the whole digit's surface and take the radial maximum
-    const pts = [];
-    for (const sg of segs) {
-      const NS = 11, NA = 44;
-      for (let i = 0; i <= NS; i++) {
-        const sv = sg.sMin + (sg.sMax - sg.sMin) * (i / NS);
-        if (thumbBase(sg, sv)) continue;
-        for (let k = 0; k < NA; k++) {
-          const q = digitSurface(rig, d, sg.seg, sv, (k / NA) * Math.PI * 2).P;
-          const p = view.px(q);
-          pts.push([p[0], p[1], view.near(q)]);
+    // Close the pinholes a quad mesh leaves along its own seams, so the walk
+    // follows the outside of the digit and not the inside of a crack.
+    {
+      const t = new Uint8Array(m.cov);
+      for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+        const i = y * W + x;
+        if (t[i]) continue;
+        if (t[i - 1] && t[i + 1]) { m.cov[i] = 1; continue; }
+        if (t[i - W] && t[i + W]) m.cov[i] = 1;
+      }
+    }
+    const border = traceBorder(m);
+    if (!border) return { use: false };
+    // Back to pixels, then filtered: a walk over cells is a staircase, and a
+    // staircase drawn with a pencil is a burr on every step.
+    let pts = border.map(([bx, by]) => [(bx - PAD + 0.5) * cell + x0, (by - PAD + 0.5) * cell + y0]);
+    const N = pts.length;
+    for (let pass = 0; pass < (opts.smooth === undefined ? 4 : opts.smooth); pass++) {
+      const src = pts;
+      pts = new Array(N);
+      for (let i = 0; i < N; i++) {
+        const a = src[(i - 1 + N) % N], b = src[i], c = src[(i + 1) % N];
+        pts[i] = [(a[0] + b[0] * 2 + c[0]) * 0.25, (a[1] + b[1] * 2 + c[1]) * 0.25];
+      }
+    }
+    // Resample by arclength: the walk clusters points on the diagonals.
+    const cum = [0];
+    for (let i = 1; i <= N; i++) {
+      const a = pts[i - 1], b = pts[i % N];
+      cum.push(cum[i - 1] + Math.hypot(b[0] - a[0], b[1] - a[1]));
+    }
+    const total = cum[N];
+    if (!(total > 1)) return { use: false };
+    // one point every few pixels: fine enough that a chord never shows on
+    // a fingertip's curvature, coarse enough that the depth test isn't run
+    // hundreds of times per digit for nothing.
+    const NP = Math.max(64, Math.min(opts.n || 400, Math.round(total / 4)));
+    // Two things pull the walk inside the form it is tracing: it runs on cell
+    // centres, half a cell in, and every smoothing pass shortens a convex
+    // curve a little more. Both are known, so push the whole loop back out
+    // along its own normal rather than leaving the drawing a hair narrow.
+    {
+      let area = 0;
+      for (let i = 0; i < N; i++) {
+        const a = pts[i], b = pts[(i + 1) % N];
+        area += a[0] * b[1] - b[0] * a[1];
+      }
+      const sgn = area > 0 ? 1 : -1;
+      const off = cell * 1.15;
+      const src = pts;
+      pts = new Array(N);
+      for (let i = 0; i < N; i++) {
+        const a = src[(i - 1 + N) % N], b = src[i], c = src[(i + 1) % N];
+        const tx = c[0] - a[0], ty = c[1] - a[1];
+        const L = Math.hypot(tx, ty);
+        if (L < 1e-9) { pts[i] = b; continue; }
+        pts[i] = [b[0] + (ty / L) * off * sgn, b[1] - (tx / L) * off * sgn];
+      }
+    }
+    const out = [];
+    let j = 0;
+    const sample = (px, py) => {
+      const cx2 = Math.round(gx(px)), cy2 = Math.round(gy(py));
+      for (let rad = 0; rad < 4; rad++) {
+        for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) {
+          if (rad > 0 && Math.abs(dx) !== rad && Math.abs(dy) !== rad) continue;
+          const xx = cx2 + dx, yy = cy2 + dy;
+          if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+          const i = yy * W + xx;
+          if (m.cov[i]) return [m.dep[i], m.own[i], m.gn[i]];
         }
       }
+      return [0, segs[0].seg, 1];
+    };
+    for (let i = 0; i <= NP; i++) {
+      const want = (i / NP) * total;
+      while (j < N && cum[j + 1] < want) j++;
+      const a = pts[j % N], b = pts[(j + 1) % N];
+      const seg = Math.max(1e-9, cum[j + 1] - cum[j]);
+      const t = Math.max(0, Math.min(1, (want - cum[j]) / seg));
+      const px = lerp(a[0], b[0], t), py = lerp(a[1], b[1], t);
+      const [dz, own, gn] = sample(px, py);
+      const sg = segs.find(z => z.seg === own) || segs[0];
+      out.push([px, py, dz, sg.pid, gn]);
     }
-    const ro = radialOutline(pts, segs[0].pid, 3, 96);
-    if (!ro.use) return { use: false, edgeOn: 0 };
-    return { use: true, edgeOn, outline: ro.outline, cx: ro.cx, cy: ro.cy, at: ro.at };
+    return { use: true, outline: out, area: total };
   }
+
 
   /**
    * The first web: the commissure between thumb and index. It is a genuine
@@ -2519,7 +2450,7 @@
   GK.rig = {
     FLEX, ABD, TWIST, IDENT, View, solve, abdGate,
     palmSpine, palmSurface, palmNormal, palmThickPalmar, palmThickDorsal, palmWrap,
-    digitSurface, digitNormal, sectionCenter, silhouetteAlphas, digitContour, digitUnion, tipUnion, palmContour, palmSilhouette, webContours, firstWeb,
+    digitSurface, digitNormal, sectionCenter, knuckleRings, digitSilhouette, palmContour, palmSilhouette, webContours, firstWeb,
     PALM_NU, V_KNOTS
   };
 })(window.GK = window.GK || {});
@@ -5716,16 +5647,23 @@
           if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
         }
       };
+      // The surface itself, not any outline built from it: an outline is an
+      // approximation of the boundary and a fingertip's pulp can sit a
+      // millimetre outside whichever one is in use, which is exactly the
+      // clipping this pass exists to prevent.
       for (let d = 0; d < 5; d++) {
-        const c = RG.digitContour(rig, view, d, { steps: 5 });
-        swallow(c.left); swallow(c.right); swallow(c.cap);
-        for (const r of c.rings) swallow(r);
-        // The two union outlines can reach outside the rails they replace -
-        // a fingertip's pulp overhangs the bone it sits on - and framing to
-        // the rails alone clips exactly the digits that are pointing at the
-        // eye, which are the ones the unions exist for.
-        const tu = RG.tipUnion(rig, view, d); if (tu.use) swallow(tu.outline);
-        const du = RG.digitUnion(rig, view, d); if (du.use) swallow(du.outline);
+        for (const sg of rig.digits[d].segs) {
+          if (!sg.rendered) continue;
+          for (let i = 0; i <= 6; i++) {
+            const sv = sg.sMin + (sg.sMax - sg.sMin) * (i / 6);
+            const ring = [];
+            for (let k = 0; k < 12; k++) {
+              const q = RG.digitSurface(rig, d, sg.seg, sv, (k / 12) * TAU).P;
+              ring.push(view.px(q));
+            }
+            swallow(ring);
+          }
+        }
       }
       const fsil = RG.palmSilhouette(rig, view, { nu: 20, nb: 44, u0: -0.44, u1: 1.03 });
       swallow(fsil.sideA); swallow(fsil.sideB); swallow(fsil.cap);
@@ -5967,75 +5905,42 @@
       // hand rather than part of it.
       const webAngles = fw.thSide.map(P => view.px(P));
       for (let d = 0; d < 5; d++) {
-        // A digit pointing at the eye is drawn as one form, not as pieces -
-        // but how compact it reads is a continuous function of the view
-        // (digitUnion.edgeOn), not a threshold, because an orbit or a
-        // range-of-motion tour crosses whatever threshold there were
-        // constantly. So both treatments are drawn through the transition,
-        // the ordinary one fading out as the union fades in, and - the part
-        // a plain cross-fade would still get wrong - the rails and cap are
-        // pulled toward the union's own outline as they go, looked up by
-        // angle about its centroid, so what fades out is already sitting
-        // where what fades in will be, and neither pop is left uncovered
-        // for the other to fill.
-        const un = RG.digitUnion(rig, view, d);
-        const edgeOn = un.edgeOn || 0;
-        if (edgeOn > 0.004) {
-          let outline = un.outline;
+        // One outline per digit, traced from what the digit covers. Every
+        // per-section construction that used to live here - two rails, a tip
+        // cap, a patch for the last bone, a patch for the whole digit, and
+        // the cross-fades holding them apart - answered the same question in
+        // a way that only works while the finger runs across the picture.
+        // A border walk answers it the same way from every direction, and
+        // arrives joined instead of needing to be joined.
+        const sil = RG.digitSilhouette(rig, view, d);
+        if (sil.use) {
+          let outline = sil.outline;
+          // Where the thumb's own edge runs into the first web it is not an
+          // edge: the web is tissue belonging to both, and a finished line
+          // ruled across it is what made the thumb read as a lump set beside
+          // the hand rather than part of it.
           if (d === AN.THUMB) {
             outline = outline.map((p) => {
-              const a = Math.atan2(p[1] - un.cy, p[0] - un.cx);
+              const a = Math.atan2(p[1] - view.h * 0.5, p[0] - view.w * 0.5);
               let near = 9;
               for (const w of webAngles) {
-                const b = Math.atan2(w[1] - un.cy, w[0] - un.cx);
-                let dA = Math.abs(a - b);
-                if (dA > Math.PI) dA = Math.PI * 2 - dA;
-                if (dA < near) near = dA;
+                const dx = p[0] - w[0], dy = p[1] - w[1];
+                const dd = Math.hypot(dx, dy);
+                if (dd < near) near = dd;
               }
-              return [p[0], p[1], p[2], p[3], p[4] * smoothstep(clamp01((near - 0.16) / 0.30))];
+              void a;
+              return [p[0], p[1], p[2], p[3], p[4] * smoothstep(clamp01((near - 5) / 16))];
             });
           }
-          emit(outline, F.st(F.S.contour, { tone: 0.94 * edgeOn, phase: d * 37 + 60 }),
-            { noSearch: true, selfTest: false, maxJump: jumpD });
+          emit(outline, F.st(F.S.contour, { tone: 0.95, phase: d * 37 + 1 }),
+            { maxJump: jumpD });
         }
-        if (edgeOn >= 0.996) continue;
-        const fade = 1 - edgeOn;
-        const bend = edgeOn <= 0.004 ? (pts => pts) : (pts => pts.map((p) => {
-          const u = un.at(Math.atan2(p[1] - un.cy, p[0] - un.cx));
-          return [lerp(p[0], u[0], edgeOn), lerp(p[1], u[1], edgeOn), lerp(p[2], u[2], edgeOn), p[3], p[4]];
-        }));
-        // The whole-digit union answers a digit gone compact. It does not
-        // answer a curled finger seen from the palm, which still spans the
-        // picture while its last bone is dead end-on - there the tip cap is
-        // the silhouette, drawn a size smaller than the tube behind it, and
-        // the finger reads as a tube with a disc laid on top. So the last
-        // bone gets an outline of its own, and whatever rail runs inside it
-        // gives way, since that is the stretch it has replaced.
-        const tu = RG.tipUnion(rig, view, d);
-        const tipMix = (tu.tipOn || 0) * fade;
-        if (tipMix > 0.004) {
-          emit(tu.outline, F.st(F.S.contour, { tone: 0.94 * tipMix, phase: d * 37 + 70 }),
-            { noSearch: true, selfTest: false, maxJump: jumpD });
-        }
-        const yieldTip = tipMix <= 0.004 ? (pts => pts) : (pts => pts.map((p) => {
-          const dx = p[0] - tu.cx, dy = p[1] - tu.cy;
-          const o = tu.at(Math.atan2(dy, dx));
-          const R = Math.hypot(o[0] - tu.cx, o[1] - tu.cy);
-          const k = 1 - tipMix * (1 - smoothstep(clamp01((Math.hypot(dx, dy) / Math.max(1e-6, R) - 0.92) / 0.22)));
-          return [p[0], p[1], p[2], p[3], p[4] * k];
-        }));
-        const c = RG.digitContour(rig, view, d, { steps: 12 });
-        emit(yieldTip(bend(c.right)), F.st(F.S.contour, { tone: fade, phase: d * 37 + 1 }), { maxJump: jumpD });
-        emit(yieldTip(bend(c.left)), F.st(F.S.contour, { tone: fade, phase: d * 37 + 3 }), { maxJump: jumpD });
-        // A ring or a tip cap is only an outline where the tube points away
-        // from the eye. Pointing toward it, the near half of the same tube
-        // covers the far half — and identity exclusion, which is what keeps a
-        // silhouette from occluding itself, would otherwise let it through.
-        if (c.cap.length) emit(bend(c.cap), F.st(F.S.contour, { tone: 0.80 * fade * (1 - tipMix), phase: d * 37 + 2 }),
-          { noSearch: true, selfTest: true, maxJump: jumpD });
-        for (let ri = 0; ri < c.rings.length; ri++) {
-          // where a digit foreshortens, its knuckle ring IS the outline
-          emit(bend(c.rings[ri]), F.st(F.S.contour, { tone: 0.95 * fade, phase: d * 37 + 40 + ri }),
+        // The knuckle is a real step in the outline of a foreshortened digit,
+        // and it is inside the border walk, not on it - so it still has to be
+        // drawn, and still only over the arc where the surface grazes.
+        const rings = RG.knuckleRings(rig, view, d);
+        for (let ri = 0; ri < rings.length; ri++) {
+          emit(rings[ri], F.st(F.S.contour, { tone: 0.95, phase: d * 37 + 40 + ri }),
             { noSearch: true, noGhost: true, selfTest: true, maxJump: jumpD });
         }
       }
