@@ -89,6 +89,32 @@
 
     clear() { this.buf.fill(0); return this; }
 
+    /**
+     * How much graphite already sits around a point, in logical canvas
+     * pixels, read back through the same saturating response resolve() ends
+     * on — so it reads on a plain 0 (bare paper) .. 1 (solid) scale no
+     * matter the grade or supersampling that put it there. A small-radius
+     * mean rather than a single-cell probe, because the question is "is
+     * this neighbourhood getting crowded", not "is this exact pixel dark":
+     * a single fresh line under its own nib should not look saturated to
+     * itself, but a handful of lines converging within a few pixels should.
+     */
+    densityAt(x, y, r) {
+      const { W, H, buf, ss } = this;
+      const R = Math.max(1, Math.round((r === undefined ? 2.5 : r) * ss));
+      const cx = Math.round(x * ss), cy = Math.round(y * ss);
+      const x0 = Math.max(0, cx - R), x1 = Math.min(W - 1, cx + R);
+      const y0 = Math.max(0, cy - R), y1 = Math.min(H - 1, cy + R);
+      if (x1 < x0 || y1 < y0) return 0;
+      let sum = 0;
+      for (let yy = y0; yy <= y1; yy++) {
+        const row = yy * W;
+        for (let xx = x0; xx <= x1; xx++) sum += buf[row + xx];
+      }
+      const mean = sum / ((x1 - x0 + 1) * (y1 - y0 + 1));
+      return 1 - Math.exp(-1.55 * mean);
+    }
+
     /** deposit into the field; x,y in supersampled space */
     splat(x, y, r, amt) {
       const { W, H, buf, tooth } = this;

@@ -102,6 +102,11 @@
       return Math.max(Math.abs(r - l), Math.abs(d - u)) * 0.5;
     }
 
+    /** slope(), addressed by screen pixel like behind() and stepBehind() rather than by cell */
+    slopeAt(x, y) {
+      return this.slope(Math.round(x / this.div - 0.5), Math.round(y / this.div - 0.5));
+    }
+
     /**
      * How hidden is a point at (x, y) lying at depth z on part `id`?
      * Returns 0 (clear) .. 1 (buried), antialiased over the four cells the
@@ -254,6 +259,23 @@
   // =========================================================================
 
   /**
+   * How much a mark should give way to graphite already down nearby — the
+   * paper's own memory of what has already been drawn, read straight out of
+   * the deposition field rather than inferred from geometry. Several
+   * individually reasonable marks (a handful of named palm creases, a ring
+   * of knuckle contour, a field of ridge texture) can each be exactly where
+   * they belong and still converge, from one view, into the same few
+   * screen pixels; nothing about any single one of them is wrong, so
+   * nothing about any single one of them would flag it. What they share is
+   * that the paper under them is getting dark, and that a hand notices.
+   */
+  function crowdGive(g, x, y) {
+    if (!g) return 1;
+    const ink = g.densityAt(x, y, 14);
+    return 1 - 0.97 * smoothstep(clamp01((ink - 0.02) / 0.08));
+  }
+
+  /**
    * Turn a surface curve into screen points with per-point visibility.
    * vis combines the horizon fade with the occlusion test.
    */
@@ -266,6 +288,7 @@
     const ids = opt.ids;
     const myId = cv.on === 'digit' ? ids.digit[cv.d][cv.seg]
       : cv.on === 'palm' ? ids.palm : -1;
+    let prevP = null, prevp = null;
     for (let i = 0; i < n; i++) {
       const q = cv.pts[i];
       let P, N = null;
@@ -290,7 +313,24 @@
         // black band along the silhouette.
         const h0 = opt.horizon === undefined ? 0.015 : opt.horizon;
         vis = smoothstep(clamp01((f - h0) / (h0 > 0.1 ? 0.34 : 0.22)));
+        // Facing isn't the only way a surface compresses: a segment seen
+        // close to end-on foreshortens along its whole LENGTH even where it
+        // still faces the eye well around its girth, and every mark meant to
+        // be spaced out along that length lands on the next one. Compare how
+        // far this step actually moved on the page to how far it moved on
+        // the surface — that ratio drops well before the facing test does,
+        // in exactly this case, because it is sensitive to the direction of
+        // the surface's motion and not just its tilt.
+        if (prevP) {
+          const dWorld = M.vdist(P, prevP);
+          if (dWorld > 1e-6) {
+            const dScreen = Math.hypot(p[0] - prevp[0], p[1] - prevp[1]);
+            const mag = dScreen / (dWorld * view.scale);
+            vis *= smoothstep(clamp01(mag / 0.85));
+          }
+        }
       }
+      prevP = P; prevp = p;
       // The skeleton is construction, not surface: it is drawn through the
       // flesh that contains it, so it takes no occlusion test at all.
       if (cv.xray) { out[i] = [p[0], p[1], 1, near, 0]; continue; }
@@ -298,13 +338,14 @@
       // conflated. A mark on the far side of the surface is simply not in the
       // picture; a mark this side of it that another form covers is
       // construction, and construction is what gets ghosted.
-      let hid = 0, behind = 0;
+      let hid = 0, behind = 0, give = 1;
       if (vis > 0.004) {
         hid = df.hidden(p[0], p[1], near, myId, eps, gap);
         behind = df.behind(p[0], p[1], near, myId);
+        give = crowdGive(opt.g, p[0], p[1]);
       }
       const decay = Math.exp(-Math.max(0, behind - 2) / 11);
-      out[i] = [p[0], p[1], vis * (1 - hid), near, vis * hid * decay];
+      out[i] = [p[0], p[1], vis * (1 - hid) * give, near, vis * hid * decay * give];
     }
     return out;
   }
@@ -497,8 +538,23 @@
         const gain = layerGain[cv.style.layer];
         if (gain !== undefined && gain <= 0.02) continue;
         const fine = FINE_LAYERS[cv.style.layer] || 0;
-        const pp = projectCurve(rig, view, df, cv, { eps, gap, ids, horizon: fine });
-        const tone = gain === undefined ? 1 : clamp(gain, 0, 2);
+        const pp = projectCurve(rig, view, df, cv, { eps, gap, ids, horizon: fine, g });
+        // Fold and crease carry the knuckle's own structure (the crest of a
+        // bent joint, the wrinkle it leaves), toned for where they usually
+        // sit: spaced out across an open hand, with plenty else nearby to
+        // read them against. Over an open patch of paper — nothing else
+        // within reach, which is exactly what a fist seen from above does
+        // to its own knuckle row — that same tone is too little to carry
+        // the line alone, so lean on it harder there. crowdGive already
+        // handles the opposite problem (too much nearby, not too little),
+        // so this only ever adds where the page is still genuinely bare.
+        let press = 1;
+        if ((cv.style.layer === 'fold' || cv.style.layer === 'crease') && pp.length) {
+          const mid = pp[pp.length >> 1];
+          const bare = 1 - clamp01(g.densityAt(mid[0], mid[1], 14) / 0.12);
+          press = lerp(1, 2.8, bare);
+        }
+        const tone = (gain === undefined ? 1 : clamp(gain, 0, 2)) * press;
         for (const r of runs(pp, 0.05, 2)) put(r, cv.style, tone);
 
         if (ghost > 0.01 && cv.style.layer !== 'print' && cv.style.layer !== 'ridge' &&
@@ -540,7 +596,13 @@
           const behind = df.behind(p[0], p[1], p[2], id);
           const step = df.stepBehind(p[0], p[1], p[2], id);
           const merge = step === Infinity ? 1 : 0.16 + 0.84 * smoothstep(clamp01(step / 13));
-          const gain = (p[4] === undefined ? 1 : p[4]) * merge;
+          // A shallow step doesn't always mean a weak edge — two knuckles
+          // pressed together part with almost no depth between them, yet the
+          // surface still turns hard right there. Weight by whichever signal
+          // for "this is a real edge" is stronger: the separation behind it,
+          // or the turn the surface itself is taking underfoot.
+          const turn = smoothstep(clamp01(df.slopeAt(p[0], p[1]) / 0.35));
+          const gain = (p[4] === undefined ? 1 : p[4]) * Math.max(merge, turn) * crowdGive(g, p[0], p[1]);
           const decay = Math.exp(-Math.max(0, behind - 2) / 11);
           return [p[0], p[1], v * gain, p[2], (1 - v) * decay * gain, gain, id];
         });
