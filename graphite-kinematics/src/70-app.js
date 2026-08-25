@@ -20,6 +20,7 @@
     motion: 'still',
     contacts: true,
     manipulate: false,
+    ball: 0,                    // radius in mm of something held; 0 = nothing
     artic: { curl: 0, spread: 0, opposition: 0, arch: 0, wristFlex: 0, wristDev: 0, pronation: 0 },
     // a mild oblique reads far better than a flat dorsal view: a curled
     // pose seen straight on foreshortens into a stack of rings
@@ -43,6 +44,7 @@
   let lastBuilt = null, lastMs = 0, lastQuality = 0;
   let dragging = false, dragX = 0, dragY = 0;
   let grab = null;              // the digit currently held, if any
+  let ballKey = null, ballPose = null;
 
   const cloneSpec = (s) => JSON.parse(JSON.stringify(s));
 
@@ -71,8 +73,28 @@
     return PO.clampPose(A, PO.mk(A, s));
   }
 
+  /**
+   * Closing the hand on something takes a couple of hundred milliseconds - it
+   * is a settle inside a settle - so it is worked out when the hand or the
+   * ball changes and not once a frame. Not while a fingertip is being dragged
+   * either: re-gripping every frame would drag the finger and then take it
+   * straight back.
+   */
+  function heldFor(A) {
+    if (!(params.ball > 0)) { ballKey = null; ballPose = null; return null; }
+    const key = params.seed + '|' + params.ball + '|' + JSON.stringify(spec) +
+      '|' + JSON.stringify(params.artic);
+    if (key !== ballKey && !grab) {
+      ballPose = PO.holdBall(A, effectivePose(A), params.ball);
+      ballKey = key;
+    }
+    return ballPose;
+  }
+
   /** the pose after motion is applied */
   function posedFor(A) {
+    const held = heldFor(A);
+    if (held && params.motion === 'still') return held;
     if (params.motion === 'rom') return PO.romTour(A, tAnim * 0.045 * params.speed, effectivePose(A));
     if (params.motion === 'breathe') return PO.breathe(A, effectivePose(A), tAnim * params.speed, 1);
     if (params.motion === 'cycle') {
@@ -87,11 +109,15 @@
     const A = renderer.anatomyFor(params.seed);
     const pose = posedFor(A);
     const t0 = performance.now();
+    const held = pose.ball ? pose : null;
     const built = renderer.draw({
       seed: params.seed, pose,
+      ball: held ? held.ball : null,
       view: params.view,
       style: params.style,
-      contacts: params.contacts,
+      // holdBall has already settled the hand against the ball and against
+      // itself; settling again here, with no notion of the ball, undoes it
+      contacts: held ? false : params.contacts,
       detail: quality === 0 ? {
         print: params.detail.print * 0.55, ridge: params.detail.ridge * 0.45,
         lattice: params.detail.lattice * 0.5, hair: params.detail.hair * 0.6,
@@ -483,6 +509,8 @@
     slider(art, 'wristFlex', 'Wrist flexion', -1, 1, 0.01, 0, f2, v => params.artic.wristFlex = v);
     slider(art, 'wristDev', 'Wrist deviation', -1, 1, 0.01, 0, f2, v => params.artic.wristDev = v);
     slider(art, 'pronation', 'Forearm rotation', -1, 1, 0.01, 0, f2, v => params.artic.pronation = v);
+    slider(art, 'ball', 'Hold a ball (mm)', 0, 50, 1, 0, v => Math.round(v) + 'mm',
+      v => { params.ball = v; ballKey = null; });
     const man = document.createElement('label');
     man.className = 'check';
     man.innerHTML = '<input type="checkbox"><span>Drag the fingertips</span>';
