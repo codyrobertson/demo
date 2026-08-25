@@ -1528,16 +1528,34 @@
   function palmThickDorsal(A, u, v) {
     const S = A.size;
     const kn = A.__knuckle || [0, 0, 0, 0];
-    let t = 4.4;
+    // Padding, and it thins at both ends. Toward the wrist because the
+    // tendons run straight over the carpus with nothing under them; toward
+    // the knuckles because the metacarpal heads are subcutaneous, which is
+    // the whole reason a knuckle shows at all. Carried at full depth to the
+    // distal edge it swallowed the base of the proximal phalanx - measured
+    // at rest, the little finger's knuckle sat 3mm inside the palm's own
+    // solid, and in a cupped hand 4.6mm.
+    let base = 4.4;
+    base *= lerp(0.46, 1.0, smoothstep(clamp01((u + 0.30) / 0.56)));
+    base *= lerp(1.0, 0.26, smoothstep(clamp01((u - 0.86) / 0.22)));
+    // and thinnest of all over the fifth head, which is the most
+    // subcutaneous bone on the hand - it is the one that breaks in a
+    // boxer's fracture, and the one whose knuckle stands proudest
+    base *= lerp(1.0, 0.62, smoothstep(clamp01((v - 0.70) / 0.32)) *
+      smoothstep(clamp01((u - 0.80) / 0.24)));
+    // the shafts of the metacarpals show through as low ridges
+    base += 0.9 * Math.pow(Math.abs(Math.cos(Math.PI * 3 * v)), 3) *
+      M.smoothstep(clamp01((v + 0.20) / 0.28)) *
+      (1 - smoothstep(clamp01((u - 0.86) / 0.20)));
+    // and the heads themselves sit on top of it, at their own depth: they
+    // are bone, so they do not thin with the padding around them
+    let t = base;
     for (let i = 0; i < 4; i++) {
       const vc = i / 3;
       t += (1.1 + 4.4 * kn[i]) * A.knuckles.prominence *
         Math.exp(-Math.pow((u - 0.985) / 0.145, 2)) *
         Math.exp(-Math.pow((v - vc) / 0.155, 2));
     }
-    // the shafts of the metacarpals show through as low ridges
-    t += 0.9 * Math.pow(Math.abs(Math.cos(Math.PI * 3 * v)), 3) * M.smoothstep(clamp01((v + 0.20) / 0.28));
-    t *= lerp(0.46, 1.0, smoothstep(clamp01((u + 0.30) / 0.56)));
     return Math.max(0.8, t) * S * A.palm.padding;
   }
 
