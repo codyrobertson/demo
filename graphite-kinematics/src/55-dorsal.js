@@ -320,7 +320,9 @@
     { p: [-4, -1.5, -0.5], r: [5.4, 5.0, 4.6] },  // lunate
     { p: [-5, 6.0, 0.0], r: [4.8, 4.4, 4.4] },    // triquetrum
     { p: [-4, 7.0, 5.6], r: [3.4, 3.2, 3.0] },    // pisiform
-    { p: [7, -10.5, 2.0], r: [5.6, 4.6, 4.4] },   // trapezium
+    // the trapezium carries the thumb's saddle: it sits well radial and
+    // palmar of the rest of the distal row, up against the base of MC1
+    { p: [6, -16.0, 5.5], r: [5.6, 4.6, 4.4] },   // trapezium
     { p: [7, -5.0, -1.0], r: [4.2, 3.8, 3.8] },   // trapezoid
     { p: [6, 0.5, 0.0], r: [6.4, 5.2, 5.2] },     // capitate
     { p: [5, 7.5, 1.5], r: [5.6, 4.8, 4.8] }      // hamate
