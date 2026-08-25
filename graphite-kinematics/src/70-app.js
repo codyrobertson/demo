@@ -19,6 +19,7 @@
     speed: 1,
     motion: 'still',
     contacts: true,
+    manipulate: false,
     artic: { curl: 0, spread: 0, opposition: 0, arch: 0, wristFlex: 0, wristDev: 0, pronation: 0 },
     // a mild oblique reads far better than a flat dorsal view: a curled
     // pose seen straight on foreshortens into a stack of rings
@@ -41,6 +42,7 @@
   let cycleFrom = null, cycleTo = null, cycleT = 0;
   let lastBuilt = null, lastMs = 0, lastQuality = 0;
   let dragging = false, dragX = 0, dragY = 0;
+  let grab = null;              // the digit currently held, if any
 
   const cloneSpec = (s) => JSON.parse(JSON.stringify(s));
 
@@ -119,6 +121,7 @@
   /** annotations ride on top of the graphite, in the browser's own type */
   function afterDraw() {
     if (params.layers.label && lastBuilt) drawLabels();
+    if (params.manipulate && lastBuilt) drawHandles();
     updateReadout();
   }
 
@@ -232,14 +235,115 @@
     }
   };
 
+  // --------------------------------------------------------- manipulation
+  /**
+   * Take hold of a fingertip and pull.
+   *
+   * The projection is orthographic, so a cursor unprojects exactly onto the
+   * plane through the tip that faces the eye: drag in the picture and the tip
+   * follows in the picture, at the depth it already had. Everything after
+   * that is the reach solver, run a few iterations per frame - it starts from
+   * where the hand already is, so a handful of steps a frame tracks a cursor
+   * without the finger ever visibly catching up.
+   *
+   * Contacts are left to the renderer, which settles the pose it is given.
+   * That is what makes a dragged finger stop against its neighbours instead
+   * of passing through them, and it is worth doing it that way round: the
+   * solver answers where you asked for, the settle answers where a hand can
+   * actually be.
+   */
+  const builtSize = () => (lastQuality === 0 ? DRAFT : SIZE);
+
+  function handles() {
+    if (!lastBuilt) return [];
+    const { rig, view } = lastBuilt;
+    const k = SIZE / builtSize();
+    const out = [];
+    for (let d = 0; d < 5; d++) {
+      const P = rig.digits[d].tip;
+      const p = view.px(P);
+      out.push({ d, P, x: p[0] * k, y: p[1] * k, name: rig.digits[d].name });
+    }
+    return out;
+  }
+
+  function pickHandle(mx, my) {
+    let best = null, bd = 32 * 32;
+    for (const h of handles()) {
+      const dx = h.x - mx, dy = h.y - my, dd = dx * dx + dy * dy;
+      if (dd < bd) { bd = dd; best = h; }
+    }
+    return best;
+  }
+
+  /** cursor to world, on the plane through P that faces the eye */
+  function unproject(mx, my, P) {
+    const v = lastBuilt.view, k = builtSize() / SIZE;
+    const a = (mx * k - v.cx) / v.scale;
+    const b = -(my * k - v.cy) / v.scale;
+    const c = M.vdot(P, v.e);
+    return M.vadd(M.vmul(v.r, a), M.vadd(M.vmul(v.u, b), M.vmul(v.e, c)));
+  }
+
+  /** fold the articulation offsets into the spec, so dragging edits one thing */
+  function bakeArtic() {
+    const A = rFull.anatomyFor(params.seed);
+    spec = PO.specOf(A, effectivePose(A));
+    resetArtic();
+  }
+
+  function dragTo(mx, my, iters) {
+    const A = rFull.anatomyFor(params.seed);
+    const target = unproject(mx, my, grab.P);
+    const posed = PO.reach(A, PO.clampPose(A, PO.mk(A, spec)), grab.d, target, { iters });
+    spec = PO.specOf(A, posed);
+    grab.P = RG.solve(A, posed).digits[grab.d].tip;
+    grab.err = posed.reachError;
+    syncDOF();
+    markDirty();
+  }
+
+  /** the handles themselves, drawn over the graphite in the browser's own ink */
+  function drawHandles() {
+    const hs = handles();
+    ctx.save();
+    for (const h of hs) {
+      const held = grab && grab.d === h.d;
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, held ? 11 : 7, 0, Math.PI * 2);
+      ctx.fillStyle = held ? 'rgba(217,119,87,0.90)' : 'rgba(217,119,87,0.20)';
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = held ? 'rgba(217,119,87,1)' : 'rgba(217,119,87,0.55)';
+      ctx.stroke();
+    }
+    if (grab) {
+      ctx.font = '500 12px Poppins, sans-serif';
+      ctx.fillStyle = 'rgba(217,119,87,0.95)';
+      const h = hs[grab.d];
+      ctx.fillText(h.name + (grab.err > 1.5 ? '  ' + grab.err.toFixed(0) + 'mm short' : ''),
+        h.x + 15, h.y - 12);
+    }
+    ctx.restore();
+  }
+
   // ------------------------------------------------------------- interaction
   const overCanvas = () => mouseX >= 0 && mouseY >= 0 && mouseX <= SIZE && mouseY <= SIZE;
   window.mousePressed = function () {
     if (!overCanvas()) return;
+    if (params.manipulate) {
+      const h = pickHandle(mouseX, mouseY);
+      if (h) { bakeArtic(); grab = { d: h.d, P: h.P, err: 0 }; return false; }
+    }
     dragging = true; dragX = mouseX; dragY = mouseY;
   };
-  window.mouseReleased = function () { dragging = false; };
+  window.mouseReleased = function () {
+    // one longer solve on release, so letting go lands where you were aiming
+    if (grab) { dragTo(mouseX, mouseY, 24); grab = null; markDirty(); }
+    dragging = false;
+  };
   window.mouseDragged = function () {
+    if (grab) { dragTo(mouseX, mouseY, 5); return false; }
     if (!dragging) return;
     params.view.az -= (mouseX - dragX) * 0.0075;
     params.view.el = clamp(params.view.el + (mouseY - dragY) * 0.0060, -1.35, 1.35);
@@ -379,6 +483,15 @@
     slider(art, 'wristFlex', 'Wrist flexion', -1, 1, 0.01, 0, f2, v => params.artic.wristFlex = v);
     slider(art, 'wristDev', 'Wrist deviation', -1, 1, 0.01, 0, f2, v => params.artic.wristDev = v);
     slider(art, 'pronation', 'Forearm rotation', -1, 1, 0.01, 0, f2, v => params.artic.pronation = v);
+    const man = document.createElement('label');
+    man.className = 'check';
+    man.innerHTML = '<input type="checkbox"><span>Drag the fingertips</span>';
+    man.querySelector('input').addEventListener('change', (e) => {
+      params.manipulate = e.target.checked;
+      if (!params.manipulate) grab = null;
+      markDirty();
+    });
+    art.appendChild(man);
     buildDOF($('dof-sliders'));
 
     const vw = $('view-sliders'); vw.innerHTML = '';
@@ -576,6 +689,11 @@
       if (btn) btn.disabled = false;
     }
   };
+
+  // A small seam for the headless driver: where the handles actually are on
+  // the plate. Guessing at them from outside made a drag test that passed by
+  // doing nothing.
+  GK.app = { handles, pick: pickHandle, params: () => params };
 
   window.addEventListener('load', () => { updateSeedDisplay(); });
 })(window.GK = window.GK || {});

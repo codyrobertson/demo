@@ -610,6 +610,58 @@
   }
 
   /**
+   * Pull one digit to a point in space.
+   *
+   * The same damped Jacobian transpose the contacts use, except the error is
+   * a displacement rather than a penetration depth, so it has three
+   * components instead of one and the step length is solved for rather than
+   * guessed: for J-transpose the best step along the gradient has a closed
+   * form, and using it is the difference between a finger that follows the
+   * cursor and one that crawls.
+   *
+   * Every joint stays sprung toward the pose that was asked for, at a fraction
+   * of the contact solver's pull. Without it a dragged fingertip will happily
+   * unwind the whole chain to gain a millimetre it cannot reach, and let go
+   * of a pose the moment you touch it.
+   */
+  function reach(A, pose, d, target, opts) {
+    opts = opts || {};
+    const iters = opts.iters === undefined ? 30 : opts.iters;
+    const tol = opts.tol === undefined ? 0.3 : opts.tol;
+    const kappa = opts.kappa === undefined ? 0.02 : opts.kappa;
+    const p0 = JSON.parse(JSON.stringify(pose));
+    let p = JSON.parse(JSON.stringify(pose));
+    let err = 1e9;
+    for (let it = 0; it < iters; it++) {
+      const rig = GK.rig.solve(A, p);
+      const tip = rig.digits[d].tip;
+      const e = M.vsub(target, tip);
+      err = M.vlen(e);
+      if (err < tol) break;
+      const dofs = jointDofs(rig, p, d);
+      if (!dofs.length) break;
+      // J is the tip's velocity per unit of each joint's rotation
+      const g = new Array(dofs.length);
+      let v = [0, 0, 0];
+      for (let i = 0; i < dofs.length; i++) {
+        const x = dofs[i];
+        const j = M.vcross(x.axis, M.vsub(tip, x.O));
+        g[i] = M.vdot(j, e);
+        v = M.vadd(v, M.vmul(j, x.w * g[i]));
+      }
+      const vv = M.vdot(v, v);
+      if (vv < 1e-9) break;
+      const step = M.vdot(e, v) / vv;
+      for (let i = 0; i < dofs.length; i++) dofs[i].add(step * dofs[i].w * g[i]);
+      const a = p.digits[d], b = p0.digits[d];
+      for (const k in a) if (typeof a[k] === 'number') a[k] += (b[k] - a[k]) * kappa;
+      p = clampPose(A, p);
+    }
+    p.reachError = err;
+    return p;
+  }
+
+  /**
    * Settle a pose against its own contacts. Returns a corrected copy; the
    * deepest remaining penetration is reported on `.contactDepth`.
    */
@@ -647,7 +699,7 @@
 
   GK.pose = {
     blank, mk, clampPose, specOf, preset, PRESETS, PRESET_KEYS, couple, generate,
-    resolveContacts, gatherContacts, jointDofs,
+    resolveContacts, gatherContacts, jointDofs, reach,
     lerpPose, dofList, romTour, breathe, readout, nr
   };
 })(window.GK = window.GK || {});
