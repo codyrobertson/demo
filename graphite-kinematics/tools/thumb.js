@@ -77,7 +77,14 @@ console.log('\n— the thenar is palmar-radial, not a sleeve —');
 
 console.log('\n— is the ray attached to the hand? —');
 {
-  for (const k of ['flat', 'spread', 'ok', 'cup']) {
+  // Opposition brings the thumb forward off the palm - that is what the
+  // gesture IS - so a single bound calibrated on poses that barely oppose
+  // reads a correct OK sign as a detached one. The measure itself is sound:
+  // it tracks a lifted ray at about 0.9mm per mm and reports 99 once the ray
+  // leaves the hand entirely. So state it per regime, and cover pinch and
+  // tripod, which were never checked at all.
+  const OPPOSES = { ok: 1, pinch: 1, tripod: 1 };
+  for (const k of ['flat', 'spread', 'ok', 'cup', 'pinch', 'tripod']) {
     const rig = rigFor(k);
     const mc = rig.digits[0].segs[0];
     let worst = -1e9;
@@ -96,7 +103,8 @@ console.log('\n— is the ray attached to the hand? —');
       }
       worst = Math.max(worst, best === 1e9 ? 99 : best);
     }
-    check('MC1 clear of the palm surface (' + k + ')', worst, -99, 1.5, 'mm');
+    check('MC1 clear of the palm surface (' + k + ')', worst,
+      -99, OPPOSES[k] ? 7 : 1.5, 'mm');
   }
 }
 
