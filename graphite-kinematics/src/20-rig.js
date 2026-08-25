@@ -198,11 +198,24 @@
           digit: d, seg, name: bone.segNames[seg],
           A: start, B: end, len, frame,
           t: frame[0], ul: frame[1], pa: frame[2], dor: vmul(frame[2], -1),
-          // The proximal phalanx begins a little *before* its joint, so its
-          // condyle plugs into the end of the palm. That condyle is the
-          // knuckle: it has to belong to the digit, or the palm's own solid
-          // swallows it and a fist comes out with no knuckles at all.
-          sMin: seg === 1 ? -0.12 : 0,
+          // Every segment begins a little *before* its own joint, and how much
+          // before depends on how hard that joint is bent.
+          //
+          // A joint is two cylinders hinged together, and on the OUTSIDE of a
+          // bend their ends part company: to keep the two solids reading as
+          // one across a bend of angle t, the distal one has to reach back
+          // about r * tan(t/2) past the hinge. At zero it costs nothing, which
+          // is why this went unnoticed - a relaxed hand is fine. Hard flexed
+          // it is most of a phalanx: measured on a maximal clench, the depth
+          // field had open pipe ends where the knuckles should be, occlusion
+          // failed in every one of those gaps, and the drawing came out as a
+          // scatter of separate sausages rather than a fist.
+          //
+          // The proximal phalanx carries an extra fixed amount on top, because
+          // its condyle has to plug into the end of the palm. That condyle is
+          // the knuckle: it has to belong to the digit, or the palm's own
+          // solid swallows it and a fist comes out with no knuckles at all.
+          sMin: seg === 0 ? 0 : -((seg === 1 ? 0.12 : 0) + jointReach(A, d, seg, len, joints[seg].flex)),
           sMax: isLast ? 1 + AN.tipExtent(A, d) : 1,
           rendered: seg > 0 || d === AN.THUMB
         });
@@ -686,6 +699,23 @@
     const gn = g * un;
     const t = [f.u[0] * g - N[0] * gn, f.u[1] * g - N[1] * gn, f.u[2] * g - N[2] * gn];
     return vnorm([N[0] - t[0], N[1] - t[1], N[2] - t[2]]);
+  }
+
+  /**
+   * How far a segment reaches back past its own joint, as a fraction of its
+   * length, so that its solid and its parent's stay one solid through a bend.
+   *
+   * Capped, because the geometric answer runs away as the bend approaches a
+   * right angle and beyond - and because reaching back too far pushes the
+   * narrower distal bone out through the palmar side of the wider one on the
+   * INSIDE of the bend, which trades a hole for a lump.
+   */
+  function jointReach(A, d, seg, len, flex) {
+    const bend = clamp(flex, 0, 2.4);
+    if (bend < 0.05) return 0;
+    const pr = AN.segmentProfile(A, d, seg, 0);
+    const r = Math.max(pr[0], pr[1]);
+    return Math.min(0.34, 0.62 * r * Math.tan(bend * 0.5) / Math.max(1e-6, len));
   }
 
   /** section centre of a digit segment, including any offset from segmentProfile */

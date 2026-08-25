@@ -216,14 +216,14 @@
         if (!sg.rendered) continue;
         const id = ids.digit[d][sg.seg];
         const NS = sg.seg === dg.segs.length - 1 ? 11 : 8;
-        let prev = null;
+        let prev = null, first = null, firstAx = null, lastAx = null;
         for (let i = 0; i <= NS; i++) {
           const s = sg.sMin + (sg.sMax - sg.sMin) * (i / NS);
           const ring = [];
+          const axis = vmad(sg.A, sg.t, sg.len * s);
           for (let k = 0; k < NA; k++) {
             const a = (k / NA) * TAU;
             const q = RG.digitSurface(rig, d, sg.seg, s, a);
-            const axis = vmad(sg.A, sg.t, sg.len * s);
             const P = M.vlerp(axis, q.P, shrink);
             const p = view.px(P);
             ring.push([p[0], p[1], view.near(P)]);
@@ -232,8 +232,22 @@
             const k2 = (k + 1) % NA;
             df.quad(prev[k], prev[k2], ring[k2], ring[k], id);
           }
+          if (!first) { first = ring; firstAx = view.px(axis).concat(view.near(axis)); }
+          lastAx = view.px(axis).concat(view.near(axis));
           prev = ring;
         }
+        // Close both ends. A tube built as quads between rings is a pipe, not
+        // a solid: seen down its own axis the depth field looks straight
+        // through the near wall and writes the far one, so anything in front
+        // of that opening tests as unoccluded and is drawn. A hard-flexed
+        // finger points every one of its joints at the eye from somewhere,
+        // which is why a clenched fist came out as a scatter of separate
+        // sausages with lines crossing through them.
+        const cap = (ring, ax) => {
+          for (let k = 0; k < NA; k++) df.quad(ax, ring[k], ring[(k + 1) % NA], ax, id);
+        };
+        if (first) cap(first, firstAx);
+        if (prev) cap(prev, lastAx);
       }
     }
     // The first web, as the wedge it actually is: a palmar face and a
@@ -694,11 +708,22 @@
           const merge = step === Infinity ? 1 : 0.16 + 0.84 * smoothstep(clamp01(step / 13));
           // A shallow step doesn't always mean a weak edge — two knuckles
           // pressed together part with almost no depth between them, yet the
-          // surface still turns hard right there. Weight by whichever signal
-          // for "this is a real edge" is stronger: the separation behind it,
-          // or the turn the surface itself is taking underfoot.
+          // surface still turns hard right there. So the turn the surface is
+          // taking underfoot can rescue an edge the separation alone would
+          // have thrown away.
+          //
+          // But only so far. Taken at equal weight this term is not a rescue,
+          // it is an override: a silhouette sits by definition where the
+          // depth field falls off a cliff, so the slope is always steep there
+          // and the max always picked it. Every contour in the drawing came
+          // out at full strength and the separation behind it decided
+          // nothing. That is why a clenched fist read as five separate
+          // sausages - the outer boundary of the hand and the seam between
+          // two fingers pressed together were the same black line, and
+          // nothing said which was which.
           const turn = smoothstep(clamp01(df.slopeAt(p[0], p[1]) / 0.35));
-          const gain = (p[4] === undefined ? 1 : p[4]) * Math.max(merge, turn) * crowdGive(g, p[0], p[1]);
+          const gain = (p[4] === undefined ? 1 : p[4]) *
+            Math.max(merge, 0.45 * turn) * crowdGive(g, p[0], p[1]);
           const decay = Math.exp(-Math.max(0, behind - 2) / 11);
           return [p[0], p[1], v * gain, p[2], (1 - v) * decay * gain, gain, id];
         });
