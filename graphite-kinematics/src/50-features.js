@@ -37,6 +37,10 @@
     vein: { tone: 0.22, weight: 0.58, passes: 1, taper: 0.86, wobble: 0.85, jitter: 0.35, layer: 'vein' },
     hair: { tone: 0.21, weight: 0.42, passes: 1, taper: 0.90, wobble: 0.60, jitter: 0.15, layer: 'hair' },
     hatch: { tone: 0.10, weight: 0.40, passes: 1, taper: 0.70, wobble: 0.90, jitter: 0.20, layer: 'hatch' },
+    // form modelling: its own layer, because tone that describes a solid is
+    // not the same job as the lattice of the skin over it, and must not be
+    // turned down with it
+    model: { tone: 0.52, weight: 0.54, passes: 1, taper: 0.82, wobble: 1.15, jitter: 0.30, layer: 'model' },
     bone: { tone: 0.30, weight: 0.60, passes: 1, taper: 0.60, wobble: 0.70, jitter: 0.30, layer: 'bone' }
   };
   /**
@@ -897,6 +901,219 @@
     }
   }
 
+
+  // =========================================================================
+  //  F2 · THE FORM OF A DIGIT, AS TONE
+  // =========================================================================
+
+  /**
+   * Where the light comes from.
+   *
+   * Two parts, and both are needed. A lamp fixed to the hand is what makes
+   * the hand and whatever it is holding answer to one light, and what gives a
+   * pose its own consistent modelling however it is turned. On its own it
+   * fails badly: fixed to the hand, the light ends up behind the camera from
+   * some directions, and a form lit down the axis you are looking along has
+   * no visible shadow at all. Measured on a resting hand at azimuth 250, one
+   * section in sixty-four came out both turned from the light and facing the
+   * eye - the fingers drew as bare tubes, which is the complaint this exists
+   * to answer.
+   *
+   * So most of it is a studio light instead: sixty-odd degrees off the camera
+   * axis, and the offset mostly sideways rather than up. That matters more
+   * than it sounds - fingers run up the page, so a light raised above the
+   * camera is displaced ALONG the form, and a terminator along the form is
+   * one nobody can see. Raked across instead, it cuts every finger at a
+   * slant. Left and a little high, which is where a right-handed draughtsman
+   * puts the lamp so their own hand does not shadow the page.
+   */
+  function lightDir(rig, view) {
+    const hand = M.vnorm(M.vadd(M.vmul(rig.root[0], -0.18),
+      M.vadd(M.vmul(rig.root[1], -0.86), M.vmul(rig.root[2], 0.48))));
+    if (!view || !view.u) return hand;
+    // Seventy-five degrees, not forty-five. On a cylinder the drawable
+    // shadow runs from the terminator to the silhouette, and how much of the
+    // page that covers falls away fast as the lamp swings toward the camera:
+    // at forty-five degrees it is the outer sixth of a finger's width, which
+    // reads as a line drawn beside the edge rather than as a form turning.
+    // At seventy-five it is nearly two thirds, and the finger goes round.
+    const key = M.vnorm(M.vadd(M.vmul(view.e, 0.26),
+      M.vadd(M.vmul(view.u, 0.36), M.vmul(view.r, -0.90))));
+    return M.vnorm(M.vlerp(hand, key, 0.80));
+  }
+
+  /**
+   * A finger is a cylinder, and nothing in an outline says so.
+   *
+   * Two rails and a dome are the same drawing whether the form between them
+   * is round, flat or hollow - which is why a finger drawn as outline alone
+   * reads as a length of pipe. What says "round" is tone: a band that begins
+   * at the terminator, deepens as the surface turns away, and eases off again
+   * right at the edge, where light bouncing back off whatever the hand is
+   * over creeps round the form. That last easing is the whole of it. A shadow
+   * running solid to the silhouette flattens the finger into a cut-out; a
+   * shadow that lifts before it gets there puts air behind the form.
+   *
+   * Two things have to be got right about where the marks go.
+   *
+   * The band is the arc that is turned from the light AND still facing the
+   * eye - not the arc that is dark. Most of what is dark is round the back,
+   * and a stroke put there costs the same as one on the paper and is thrown
+   * away by the visibility test.
+   *
+   * And within that arc, marks are spaced by how much of the PAGE each step
+   * covers rather than by angle. The far end of the band is turning away, so
+   * it projects to a sliver; spread evenly round the section, every stroke
+   * piles against the silhouette in a stack that reads as a liner drawn round
+   * the edge. Spaced by projected width, the shadow opens out across the
+   * finger the way it does on the thing itself.
+   *
+   * Built as an accumulation rather than a value: three passes over the same
+   * band, each shorter and narrower than the last, so the paper ends up with
+   * one stroke in the half-light, two where it turns and three in the core.
+   */
+  function digitShading(rig, view, out, amount) {
+    const A = rig.anatomy;
+    const amt = amount === undefined ? 1 : amount;
+    if (amt <= 0.02) return;
+    const rngRoot = new M.Rng(A.seed ^ 0x7a11);
+    const L = lightDir(rig, view);
+    const NA = 64, HZ = 0.12;
+
+    const bandAt = (d, seg, s) => {
+      const lam = new Float64Array(NA), fac = new Float64Array(NA);
+      let any = false;
+      for (let k = 0; k < NA; k++) {
+        const n = R.digitNormal(rig, d, seg, s, (k / NA) * Math.PI * 2);
+        lam[k] = M.vdot(n, L);
+        fac[k] = view ? M.vdot(n, view.e) : 1;
+        if (lam[k] < 0.02 && fac[k] > HZ) any = true;
+      }
+      if (!any) return null;
+      const wrap = (k) => ((k % NA) + NA) % NA;
+      const ok = (k) => lam[wrap(k)] < 0.02 && fac[wrap(k)] > HZ;
+      let k0 = 0;
+      while (!ok(k0)) k0++;
+      let g = 0;
+      while (ok(k0 - 1) && g++ < NA) k0--;
+      let k1 = k0; g = 0;
+      while (ok(k1 + 1) && g++ < NA) k1++;
+      if (k1 - k0 < 2) return null;
+      const T = Math.PI * 2 / NA;
+      // run the band from the terminator - the end the light has only just
+      // left - toward the silhouette, so a fraction across it means the same
+      // thing at every section along the bone
+      const flip = Math.abs(lam[wrap(k0)]) >= Math.abs(lam[wrap(k1)]);
+      const ks = [], cum = [0];
+      for (let k = k0; k <= k1; k++) ks.push(flip ? k1 - (k - k0) : k);
+      for (let i = 1; i < ks.length; i++) {
+        cum.push(cum[i - 1] + Math.max(0.05, fac[wrap(ks[i])]));
+      }
+      const total = cum[cum.length - 1] || 1;
+      let lo = 9;
+      for (const k of ks) lo = Math.min(lo, lam[wrap(k)]);
+      const alphaOf = (t) => {
+        const want = clamp01(t) * total;
+        let i = 0;
+        while (i < cum.length - 2 && cum[i + 1] < want) i++;
+        const f = (want - cum[i]) / Math.max(1e-9, cum[i + 1] - cum[i]);
+        return (ks[i] + (ks[i + 1] - ks[i]) * f) * T;
+      };
+      return { alphaOf, lo };
+    };
+
+    for (let dd = 0; dd < 5; dd++) {
+      const rng = rngRoot.fork(dd * 11 + 5);
+      for (const sg of rig.digits[dd].segs) {
+        if (!sg.rendered) continue;
+        // The thumb's metacarpal is thenar mass. The palm models it; a
+        // cylinder's shading laid over it would carve a tube out of the ball
+        // of the thumb, which is the one place on a hand there isn't one.
+        if (dd === AN.THUMB && sg.seg === 0) continue;
+        // read the band at a few stations, so a stroke can follow the
+        // terminator as it walks round a bending bone
+        const NB = 5, stn = [];
+        for (let i = 0; i <= NB; i++) {
+          const sv = lerp(sg.sMin, Math.min(sg.sMax, 1.02), i / NB);
+          stn.push({ sv, b: bandAt(dd, sg.seg, sv) });
+        }
+        const have = stn.filter(z => z.b);
+        if (have.length < 3) continue;
+        for (const z of stn) if (!z.b) z.b = have[0].b;
+        const lo = have.reduce((m, z) => Math.min(m, z.b.lo), 9);
+        const depth = clamp01(-lo / 0.9);
+
+        const alphaAt = (sv, t) => {
+          let i = 0;
+          while (i < stn.length - 2 && stn[i + 1].sv < sv) i++;
+          let a = stn[i].b.alphaOf(t), b = stn[i + 1].b.alphaOf(t);
+          while (b - a > Math.PI) b -= Math.PI * 2;
+          while (a - b > Math.PI) b += Math.PI * 2;
+          const f = clamp01((sv - stn[i].sv) / Math.max(1e-6, stn[i + 1].sv - stn[i].sv));
+          return lerp(a, b, f);
+        };
+        // up out of the light at the terminator, held through the turn, and
+        // lifted again at the very edge for the light coming back round
+        const value = (t) => M.smoothstep(clamp01(t / 0.30)) *
+          (1 - 0.55 * M.smoothstep(clamp01((t - 0.80) / 0.20)));
+
+        const PASS = [
+          { n: 8, t0: 0.02, t1: 0.98, span: [0.06, 0.96], tone: 0.62 },
+          { n: 6, t0: 0.20, t1: 0.90, span: [0.18, 0.88], tone: 0.74 },
+          { n: 4, t0: 0.36, t1: 0.80, span: [0.28, 0.78], tone: 0.90 },
+        ];
+        for (let p = 0; p < PASS.length; p++) {
+          const P = PASS[p];
+          if (depth < p * 0.20) continue;
+          const n = Math.max(2, Math.round(P.n * (0.55 + 0.45 * depth) * amt));
+          for (let i = 0; i < n; i++) {
+            const t = P.t0 + (P.t1 - P.t0) * ((i + 0.5) / n) + rng.sym(0.030);
+            const v = value(clamp01(t));
+            if (v < 0.10) continue;
+            const s0 = lerp(sg.sMin, sg.sMax, P.span[0] + rng.f() * 0.18);
+            const s1 = lerp(sg.sMin, sg.sMax, P.span[1] - rng.f() * 0.18);
+            if (s1 - s0 < 0.12) continue;
+            const pts = [];
+            const NP = 12;
+            for (let k = 0; k <= NP; k++) {
+              const q = k / NP;
+              const sv = lerp(s0, s1, q);
+              // each stroke wanders off the band's own parallel: a set of
+              // exact parallels is a screen, not a shadow
+              const drift = rng.sym(0.034) * Math.sin(q * Math.PI) + (p - 1) * 0.018;
+              pts.push([sv, alphaAt(sv, clamp01(t + drift)), -0.10]);
+            }
+            out.push({
+              on: 'digit', d: dd, seg: sg.seg, pts,
+              style: st(S.model, {
+                tone: P.tone * v * (0.45 + 0.55 * depth) * amt, phase: nextPhase()
+              })
+            });
+          }
+        }
+        // Short obliques through the core only. A crossing that runs the
+        // whole length is a plaid; a few laid across the darkest part are
+        // what keep a deep shadow from going flat and grey.
+        if (depth > 0.42) {
+          const nX = Math.max(1, Math.round(3 * depth * amt));
+          for (let i = 0; i < nX; i++) {
+            const sc = lerp(sg.sMin, Math.min(sg.sMax, 1.0), 0.24 + rng.f() * 0.56);
+            const tc = 0.52 + rng.sym(0.16);
+            const pts = [];
+            for (let k = 0; k <= 6; k++) {
+              const q = k / 6;
+              pts.push([sc + (q - 0.5) * 0.22, alphaAt(sc, clamp01(tc + (q - 0.5) * 0.40)), -0.09]);
+            }
+            out.push({
+              on: 'digit', d: dd, seg: sg.seg, pts,
+              style: st(S.model, { tone: 0.70 * depth * amt, phase: nextPhase() })
+            });
+          }
+        }
+      }
+    }
+  }
+
   // =========================================================================
   //  G · WHAT THE HAND IS HOLDING
   // =========================================================================
@@ -925,7 +1142,7 @@
    * but the material has a direction to it - wound thread, brushed metal,
    * the seam-ward grain of a leather ball.
    */
-  function heldBall(rig, out, detail) {
+  function heldBall(rig, view, out, detail) {
     const b = rig.ball;
     if (!b) return;
     const amt = detail && detail.ball !== undefined ? detail.ball : 1;
@@ -945,8 +1162,7 @@
     // leaves it bare, and a bare circle is a hole in the paper. Across the
     // form is the only place a terminator lands where it can be seen, which
     // is the whole point of drawing one.
-    const L = M.vnorm(M.vadd(M.vmul(rig.root[0], -0.18),
-      M.vadd(M.vmul(rig.root[1], -0.86), M.vmul(rig.root[2], 0.48))));
+    const L = lightDir(rig, view);
     // a frame about it, and the grain direction the anisotropy stretches along
     const T0 = M.vnorm(M.vcross(L, rig.root[0]));
     const T1 = M.vnorm(M.vcross(L, T0));
@@ -1032,7 +1248,7 @@
 
   GK.features = {
     S, st, nextPhase, PALMAR, DORSAL, betaForV, palmCurve, uvSpline, flexFrac,
-    digitFolds, webs, nails, fingerprints, palmCreases, palmRidges, streamlines, printField,
+    digitFolds, digitShading, lightDir, webs, nails, fingerprints, palmCreases, palmRidges, streamlines, printField,
     heldBall
   };
 })(window.GK = window.GK || {});

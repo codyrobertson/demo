@@ -12,7 +12,7 @@
   const { TAU, DEG, clamp, clamp01, lerp, smoothstep } = M;
   const { vadd, vsub, vmul, vmad, vdot, vcross, vnorm, vlerp } = M;
   const HALF = Math.PI / 2;
-  const { S, st, palmCurve, uvSpline, flexFrac, PALMAR, DORSAL } = F;
+  const { S, st, palmCurve, uvSpline, flexFrac, betaForV, PALMAR, DORSAL } = F;
 
   // =========================================================================
   //  EXTENSOR TENDONS
@@ -129,10 +129,168 @@
   }
 
   // =========================================================================
+  //  DORSAL FORM SHADING
+  //  Tone for the back of the hand, built the way the wrist already reads:
+  //  many faint, slightly offset, wandering strokes accumulating in the
+  //  graphite field rather than a fill. Driven by a light fixed in the
+  //  hand's own frame against the real dorsal surface normal, so the
+  //  metacarpal shafts read as low ridges and the valleys between them as
+  //  the light leaves them first — palmThickDorsal (20-rig.js) already
+  //  models both as relief and the knuckle heads' own pose-driven swell
+  //  with them, so the true surface normal carries all three for free and
+  //  this only has to read it. The one thing not in that relief — the
+  //  slight hollow just proximal to the knuckle row — is authored in.
+  // =========================================================================
+
+  /**
+   * One lamp for the whole scene.
+   *
+   * This used to carry its own coefficients - a second hand-tuned light
+   * sitting beside the one the ball answers to, which meant the back of the
+   * hand and the thing in front of it disagreed about where the light was.
+   * The shared one is defined off the view as well as the hand, so it never
+   * goes frontal and the dorsum always has a terminator to draw.
+   */
+  function dorsalLight(rig, view) {
+    return F.lightDir(rig, view);
+  }
+
+  /** how shadowed the real dorsal surface is at (u,v), 0 lit .. 1 dark */
+  function dorsalShade(rig, view, L, u, v) {
+    const beta = betaForV(rig, u, v, false);
+    const N = R.palmNormal(rig, u, beta);
+    const nl = vdot(N, L);
+    // From the terminator, not from half-lit. Starting at nl = 0.5 put tone
+    // on most of the back of the hand at once, and tone everywhere is a
+    // stain rather than a form - what describes the dorsum is the boundary
+    // between what the light reaches and what it does not, and there has to
+    // be bare paper on one side of that for it to be a boundary at all.
+    let k = clamp01((0.14 - nl) / 0.74);
+    // and light creeping back round the edge, same as a finger's
+    if (view) {
+      const edge = 1 - M.smoothstep(clamp01((Math.abs(vdot(N, view.e)) - 0.10) / 0.26));
+      k *= 1 - 0.55 * edge;
+    }
+    // the hollow just proximal to the knuckle heads, where the extensor
+    // tendons gather before fanning to the fingers: not part of the
+    // surface relief, so it does not fall out of the normal above
+    const hollow = Math.exp(-Math.pow((u - 0.80) / 0.075, 2)) * 0.16;
+    return clamp01(k + hollow * (1 - k));
+  }
+
+  /**
+   * A bundle of near-duplicate strokes at one position: several passes
+   * offset and re-wobbled independently rather than one stroke asked to
+   * carry the tone alone, so they weave and cross the way the tendon
+   * cords already do and the pile-up itself reads as the mark. By default
+   * the bundle runs from (u0,v0) to (u1,v0), down a shaft; `arc` instead
+   * bows it across a knuckle, from (u0..u1, v0) treated as a half-width.
+   */
+  function shadeBundle(rig, out, rngD, u0, u1, v0, k, count, arc, offBase) {
+    for (let b = 0; b < count; b++) {
+      const vOff = v0 + rngD.sym(arc ? 0.011 : 0.014);
+      let pts;
+      if (arc) {
+        // an arc across the knuckle: bow in u, run in v
+        const half = (u1 - u0) * 0.5;
+        const bow = rngD.sym(0.010);
+        const mid = (u0 + u1) * 0.5;
+        pts = [[mid, vOff - half], [mid + bow, vOff], [mid, vOff + half]];
+      } else {
+        const uu0 = u0 + rngD.sym(0.03), uu1 = u1 + rngD.sym(0.035);
+        const mid = (uu0 + uu1) * 0.5;
+        const drift = rngD.sym(0.022);
+        pts = [[uu0, vOff], [mid, vOff + drift], [uu1, vOff + rngD.sym(0.016)]];
+      }
+      out.push({
+        on: 'palm', pts: palmCurve(rig, pts, false, offBase + b * 0.009),
+        style: st(S.hatch, {
+          tone: k * (1.05 + 0.95 * rngD.f()), weight: 1.10,
+          wobble: arc ? 0.85 : 1.1, jitter: arc ? 0.4 : 0.5, phase: F.nextPhase()
+        })
+      });
+    }
+  }
+
+  function dorsalShading(rig, view, out) {
+    const A = rig.anatomy;
+    const rng = new M.Rng(A.seed ^ 0x9d31);
+    const L = dorsalLight(rig, view);
+
+    // how proud each tendon already stands, so the shading yields to the
+    // cord instead of drawing over it — the same term tendons() computes
+    const tProm = [0, 0, 0, 0, 0];
+    for (let d = 1; d < 5; d++) {
+      const ext = 1 - flexFrac(A, d, 'MCP', Math.max(0, rig.pose.digits[d].mcpFlex));
+      const lift = clamp01(-rig.pose.digits[d].mcpFlex / (26 * DEG));
+      tProm[d] = clamp01(ext * 0.85 + lift * 0.5) * A.tendons.prominence;
+    }
+
+    for (let d = 1; d < 5; d++) {
+      const vC = (d - 1) / 3;
+      const rngD = rng.fork(d * 11 + 5);
+
+      // Down the shaft and through the valleys either side of it: a comb of
+      // positions across the ray's width, each a small bundle of near-
+      // duplicate passes. The comb spans wide enough that neighbouring rays
+      // overlap at the valley floor between them.
+      //
+      // Each stroke covers only the stretch of its own line that is actually
+      // in shadow, and carries that stretch's own value. Run at the darkest
+      // value it touches, over the whole metacarpal, forty near-parallel
+      // strokes per ray stack into a solid block on the ulnar side - which is
+      // a stain, not a back of a hand.
+      const comb = 12;
+      const NU = 9;
+      for (let c = 0; c < comb; c++) {
+        const v0 = vC + (c / (comb - 1) - 0.5) * 0.44;
+        const near = clamp01(1 - Math.abs(v0 - vC) / 0.05) * tProm[d];
+        const yield0 = 1 - 0.75 * near;
+        const ks = [];
+        for (let i = 0; i < NU; i++) {
+          const u = 0.20 + (0.67 * i) / (NU - 1);
+          ks.push({ u, k: dorsalShade(rig, view, L, u, v0) * yield0 });
+        }
+        let best = 0;
+        for (const z of ks) if (z.k > best) best = z.k;
+        if (best < 0.07) continue;
+        const thr = Math.max(0.05, best * 0.42);
+        let i0 = 0;
+        while (i0 < NU && ks[i0].k < thr) i0++;
+        let i1 = NU - 1;
+        while (i1 > i0 && ks[i1].k < thr) i1--;
+        if (i1 - i0 < 1) continue;
+        let mean = 0;
+        for (let i = i0; i <= i1; i++) mean += ks[i].k;
+        mean /= (i1 - i0 + 1);
+        // Density carries the value, not pressure. Every comb position
+        // firing two or three passes puts forty near-parallel strokes across
+        // one ray, which on the ulnar side - where the whole shaft is turned
+        // from the light - closes into a solid block. Thin the comb by how
+        // dark it is instead, and the same value arrives as hatching with
+        // paper still showing between the strokes.
+        if (rngD.f() > 0.16 + 0.84 * mean) continue;
+        const count = mean > 0.62 ? 2 : 1;
+        shadeBundle(rig, out, rngD, ks[i0].u, ks[i1].u, v0, mean * 0.86, count, false, 0.10);
+      }
+
+      // across the swell of the knuckle head
+      const combH = 5;
+      for (let c = 0; c < combH; c++) {
+        const u0c = 0.855 + (c / (combH - 1)) * 0.145;
+        const k = dorsalShade(rig, view, L, u0c, vC) * (1 - 0.6 * tProm[d]);
+        if (k < 0.08) continue;
+        const count = 1 + Math.round(k * 3);
+        shadeBundle(rig, out, rngD, u0c - 0.10, u0c + 0.10, vC, k, count, true, 0.16);
+      }
+    }
+  }
+
+  // =========================================================================
   //  DORSAL KNUCKLE FIELD
   //  Broad arcs over the metacarpal heads, plus the interosseous hollows.
   // =========================================================================
-  function knuckleField(rig, out) {
+  function knuckleField(rig, view, out) {
     const A = rig.anatomy;
     for (let d = 1; d < 5; d++) {
       const v = (d - 1) / 3;
@@ -216,6 +374,10 @@
       pts: palmCurve(rig, uvSpline([[0.94, -0.26], [0.80, -0.34], [0.62, -0.33], [0.48, -0.26]], 22), false, 0.2),
       style: st(S.fold, { tone: 0.41 + 0.70 * clamp01(spread), phase: F.nextPhase() })
     });
+
+    // form shading last, so it reads against the crests and hollows above
+    // rather than under them
+    dorsalShading(rig, view, out);
   }
 
   // =========================================================================

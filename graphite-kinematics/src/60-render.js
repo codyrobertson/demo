@@ -423,7 +423,7 @@
   // =========================================================================
   // how far from the horizon each kind of mark gives up
   const FINE_LAYERS = {
-    ridge: 0.30, print: 0.26, hatch: 0.30, hair: 0.24, vein: 0.22, tendon: 0.22,
+    ridge: 0.30, print: 0.26, hatch: 0.30, model: 0.20, hair: 0.24, vein: 0.22, tendon: 0.22,
     fold: 0.12, crease: 0.09, palmcrease: 0.12, nail: 0.10
   };
 
@@ -432,7 +432,7 @@
   const DEFAULT_LAYERS = {
     contour: true, crease: true, fold: true, nail: true, print: true,
     palmcrease: true, ridge: true, vein: true, tendon: true, hair: true,
-    hatch: true, bone: false, label: false
+    hatch: true, model: true, bone: false, label: false
   };
 
   class Renderer {
@@ -547,13 +547,14 @@
       if (L.crease || L.fold) F.digitFolds(rig, curves);
       if (L.crease) F.webs(rig, curves);
       if (L.nail) F.nails(rig, curves);
+      if (L.model) F.digitShading(rig, view, curves, 1);
       if (L.print && (det.print === undefined ? 1 : det.print) > 0.02) F.fingerprints(rig, curves, q);
       if (L.palmcrease) F.palmCreases(rig, curves);
       if (L.ridge && (det.ridge === undefined ? 1 : det.ridge) > 0.02) F.palmRidges(rig, curves, q);
-      if (rig.ball) F.heldBall(rig, curves, det);
+      if (rig.ball) F.heldBall(rig, view, curves, det);
       if (L.tendon) D.tendons(rig, curves);
       if (L.vein) D.veins(rig, curves);
-      if (L.fold) D.knuckleField(rig, curves);
+      if (L.fold) D.knuckleField(rig, view, curves);
       if (L.hair) D.hair(rig, curves);
       if (L.hatch) D.skinLattice(rig, curves, det.lattice === undefined ? 0.6 : det.lattice);
       if (L.bone) D.skeleton(rig, view, curves);
@@ -584,6 +585,7 @@
         print: det.print === undefined ? 1 : det.print,
         ridge: det.ridge === undefined ? 1 : det.ridge,
         hatch: det.lattice === undefined ? 1 : det.lattice,
+        model: det.shade === undefined ? 1 : det.shade,
         hair: det.hair === undefined ? 1 : det.hair,
         vein: det.vein === undefined ? 1 : det.vein
       };
@@ -628,7 +630,7 @@
         for (const r of runs(pp, 0.05, 2)) put(r, cv.style, tone);
 
         if (ghost > 0.01 && cv.style.layer !== 'print' && cv.style.layer !== 'ridge' &&
-          cv.style.layer !== 'hatch' && cv.style.layer !== 'hair') {
+          cv.style.layer !== 'hatch' && cv.style.layer !== 'model' && cv.style.layer !== 'hair') {
           for (const r of runs(pp, 0.06, 4)) {
             put(r, F.st(cv.style, { passes: 1, taper: 0.85 }), tone * ghost);
           }
