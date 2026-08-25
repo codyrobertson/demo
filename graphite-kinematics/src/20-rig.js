@@ -25,7 +25,7 @@
   const M = GK.math;
   const AN = GK.anatomy;
   const { DEG, clamp, clamp01, lerp, smoothstep, inv } = M;
-  const { vadd, vsub, vmul, vmad, vdot, vcross, vnorm, vlen, vlerp, vcopy, mApply, mMul, mOrtho } = M;
+  const { vadd, vsub, vmul, vmad, vdot, vcross, vnorm, vlen, vdist, vlerp, vcopy, mApply, mMul, mOrtho } = M;
 
   // ------------------------------------------------------- named rotations
   /** carries +X toward +Z (distal -> palmar): flexion */
@@ -759,6 +759,121 @@
     };
   }
 
+  /** on-screen spine length across the metacarpals vs. the sheet's true (unforeshortened) width */
+  function palmAxisRatio(rig, view, u0, u1) {
+    const NC = 8;
+    let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9, wSum = 0;
+    for (let i = 0; i <= NC; i++) {
+      const u = lerp(u0, u1, i / NC);
+      const p = view.px(palmSpine(rig, u, VMID).P);
+      if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0];
+      if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
+      wSum += vdist(palmSurface(rig, u, 0).P, palmSurface(rig, u, 0.5).P) * view.scale;
+    }
+    const axisSpan = Math.hypot(x1 - x0, y1 - y0);
+    return axisSpan / Math.max(1e-6, wSum / (NC + 1));
+  }
+
+  /**
+   * The palm's outline as a union, exactly as digitUnion builds one for a
+   * foreshortened digit: sample the whole sheet, take the radial maximum
+   * about the projected centroid, bin by angle, fill the odd empty bin from
+   * its neighbours. A digit falls back to this outright because end-on it
+   * shrinks to a compact blob; the palm, being wider, never does —
+   * foreshortened it reads as a thin band rather than a blob — but the
+   * construction doesn't actually care about that shape, only that the
+   * surface is sampled densely enough, so it still recovers a clean band
+   * where the rails can't.
+   *
+   * Unlike digitUnion's outline, this one still has to survive palmSilhouette
+   * callers' self-occlusion test, so a bin keeps the winning sample verbatim
+   * rather than a radius reconstructed from a smoothed profile: a real point
+   * is on the palm's own front surface by construction and passes; an
+   * averaged one drifts depth and position out of step with each other and
+   * reads as buried inside the solid it belongs to. A gap-filled bin
+   * interpolates between two real neighbours, which stays close enough. Each
+   * point carries the u it was won at, which is all splitRing needs to cut
+   * the closed loop back into the two sides palmSilhouette hands its caller.
+   */
+  function palmUnionRing(rig, view, u0, u1) {
+    const NS = 40, NA = 80, NBK = 128;
+    const pts = [];
+    for (let i = 0; i <= NS; i++) {
+      const u = lerp(u0, u1, i / NS);
+      for (let k = 0; k < NA; k++) {
+        const q = palmSurface(rig, u, k / NA).P;
+        const p = view.px(q);
+        pts.push([p[0], p[1], view.near(q), u]);
+      }
+    }
+    let cx = 0, cy = 0;
+    for (const p of pts) { cx += p[0]; cy += p[1]; }
+    cx /= pts.length; cy /= pts.length;
+    const rad = new Float64Array(NBK).fill(-1);
+    const ring = new Array(NBK);
+    for (const p of pts) {
+      const dx = p[0] - cx, dy = p[1] - cy;
+      const r = Math.hypot(dx, dy);
+      let b = Math.floor(((Math.atan2(dy, dx) + Math.PI) / (Math.PI * 2)) * NBK) % NBK;
+      if (b < 0) b += NBK;
+      if (r > rad[b]) { rad[b] = r; ring[b] = p; }
+    }
+    let filled = 0;
+    for (let b = 0; b < NBK; b++) if (rad[b] >= 0) filled++;
+    if (filled < NBK * 0.5) return null;
+    for (let b = 0; b < NBK; b++) {
+      if (ring[b]) continue;
+      let lo = b, hi = b, n = 0;
+      while (!ring[(lo + NBK) % NBK] && n++ < NBK) lo--;
+      n = 0;
+      while (!ring[hi % NBK] && n++ < NBK) hi++;
+      const a = ring[((lo % NBK) + NBK) % NBK], c2 = ring[hi % NBK];
+      ring[b] = [(a[0] + c2[0]) * 0.5, (a[1] + c2[1]) * 0.5, (a[2] + c2[2]) * 0.5, (a[3] + c2[3]) * 0.5];
+    }
+    return ring;
+  }
+
+  /**
+   * Cuts palmUnionRing's closed loop into the two arcs running from its most
+   * proximal point to its most distal one, then resamples each to NU+1
+   * points at the same u values the rails use — not evenly by arc length —
+   * so index i means the same column on both sides of a lerp between them.
+   * Arc length would let a bump like the thenar land at a different index on
+   * the two curves, so blending them would land on a point on neither.
+   */
+  function splitRing(ring, NU, u0, u1) {
+    const NR = ring.length;
+    let bWrist = 0, bTip = 0, uMin = Infinity, uMax = -Infinity;
+    for (let b = 0; b < NR; b++) {
+      if (ring[b][3] < uMin) { uMin = ring[b][3]; bWrist = b; }
+      if (ring[b][3] > uMax) { uMax = ring[b][3]; bTip = b; }
+    }
+    const walk = (from, to) => {
+      const out = [];
+      let b = from;
+      for (let n = 0; n <= NR; n++) {
+        out.push(ring[b]);
+        if (b === to) break;
+        b = (b + 1) % NR;
+      }
+      return out;
+    };
+    const resample = (poly) => {
+      const out = [];
+      let j = 0;
+      for (let i = 0; i <= NU; i++) {
+        const target = lerp(u0, u1, i / NU);
+        while (j < poly.length - 2 && poly[j + 1][3] < target) j++;
+        const a = poly[j], b = poly[Math.min(poly.length - 1, j + 1)];
+        const span = b[3] - a[3];
+        const t = Math.abs(span) > 1e-9 ? clamp01((target - a[3]) / span) : 0;
+        out.push([lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)]);
+      }
+      return out;
+    };
+    return [resample(walk(bWrist, bTip)), resample(walk(bTip, bWrist).reverse())];
+  }
+
   /**
    * The true screen outline of the palm sheet, for any view.
    *
@@ -774,14 +889,24 @@
    * az 180 with the camera rising toward the fingertips, the sheet's u-axis
    * points almost straight at the eye, so a 0.012 step in u is nearly all
    * curvature and no slope, and the perpendicular built from it swings
-   * wherever that curvature noise points rather than tracking the form. A
-   * column can't fall back to a whole separate outline the way a digit does —
-   * the palm never gets small enough on screen for a centroid-relative union
-   * to mean anything, it just gets thin — so instead each column distrusts
-   * its own tangent exactly as far as a wide-baseline reading of the same
-   * slope disagrees with it, and leans toward the wide one by that amount.
-   * That is continuous in the disagreement, so nothing switches or pops; at
-   * elevation 0, where the two already agree, it reproduces the old rails.
+   * wherever that curvature noise points rather than tracking the form. Each
+   * column distrusts its own tangent exactly as far as a wide-baseline
+   * reading of the same slope disagrees with it, and leans toward the wide
+   * one by that amount — continuous in the disagreement, so nothing pops,
+   * and at elevation 0, where the two already agree, it reproduces the old
+   * rails exactly.
+   *
+   * That steadies the direction each column searches along, but a column is
+   * still only one slice: once neighbouring slices project on top of each
+   * other, u no longer orders the sheet on screen and no per-column extreme,
+   * however carefully aimed, traces a boundary that doesn't cross itself.
+   * The palm never gets small enough on screen to fall back to a whole
+   * separate outline the way a foreshortened digit does — it just gets
+   * thin — so palmUnionRing builds that fallback anyway, over the same
+   * domain the rails cover, and every column fades its rail toward the
+   * matching point on it in proportion to how thin the sheet reads
+   * (palmAxisRatio). Both mechanisms are continuous functions of the view,
+   * so an orbit through either transition never pops.
    */
   function palmSilhouette(rig, view, opts) {
     opts = opts || {};
@@ -852,6 +977,38 @@
     };
     relax(sideA); relax(sideB);
 
+    // A steadied tangent still can't save a column once neighbouring columns
+    // start projecting on top of each other — past that point u no longer
+    // orders the sheet on screen, so no per-column extreme traces a boundary
+    // that doesn't cross itself. That is the same collapse digitUnion exists
+    // for, one level up; the palm just never gets compact enough on screen to
+    // fall back to a union of its own the way a digit does, so instead every
+    // column fades toward one, in proportion to how thin the sheet reads.
+    const ratio = palmAxisRatio(rig, view, u0, u1);
+    const edgeOn = 1 - smoothstep(clamp01((ratio - 0.70) / (1.35 - 0.70)));
+    if (edgeOn > 0.004) {
+      const ring = palmUnionRing(rig, view, u0, u1);
+      if (ring) {
+        let [unionA, unionB] = splitRing(ring, NU, u0, u1);
+        // The ring has no notion of which arc is "A": settle it once, by
+        // whichever pairing agrees better with the rails where the rails are
+        // themselves trusted, so the label can't flicker column to column.
+        let same = 0, swapCost = 0;
+        for (let i = 0; i <= NU; i++) {
+          const wt = 1 - distrust[i];
+          same += wt * (d2(sideA[i], unionA[i]) + d2(sideB[i], unionB[i]));
+          swapCost += wt * (d2(sideA[i], unionB[i]) + d2(sideB[i], unionA[i]));
+        }
+        if (swapCost < same) { const t = unionA; unionA = unionB; unionB = t; }
+        for (let i = 0; i <= NU; i++) {
+          for (let c = 0; c < 3; c++) {
+            sideA[i][c] = lerp(sideA[i][c], unionA[i][c], edgeOn);
+            sideB[i][c] = lerp(sideB[i][c], unionB[i][c], edgeOn);
+          }
+        }
+      }
+    }
+
     // The palm has no distal end to close: four digits leave through it. The
     // only real boundary there is the web margin on the palmar face, running
     // proximally under each digit and distally between them. Closing the
@@ -919,11 +1076,19 @@
     const A = rig.anatomy;
     const dg = rig.digits[d];
     const segs = dg.segs.filter(sg => sg.rendered);
+    // The thumb's metacarpal is thenar mass, not a tube, over its proximal
+    // reach - digitContour fades its rail out there (railGain) for the same
+    // reason a real thumb never reads as three segments. The union has no
+    // per-point gain to lean on, so it excludes that reach outright: pooled
+    // in, the offset thenar cross-sections compete with the phalanges for
+    // the radial maximum at every angle and the outline comes back jagged.
+    const thumbBase = (sg, sv) => d === AN.THUMB && sg.seg === 0 && sv < 0.42;
     // how compact is this digit on screen, relative to how thick it is?
     let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9, wSum = 0, wN = 0;
     for (const sg of segs) {
       for (let i = 0; i <= 4; i++) {
         const sv = sg.sMin + (sg.sMax - sg.sMin) * (i / 4);
+        if (thumbBase(sg, sv)) continue;
         const p = view.px(sectionCenter(rig, d, sg.seg, sv));
         if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0];
         if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
@@ -941,6 +1106,7 @@
       const NS = 9, NA = 24;
       for (let i = 0; i <= NS; i++) {
         const sv = sg.sMin + (sg.sMax - sg.sMin) * (i / NS);
+        if (thumbBase(sg, sv)) continue;
         for (let k = 0; k < NA; k++) {
           const q = digitSurface(rig, d, sg.seg, sv, (k / NA) * Math.PI * 2).P;
           const p = view.px(q);
