@@ -70,6 +70,39 @@
   function palmCurve(rig, uvs, palmar, off) {
     return uvs.map(p => [p[0], betaForV(rig, p[0], rig.palm.mapV(p[0], p[1]), palmar), off || p[2] || 0]);
   }
+  /**
+   * The first web's own surface, as (t, k): t runs from the depth of the
+   * commissure out to the free margin, k across it from thumb to index. The
+   * commissure is not part of the palm's sheet - it spans between two rays -
+   * so a mark authored in palm coordinates gets rebased onto the palm's own
+   * border and lands as a straight line lying across the hand. Marks stand a
+   * little proud of the sheet, so it occludes them from behind instead of
+   * fighting them for the same depth.
+   */
+  function webSheet(rig) {
+    const w = R.firstWeb(rig, new R.View(0, 0, 0, 1, [0, 0, 0], 0, 0));
+    const N = w.thSide.length - 1;
+    const prox = M.vnorm(M.vadd(rig.digits[0].segs[1].t, rig.digits[1].segs[1].t));
+    let face = M.vnorm(M.vcross(M.vsub(w.ixSide[N], w.thSide[N]),
+      M.vsub(w.thSide[N], w.thSide[0])));
+    if (M.vdot(face, rig.root[2]) < 0) face = M.vmul(face, -1);
+    const at = (t, k, lift) => {
+      const f = clamp01(t) * N;
+      const i = Math.min(N - 1, Math.floor(f)), fr = f - i;
+      const a = M.vlerp(w.thSide[i], w.thSide[i + 1], fr);
+      const b = M.vlerp(w.ixSide[i], w.ixSide[i + 1], fr);
+      const bow = clamp01(t) * Math.sin(Math.PI * k) * 0.18;
+      const base = M.vmad(M.vlerp(a, b, clamp01(k)), prox, -M.vdist(a, b) * bow);
+      return M.vmad(base, face, lift || 0);
+    };
+    // How taut the commissure is, read off the sheet itself rather than off
+    // the joint angles that produced it. Opposition and a wrapped grip slacken
+    // the web without touching either abduction angle, so an angle-driven
+    // guess calls them open when they are gathered.
+    const open = smoothstep(inv(M.vdist(w.PT, w.PI) / rig.anatomy.size, 20, 68));
+    return { at, open };
+  }
+
   /** sample a smooth curve through (u,v) control points */
   function uvSpline(ctrl, n) {
     const out = [];
@@ -348,55 +381,53 @@
       }
     }
     // ---- the first web -------------------------------------------------
-    // The thumb-index commissure has two regimes and they look nothing alike.
-    // Closed, the skin has surplus and gathers into folds lying along the
-    // margin. Open, it is a taut sheet and the only marks are the tension
-    // lines running across it from thumb to index.
-    const T = rig.pose.digits[0];
-    const open = clamp01(((-(T.cmcRad || 0)) / (26 * DEG)) * 0.55 +
-      ((T.cmcAbd || 0) / (50 * DEG)) * 0.55);
-    const margin = [];
-    for (let k = 0; k <= 20; k++) {
-      const t = k / 20;
-      margin.push([lerp(1.00, 0.76, t), lerp(-0.72, -0.24, t)]);
-    }
-    out.push({
-      on: 'palm', pts: palmCurve(rig, margin, true, -0.3),
-      style: st(S.crease, { tone: 0.54 + 0.34 * open, weight: 0.85, phase: nextPhase() })
-    });
-
+    // Two regimes, and they look nothing alike. Adducted, the skin of the
+    // commissure has surplus and buckles across the line of compression into
+    // folds stacked back from the margin. Abducted, it is a taut sheet and
+    // what shows is the pull running from the depth of the commissure out to
+    // the margin. The margin itself the renderer draws as a contour, so it is
+    // not repeated here.
+    const sheet = webSheet(rig);
+    const web = sheet.at, open = sheet.open;
     const wRng = new M.Rng(A.seed ^ 0x7b21);
     const gathered = 1 - open;
+
     const nFold = Math.round(gathered * 4);
     for (let i = 0; i < nFold; i++) {
-      // lying along the margin, crowding toward the depth of the commissure
-      const off = 0.055 + i * 0.045;
-      const fold = margin.map((p, k) => {
-        const t = k / (margin.length - 1);
-        const bulge = Math.sin(Math.PI * clamp01(t * 0.85 + 0.1));
-        return [p[0] - off * bulge * 0.55, p[1] + off * bulge];
-      });
+      const t0 = 0.93 - i * 0.11;
+      const pts = [];
+      for (let j = 0; j <= 18; j++) {
+        const k = lerp(0.12, 0.88, j / 18);
+        // a slack fold hangs toward the margin at its middle
+        const t = t0 + 0.05 * gathered * Math.sin(Math.PI * inv(k, 0.12, 0.88));
+        pts.push(web(t, k, 1.1 + i * 0.25));
+      }
       out.push({
-        on: 'palm', pts: palmCurve(rig, fold, true, -0.28),
-        style: st(S.creaseFine, {
-          tone: (0.55 + 1.15 * gathered) * (1 - i * 0.20), phase: nextPhase()
+        on: 'world', pts,
+        style: st(S.crease, {
+          tone: (0.50 + 0.90 * gathered) * (1 - i * 0.18), phase: nextPhase()
         })
       });
     }
-    const nTaut = Math.round(open * 5);
+
+    const nTaut = Math.round(open * 4);
     for (let i = 0; i < nTaut; i++) {
-      // running across the sheet, thumb to index, where it is stretched
-      const t = 0.16 + 0.68 * (i / Math.max(1, nTaut - 1)) + wRng.sym(0.04);
-      const base = [lerp(1.00, 0.76, t), lerp(-0.72, -0.24, t)];
-      const line = [];
-      for (let k = 0; k <= 10; k++) {
-        const q = k / 10;
-        const sag = Math.sin(Math.PI * q) * 0.035 * (1 - open * 0.5);
-        line.push([base[0] - 0.10 + 0.20 * q - sag, base[1] - 0.12 + 0.24 * q]);
+      const k0 = 0.24 + 0.54 * (i / Math.max(1, nTaut - 1)) + wRng.sym(0.05);
+      // each pull runs its own length: a sheet under tension does not crease
+      // in a comb of equal strokes
+      const tA = 0.44 + wRng.f() * 0.14, tB = 0.86 + wRng.f() * 0.08;
+      const pts = [];
+      for (let j = 0; j <= 12; j++) {
+        const t = lerp(tA, tB, j / 12);
+        // the pull fans as it runs out, the way a sheet does off two anchors
+        const k = k0 + (k0 - 0.5) * 0.26 * inv(t, tA, tB);
+        pts.push(web(t, k, 1.1));
       }
       out.push({
-        on: 'palm', pts: palmCurve(rig, line, true, -0.2),
-        style: st(S.fold, { tone: (0.5 + 1.1 * open) * (0.7 + 0.5 * wRng.f()), phase: nextPhase() })
+        on: 'world', pts,
+        style: st(S.fold, {
+          tone: (0.34 + 0.62 * open) * (0.7 + 0.5 * wRng.f()), phase: nextPhase()
+        })
       });
     }
   }
