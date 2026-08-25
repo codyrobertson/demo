@@ -3071,7 +3071,7 @@
         const twin = (jn === 'PIP');                   // the PIP takes two
         const span = lerp(1.02, 1.30, f) * (isMCP ? 1.16 : 1.0);
         const bow = (isMCP ? 0.030 : 0.016) * lerp(1, 1.5, f);
-        const mainTone = lerp(0.42, 1.0, Math.pow(f, 0.72)) * (isMCP ? 0.94 : 1.0);
+        const mainTone = lerp(0.60, 1.0, Math.pow(f, 0.72)) * (isMCP ? 0.94 : 1.0);
         const sJit = () => rng.sym(0.008);
 
         const primaries = twin ? [base - 0.030, base + 0.034] : [base];
@@ -3127,18 +3127,25 @@
           const dspan = lerp(0.62, 1.02, taut) * (jn === 'MCP' ? 1.25 : 1.0);
           for (let i = 0; i < rows; i++) {
             const t = (i + 0.5) / rows;
-            let sPos = -spread * 0.5 + spread * t;
-            let useSeg = seg, ss = sPos;
-            if (ss < 0.012) {   // wrap back onto the proximal segment
-              useSeg = seg - 1; ss = 1 + ss;
-              if (useSeg < 1) continue;
+            let useSeg = seg, ss = -spread * 0.5 + spread * t;
+            if (ss < 0.012) {
+              // a wrinkle set straddles its joint: the proximal half of it
+              // belongs to the bone behind. The metacarpophalangeal joint has
+              // no drawable bone behind it, so there it stacks distally instead
+              // of being dropped, which used to leave the row half-drawn.
+              if (seg > 1) { useSeg = seg - 1; ss = 1 + ss; }
+              else ss = 0.012 + spread * t * 0.5;
             }
+            // Each wrinkle reaches its own distance round the finger and sits
+            // at its own height. Equal arcs at equal spacing read as tape.
+            const reach = dspan * rng.range(0.62, 1.06);
+            const drift = rng.sym(0.016);
             const pts = [];
             for (let k = 0; k <= 14; k++) {
               const q = k / 14;
-              const a = DORSAL + (q * 2 - 1) * dspan;
+              const a = DORSAL + (q * 2 - 1) * reach + rng.sym(0.012);
               const kk = 1 - Math.pow(q * 2 - 1, 2);
-              pts.push([ss + 0.014 * kk * (i % 2 ? 1 : -1), a, -0.16]);
+              pts.push([ss + drift + 0.014 * kk * (i % 2 ? 1 : -1), a, -0.16]);
             }
             out.push({
               on: 'digit', d: d, seg: useSeg, pts,
@@ -3149,38 +3156,80 @@
             });
           }
           // the oblique cross-set that turns the rows into a diamond lattice
+          // The oblique set that turns the rows into a diamond lattice. Each
+          // oblique crosses the joint, so it has to be emitted as two curves —
+          // one per bone. Built as a single point list spanning both, the
+          // proximal points land at s ~ 0.97 of the WRONG segment and the
+          // lattice collapses into a row of brackets at the finger's base.
           const nObl = Math.round(3 + taut * 4);
           for (let i = 0; i < nObl; i++) {
             const sgn = i % 2 ? 1 : -1;
-            const aC = DORSAL + (i / (nObl - 1) - 0.5) * dspan * 1.5;
-            const pts = [];
+            const aC = DORSAL + (i / Math.max(1, nObl - 1) - 0.5) * dspan * 1.5;
+            const here = [], back = [];
             for (let k = 0; k <= 8; k++) {
               const q = k / 8;
-              let ss = -spread * 0.45 + spread * 0.9 * q;
-              let useSeg = seg;
-              if (ss < 0.012) { useSeg = seg - 1; ss = 1 + ss; }
-              if (useSeg < 1) continue;
-              pts.push([ss, aC + sgn * (q - 0.5) * 0.34, -0.14]);
+              const ss = -spread * 0.45 + spread * 0.9 * q;
+              const a = aC + sgn * (q - 0.5) * 0.34;
+              if (ss >= 0.012) here.push([ss, a, -0.14]);
+              else if (seg > 1) back.push([1 + ss, a, -0.14]);
             }
-            if (pts.length > 3) out.push({
-              on: 'digit', d, seg: pts[0][0] > 0.5 && seg > 1 ? seg : seg, pts,
-              style: st(S.wrinkle, { tone: lerp(0.12, 0.92, taut), phase: nextPhase() })
+            const style = st(S.wrinkle, { tone: lerp(0.12, 0.92, taut), phase: nextPhase() });
+            if (here.length > 2) out.push({ on: 'digit', d, seg, pts: here, style });
+            if (back.length > 2) out.push({
+              on: 'digit', d, seg: seg - 1, pts: back,
+              style: st(S.wrinkle, { tone: style.tone / S.wrinkle.tone, phase: nextPhase() })
             });
           }
         }
 
-        // ---- knuckle prominence contour ---------------------------------
-        // A flexed knuckle presents a hard dorsal corner; draw its crest.
-        if (f > 0.30 && jn !== 'DIP') {
-          const pts = [];
-          for (let k = 0; k <= 16; k++) {
-            const q = k / 16;
-            const a = DORSAL + (q * 2 - 1) * 0.86;
-            pts.push([0.02 + 0.02 * (1 - Math.pow(q * 2 - 1, 2)), a, 0.15]);
+        // ---- knuckle rim -------------------------------------------------
+        // A bent joint presents a hard dorsal corner where the skin turns off
+        // the head onto the phalanx. On a closed hand this rim is the strongest
+        // mark on the whole back of the digit, and the wrinkle sets above have
+        // by then been drawn taut and erased — so without it a fist has nothing
+        // describing its joints at all.
+        if (f > 0.26 && jn !== 'DIP') {
+          const k = (f - 0.26) / 0.74;
+          for (let r = 0; r < (k > 0.55 ? 2 : 1); r++) {
+            const pts = [];
+            const span = 0.90 - r * 0.16;
+            for (let q2 = 0; q2 <= 18; q2++) {
+              const q = q2 / 18;
+              const a = DORSAL + (q * 2 - 1) * span;
+              pts.push([0.015 + r * 0.055 + 0.022 * (1 - Math.pow(q * 2 - 1, 2)), a, 0.18]);
+            }
+            out.push({
+              on: 'digit', d, seg, pts,
+              style: st(S.crease, {
+                tone: (0.34 + 0.95 * k) * (r ? 0.52 : 1), weight: 0.95 - r * 0.2, phase: nextPhase()
+              })
+            });
           }
+        }
+      }
+
+      // ---- knuckle pads --------------------------------------------------
+      // The skin over an interphalangeal joint is thicker and coarser than the
+      // skin either side of it, and reads as a patch of texture rather than as
+      // a line. It is what stops an extended finger drawing as a plain tube.
+      for (let seg = 2; seg < nSeg; seg++) {
+        const jn = dg.joints[seg].name;
+        const flex = dg.joints[seg].flex;
+        const taut = clamp01(1 - flexFrac(A, d, jn, Math.max(0, flex)) * 1.3);
+        if (taut < 0.15) continue;
+        // A lozenge mesh of short crossing marks, scattered. Drawn as evenly
+        // spaced arcs instead it reads as a bandage wrapped round the finger.
+        const nP = Math.round(16 + taut * 14);
+        for (let i = 0; i < nP; i++) {
+          const s0 = rng.range(-0.055, 0.135);
+          const a0 = DORSAL + rng.sym(0.62);
+          const L = rng.range(0.030, 0.058);
+          const lean = rng.chance(0.5) ? 1 : -1;
+          const skew = (0.16 + rng.range(0, 0.10)) * lean;
           out.push({
-            on: 'digit', d, seg, pts,
-            style: st(S.crease, { tone: lerp(0, 0.70, (f - 0.3) / 0.7), weight: 0.9, phase: nextPhase() })
+            on: 'digit', d, seg,
+            pts: [[s0 - L * 0.5, a0 - skew, -0.05], [s0, a0, -0.05], [s0 + L * 0.5, a0 + skew, -0.05]],
+            style: st(S.hatch, { tone: (0.8 + 0.9 * rng.f()) * taut, phase: nextPhase() })
           });
         }
       }
@@ -3252,7 +3301,10 @@
       const seg = dg.segs.length - 1;
       const N = A.nails[d];
       const sg = dg.segs[seg];
-      const sB = 1 + AN.tipExtent(A, d) * N.free;     // free edge
+      // The bone ends at s = 1 but the fingertip does not: the pulp and the
+      // nail carry on past it. A free edge placed at the bone's end leaves the
+      // nail stranded in the middle of the phalanx.
+      const sB = 1 + AN.tipExtent(A, d) * (0.46 + 0.38 * N.free);
       const sA = sB - N.len;                          // proximal fold
       const w = 0.95 * N.wide + 0.18;                 // half-width in alpha
       const off = 0.55 * N.curve;                     // the plate stands proud
@@ -3260,28 +3312,45 @@
       const bowP = 0.055 * N.curve;   // proximal fold arcs distally at the sides
       const bowD = 0.050;             // free edge arcs distally at the centre
 
-      const edge = (sBase, bow, sgn, n, extra) => {
-        const pts = [];
-        for (let i = 0; i <= n; i++) {
-          const t = i / n;
-          const a = DORSAL + (t * 2 - 1) * w;
-          const k = Math.pow(t * 2 - 1, 2);
-          pts.push([sBase + sgn * bow * k + (extra || 0), a, off]);
-        }
-        return pts;
-      };
-
-      // proximal nail fold (eponychium) — the cuticle line
-      out.push({ on: 'digit', d, seg, pts: edge(sA, bowP, 1, 20), style: st(S.nail, { tone: 1.03, phase: nextPhase() }) });
-      // free edge
-      out.push({ on: 'digit', d, seg, pts: edge(sB, bowD, -1, 20), style: st(S.nail, { tone: 1.17, phase: nextPhase() }) });
-      // hyponychium: the line where the plate lifts off the skin
-      if (N.free > 0.05) {
-        out.push({
-          on: 'digit', d, seg, pts: edge(sB - N.free * 0.32, bowD * 0.9, -1, 18),
-          style: st(S.nailFine, { tone: 1.13, phase: nextPhase() })
-        });
+      // The plate as one closed outline. Drawn as four edges — proximal fold,
+      // free edge and two straight sides — it meets at square corners and
+      // reads as a sticker. A nail is a rounded rectangle with a strong free
+      // edge, narrowing a little toward the cuticle.
+      const sMid = (sA + sB) * 0.5, sHalf = (sB - sA) * 0.5;
+      const plate = [];
+      const NN = 64;
+      for (let i = 0; i <= NN; i++) {
+        const th = (i / NN) * TAU;
+        const c = Math.cos(th), sn = Math.sin(th);
+        // superelliptical corners
+        const cx = Math.sign(c) * Math.pow(Math.abs(c), 0.60);
+        const cy = Math.sign(sn) * Math.pow(Math.abs(sn), 0.60);
+        const taperW = 0.88 + 0.12 * (cx * 0.5 + 0.5);     // narrower at the fold
+        const bow = cx >= 0 ? -bowD * (1 - Math.abs(cy)) : bowP * (1 - Math.abs(cy));
+        plate.push([sMid + sHalf * cx + bow, DORSAL + w * cy * taperW, off]);
       }
+      out.push({ on: 'digit', d, seg, pts: plate, style: st(S.nail, { tone: 1.10, phase: nextPhase() }) });
+
+      // the free edge again, pressed harder: it is the one hard line a nail has
+      const freeEdge = [];
+      for (let i = 0; i <= 22; i++) {
+        const t = i / 22;
+        const cy = (t * 2 - 1) * 0.82;
+        freeEdge.push([sB - bowD * (1 - Math.abs(cy)), DORSAL + w * cy, off]);
+      }
+      out.push({ on: 'digit', d, seg, pts: freeEdge, style: st(S.nail, { tone: 1.25, phase: nextPhase() }) });
+
+      // hyponychium: where the plate lifts off the skin
+      if (N.free > 0.05) {
+        const hy = [];
+        for (let i = 0; i <= 18; i++) {
+          const t = i / 18;
+          const cy = (t * 2 - 1) * 0.80;
+          hy.push([sB - N.free * 0.32 - bowD * 0.9 * (1 - Math.abs(cy)), DORSAL + w * cy, off]);
+        }
+        out.push({ on: 'digit', d, seg, pts: hy, style: st(S.nailFine, { tone: 1.05, phase: nextPhase() }) });
+      }
+
       // lunula
       if (N.lunula > 0.03) {
         const pts = [];
@@ -3843,11 +3912,55 @@
       if (f > 0.25) {
         out.push({
           on: 'palm',
-          pts: palmCurve(rig, uvSpline([[1.02, v - 0.13], [1.04, v], [1.02, v + 0.13]], 16), false, 0.5),
-          style: st(S.crease, { tone: 0.46 * (f - 0.25) / 0.75, weight: 0.8, phase: F.nextPhase() })
+          pts: palmCurve(rig, uvSpline([[1.015, v - 0.14], [1.045, v], [1.015, v + 0.14]], 20), false, 0.55),
+          style: st(S.crease, { tone: 0.30 + 0.86 * (f - 0.25) / 0.75, weight: 0.95, phase: F.nextPhase() })
         });
       }
     }
+    // The clefts between the knuckles. This is the single most characteristic
+    // thing about the back of a closed hand, and it only exists when the
+    // joints are bent: with the hand open the heads sit level and the skin
+    // runs smooth across them.
+    for (let d = 1; d < 4; d++) {
+      const vGap = ((d - 1) + 0.5) / 3;
+      const fA = flexFrac(A, d, 'MCP', Math.max(0, rig.pose.digits[d].mcpFlex));
+      const fB = flexFrac(A, d + 1, 'MCP', Math.max(0, rig.pose.digits[d + 1].mcpFlex));
+      const f = Math.min(fA, fB);
+      if (f < 0.22) continue;
+      const k = (f - 0.22) / 0.78;
+      out.push({
+        on: 'palm',
+        pts: palmCurve(rig, uvSpline([
+          [1.035, vGap], [0.985, vGap - 0.004], [0.925, vGap], [0.855, vGap + 0.006]
+        ], 24), false, -0.55 - 0.9 * k),
+        style: st(S.crease, { tone: 0.34 + 0.78 * k, weight: 0.92, phase: F.nextPhase() })
+      });
+      // a shorter companion, the way a deep cleft doubles at its mouth
+      if (k > 0.45) {
+        out.push({
+          on: 'palm',
+          pts: palmCurve(rig, uvSpline([[1.02, vGap + 0.030], [0.965, vGap + 0.026], [0.915, vGap + 0.030]], 16), false, -0.35),
+          style: st(S.creaseFine, { tone: 0.5 + 0.8 * (k - 0.45) / 0.55, phase: F.nextPhase() })
+        });
+      }
+    }
+
+    // The crown of a bent knuckle carries a small central depression: the
+    // extensor hood is thin where it passes over the head, and the skin dips
+    // into it. Not everyone shows one.
+    if (A.knuckles.dimple) {
+      for (let d = 1; d < 5; d++) {
+        const v = (d - 1) / 3;
+        const f = flexFrac(A, d, 'MCP', Math.max(0, rig.pose.digits[d].mcpFlex));
+        if (f < 0.52) continue;
+        out.push({
+          on: 'palm',
+          pts: palmCurve(rig, uvSpline([[1.028, v - 0.030], [1.042, v], [1.028, v + 0.030]], 12), false, 0.35),
+          style: st(S.fold, { tone: 1.1 * (f - 0.52) / 0.48, weight: 0.7, phase: F.nextPhase() })
+        });
+      }
+    }
+
     // hollows between the metacarpals (the dorsal interossei)
     for (let d = 1; d < 4; d++) {
       const v = (d - 0.5) / 3;

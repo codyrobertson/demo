@@ -151,11 +151,55 @@
       if (f > 0.25) {
         out.push({
           on: 'palm',
-          pts: palmCurve(rig, uvSpline([[1.02, v - 0.13], [1.04, v], [1.02, v + 0.13]], 16), false, 0.5),
-          style: st(S.crease, { tone: 0.46 * (f - 0.25) / 0.75, weight: 0.8, phase: F.nextPhase() })
+          pts: palmCurve(rig, uvSpline([[1.015, v - 0.14], [1.045, v], [1.015, v + 0.14]], 20), false, 0.55),
+          style: st(S.crease, { tone: 0.30 + 0.86 * (f - 0.25) / 0.75, weight: 0.95, phase: F.nextPhase() })
         });
       }
     }
+    // The clefts between the knuckles. This is the single most characteristic
+    // thing about the back of a closed hand, and it only exists when the
+    // joints are bent: with the hand open the heads sit level and the skin
+    // runs smooth across them.
+    for (let d = 1; d < 4; d++) {
+      const vGap = ((d - 1) + 0.5) / 3;
+      const fA = flexFrac(A, d, 'MCP', Math.max(0, rig.pose.digits[d].mcpFlex));
+      const fB = flexFrac(A, d + 1, 'MCP', Math.max(0, rig.pose.digits[d + 1].mcpFlex));
+      const f = Math.min(fA, fB);
+      if (f < 0.22) continue;
+      const k = (f - 0.22) / 0.78;
+      out.push({
+        on: 'palm',
+        pts: palmCurve(rig, uvSpline([
+          [1.035, vGap], [0.985, vGap - 0.004], [0.925, vGap], [0.855, vGap + 0.006]
+        ], 24), false, -0.55 - 0.9 * k),
+        style: st(S.crease, { tone: 0.34 + 0.78 * k, weight: 0.92, phase: F.nextPhase() })
+      });
+      // a shorter companion, the way a deep cleft doubles at its mouth
+      if (k > 0.45) {
+        out.push({
+          on: 'palm',
+          pts: palmCurve(rig, uvSpline([[1.02, vGap + 0.030], [0.965, vGap + 0.026], [0.915, vGap + 0.030]], 16), false, -0.35),
+          style: st(S.creaseFine, { tone: 0.5 + 0.8 * (k - 0.45) / 0.55, phase: F.nextPhase() })
+        });
+      }
+    }
+
+    // The crown of a bent knuckle carries a small central depression: the
+    // extensor hood is thin where it passes over the head, and the skin dips
+    // into it. Not everyone shows one.
+    if (A.knuckles.dimple) {
+      for (let d = 1; d < 5; d++) {
+        const v = (d - 1) / 3;
+        const f = flexFrac(A, d, 'MCP', Math.max(0, rig.pose.digits[d].mcpFlex));
+        if (f < 0.52) continue;
+        out.push({
+          on: 'palm',
+          pts: palmCurve(rig, uvSpline([[1.028, v - 0.030], [1.042, v], [1.028, v + 0.030]], 12), false, 0.35),
+          style: st(S.fold, { tone: 1.1 * (f - 0.52) / 0.48, weight: 0.7, phase: F.nextPhase() })
+        });
+      }
+    }
+
     // hollows between the metacarpals (the dorsal interossei)
     for (let d = 1; d < 4; d++) {
       const v = (d - 0.5) / 3;
