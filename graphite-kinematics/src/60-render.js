@@ -692,14 +692,34 @@
           const u = un.at(Math.atan2(p[1] - un.cy, p[0] - un.cx));
           return [lerp(p[0], u[0], edgeOn), lerp(p[1], u[1], edgeOn), lerp(p[2], u[2], edgeOn), p[3], p[4]];
         }));
+        // The whole-digit union answers a digit gone compact. It does not
+        // answer a curled finger seen from the palm, which still spans the
+        // picture while its last bone is dead end-on - there the tip cap is
+        // the silhouette, drawn a size smaller than the tube behind it, and
+        // the finger reads as a tube with a disc laid on top. So the last
+        // bone gets an outline of its own, and whatever rail runs inside it
+        // gives way, since that is the stretch it has replaced.
+        const tu = RG.tipUnion(rig, view, d);
+        const tipMix = (tu.tipOn || 0) * fade;
+        if (tipMix > 0.004) {
+          emit(tu.outline, F.st(F.S.contour, { tone: 0.94 * tipMix, phase: d * 37 + 70 }),
+            { noSearch: true, selfTest: false, maxJump: jumpD });
+        }
+        const yieldTip = tipMix <= 0.004 ? (pts => pts) : (pts => pts.map((p) => {
+          const dx = p[0] - tu.cx, dy = p[1] - tu.cy;
+          const o = tu.at(Math.atan2(dy, dx));
+          const R = Math.hypot(o[0] - tu.cx, o[1] - tu.cy);
+          const k = 1 - tipMix * (1 - smoothstep(clamp01((Math.hypot(dx, dy) / Math.max(1e-6, R) - 0.92) / 0.22)));
+          return [p[0], p[1], p[2], p[3], p[4] * k];
+        }));
         const c = RG.digitContour(rig, view, d, { steps: 12 });
-        emit(bend(c.right), F.st(F.S.contour, { tone: fade, phase: d * 37 + 1 }), { maxJump: jumpD });
-        emit(bend(c.left), F.st(F.S.contour, { tone: fade, phase: d * 37 + 3 }), { maxJump: jumpD });
+        emit(yieldTip(bend(c.right)), F.st(F.S.contour, { tone: fade, phase: d * 37 + 1 }), { maxJump: jumpD });
+        emit(yieldTip(bend(c.left)), F.st(F.S.contour, { tone: fade, phase: d * 37 + 3 }), { maxJump: jumpD });
         // A ring or a tip cap is only an outline where the tube points away
         // from the eye. Pointing toward it, the near half of the same tube
         // covers the far half — and identity exclusion, which is what keeps a
         // silhouette from occluding itself, would otherwise let it through.
-        if (c.cap.length) emit(bend(c.cap), F.st(F.S.contour, { tone: 0.80 * fade, phase: d * 37 + 2 }),
+        if (c.cap.length) emit(bend(c.cap), F.st(F.S.contour, { tone: 0.80 * fade * (1 - tipMix), phase: d * 37 + 2 }),
           { noSearch: true, selfTest: true, maxJump: jumpD });
         for (let ri = 0; ri < c.rings.length; ri++) {
           // where a digit foreshortens, its knuckle ring IS the outline

@@ -1092,6 +1092,117 @@
   }
 
   /**
+   * A closed outline around a cloud of projected surface points: the radial
+   * maximum about their centroid, binned by angle, empty bins filled from
+   * their neighbours and the profile smoothed circularly, since a per-bin
+   * maximum taken straight out comes back a sawtooth. Returns a lookup by
+   * angle too, so a caller can pull another construction toward it point by
+   * point rather than cutting from one to the other.
+   */
+  function radialOutline(pts, pid) {
+    let cx = 0, cy = 0;
+    for (const p of pts) { cx += p[0]; cy += p[1]; }
+    cx /= pts.length; cy /= pts.length;
+    const NB = 128;
+    const rad = new Float64Array(NB).fill(-1);
+    const dep = new Float64Array(NB);
+    for (const p of pts) {
+      const dx = p[0] - cx, dy = p[1] - cy;
+      const r = Math.hypot(dx, dy);
+      let b = Math.floor(((Math.atan2(dy, dx) + Math.PI) / (Math.PI * 2)) * NB) % NB;
+      if (b < 0) b += NB;
+      if (r > rad[b]) { rad[b] = r; dep[b] = p[2]; }
+    }
+    // fill any empty bins from their neighbours, then smooth the profile
+    // circularly: taking a per-bin maximum straight out gives a sawtooth.
+    let filled = 0;
+    for (let b = 0; b < NB; b++) if (rad[b] >= 0) filled++;
+    if (filled < NB * 0.5) return { use: false };
+    for (let b = 0; b < NB; b++) {
+      if (rad[b] >= 0) continue;
+      let lo = b, hi = b, n = 0;
+      while (rad[(lo + NB) % NB] < 0 && n++ < NB) lo--;
+      n = 0;
+      while (rad[hi % NB] < 0 && n++ < NB) hi++;
+      const a = rad[((lo % NB) + NB) % NB], c2 = rad[hi % NB];
+      rad[b] = (a + c2) * 0.5;
+      dep[b] = (dep[((lo % NB) + NB) % NB] + dep[hi % NB]) * 0.5;
+    }
+    for (let pass = 0; pass < 3; pass++) {
+      const src = Float64Array.from(rad);
+      const sd = Float64Array.from(dep);
+      for (let b = 0; b < NB; b++) {
+        const p0 = src[(b - 1 + NB) % NB], p2 = src[(b + 1) % NB];
+        rad[b] = (p0 + src[b] * 2 + p2) * 0.25;
+        dep[b] = (sd[(b - 1 + NB) % NB] + sd[b] * 2 + sd[(b + 1) % NB]) * 0.25;
+      }
+    }
+    const outline = [];
+    for (let b = 0; b <= NB; b++) {
+      const i = b % NB;
+      const th = (i / NB) * Math.PI * 2 - Math.PI;
+      outline.push([cx + Math.cos(th) * rad[i], cy + Math.sin(th) * rad[i], dep[i], pid, 1]);
+    }
+    // Look up this outline by angle about its own centroid, so a caller can
+    // pull the ordinary rail-and-cap treatment toward it point by point
+    // instead of cutting from one construction to the other.
+    const at = (ang) => {
+      let a = ang - Math.floor((ang + Math.PI) / (Math.PI * 2)) * (Math.PI * 2);
+      const fi = (a + Math.PI) / (Math.PI * 2) * NB;
+      const i0 = Math.floor(fi) % NB, i1 = (i0 + 1) % NB, t = fi - Math.floor(fi);
+      const p0 = outline[i0], p1 = outline[i1];
+      return [lerp(p0[0], p1[0], t), lerp(p0[1], p1[1], t), lerp(p0[2], p1[2], t)];
+    };
+    return { use: true, outline, cx, cy, at };
+  }
+
+  /**
+   * The outline of a digit's last bone, for when that bone points at the eye.
+   *
+   * digitUnion answers this for a digit that has gone compact overall, but a
+   * curled finger seen from the palm is not compact - it still spans the
+   * picture, so the ratio it keys on stays high - while its distal phalanx is
+   * dead end-on. Measured, in a resting hand seen palmar: index and middle at
+   * 0.99 and 0.98 of fully end-on, and the union's own gate reading zero for
+   * both.
+   *
+   * There the tip cap IS the silhouette, and it is drawn a size smaller than
+   * the tube behind it, so the finger comes out as a tube with a disc laid on
+   * top - which is what a cut tube looks like. One bone seen end-on is small
+   * and convex whatever the rest of the digit is doing, so the same radial
+   * maximum works on it alone.
+   */
+  function tipUnion(rig, view, d) {
+    const dg = rig.digits[d];
+    const segs = dg.segs.filter(sg => sg.rendered);
+    const last = segs[segs.length - 1];
+    if (!last) return { use: false, tipOn: 0 };
+    const fore = Math.abs(vdot(last.t, view.e));
+    const tipOn = smoothstep(clamp01((fore - 0.72) / 0.21));
+    if (tipOn <= 0.004) return { use: false, tipOn: 0 };
+    const pts = [];
+    const add = (sg, s0, s1, NS) => {
+      const NA = 26;
+      for (let i = 0; i <= NS; i++) {
+        const sv = lerp(s0, s1, i / NS);
+        for (let k = 0; k < NA; k++) {
+          const q = digitSurface(rig, d, sg.seg, sv, (k / NA) * Math.PI * 2).P;
+          const p = view.px(q);
+          pts.push([p[0], p[1], view.near(q)]);
+        }
+      }
+    };
+    // enough of the bone before it that the outline leaves the tip already
+    // running along the tube, rather than meeting it at a seam of its own
+    const prev = segs.length > 1 ? segs[segs.length - 2] : null;
+    if (prev) add(prev, lerp(prev.sMin, prev.sMax, 0.62), prev.sMax, 4);
+    add(last, last.sMin, last.sMax, 9);
+    const ro = radialOutline(pts, last.pid);
+    if (!ro.use) return { use: false, tipOn: 0 };
+    return { use: true, tipOn, outline: ro.outline, cx: ro.cx, cy: ro.cy, at: ro.at };
+  }
+
+  /**
    * The outline of a whole digit as one form.
    *
    * A digit pointing at the eye has no useful per-segment silhouette: its
@@ -1152,60 +1263,9 @@
         }
       }
     }
-    let cx = 0, cy = 0;
-    for (const p of pts) { cx += p[0]; cy += p[1]; }
-    cx /= pts.length; cy /= pts.length;
-    const NB = 128;
-    const rad = new Float64Array(NB).fill(-1);
-    const dep = new Float64Array(NB);
-    for (const p of pts) {
-      const dx = p[0] - cx, dy = p[1] - cy;
-      const r = Math.hypot(dx, dy);
-      let b = Math.floor(((Math.atan2(dy, dx) + Math.PI) / (Math.PI * 2)) * NB) % NB;
-      if (b < 0) b += NB;
-      if (r > rad[b]) { rad[b] = r; dep[b] = p[2]; }
-    }
-    // fill any empty bins from their neighbours, then smooth the profile
-    // circularly: taking a per-bin maximum straight out gives a sawtooth.
-    let filled = 0;
-    for (let b = 0; b < NB; b++) if (rad[b] >= 0) filled++;
-    if (filled < NB * 0.5) return { use: false, edgeOn: 0 };
-    for (let b = 0; b < NB; b++) {
-      if (rad[b] >= 0) continue;
-      let lo = b, hi = b, n = 0;
-      while (rad[(lo + NB) % NB] < 0 && n++ < NB) lo--;
-      n = 0;
-      while (rad[hi % NB] < 0 && n++ < NB) hi++;
-      const a = rad[((lo % NB) + NB) % NB], c2 = rad[hi % NB];
-      rad[b] = (a + c2) * 0.5;
-      dep[b] = (dep[((lo % NB) + NB) % NB] + dep[hi % NB]) * 0.5;
-    }
-    for (let pass = 0; pass < 3; pass++) {
-      const src = Float64Array.from(rad);
-      const sd = Float64Array.from(dep);
-      for (let b = 0; b < NB; b++) {
-        const p0 = src[(b - 1 + NB) % NB], p2 = src[(b + 1) % NB];
-        rad[b] = (p0 + src[b] * 2 + p2) * 0.25;
-        dep[b] = (sd[(b - 1 + NB) % NB] + sd[b] * 2 + sd[(b + 1) % NB]) * 0.25;
-      }
-    }
-    const outline = [];
-    for (let b = 0; b <= NB; b++) {
-      const i = b % NB;
-      const th = (i / NB) * Math.PI * 2 - Math.PI;
-      outline.push([cx + Math.cos(th) * rad[i], cy + Math.sin(th) * rad[i], dep[i], segs[0].pid, 1]);
-    }
-    // Look up this outline by angle about its own centroid, so a caller can
-    // pull the ordinary rail-and-cap treatment toward it point by point
-    // instead of cutting from one construction to the other.
-    const at = (ang) => {
-      let a = ang - Math.floor((ang + Math.PI) / (Math.PI * 2)) * (Math.PI * 2);
-      const fi = (a + Math.PI) / (Math.PI * 2) * NB;
-      const i0 = Math.floor(fi) % NB, i1 = (i0 + 1) % NB, t = fi - Math.floor(fi);
-      const p0 = outline[i0], p1 = outline[i1];
-      return [lerp(p0[0], p1[0], t), lerp(p0[1], p1[1], t), lerp(p0[2], p1[2], t)];
-    };
-    return { use: true, edgeOn, outline, cx, cy, at };
+    const ro = radialOutline(pts, segs[0].pid);
+    if (!ro.use) return { use: false, edgeOn: 0 };
+    return { use: true, edgeOn, outline: ro.outline, cx: ro.cx, cy: ro.cy, at: ro.at };
   }
 
   /**
@@ -1366,7 +1426,7 @@
   GK.rig = {
     FLEX, ABD, TWIST, IDENT, View, solve, abdGate,
     palmSpine, palmSurface, palmNormal, palmThickPalmar, palmThickDorsal, palmWrap,
-    digitSurface, digitNormal, sectionCenter, silhouetteAlphas, digitContour, digitUnion, palmContour, palmSilhouette, webContours, firstWeb,
+    digitSurface, digitNormal, sectionCenter, silhouetteAlphas, digitContour, digitUnion, tipUnion, palmContour, palmSilhouette, webContours, firstWeb,
     PALM_NU, V_KNOTS
   };
 })(window.GK = window.GK || {});
