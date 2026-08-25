@@ -19,7 +19,7 @@ const HERE = path.join(__dirname, '..');
 // solve(), as a missing constant.
 ['00-math', '10-anatomy', '20-rig', '30-pose']
   .forEach(f => require(path.join(HAND, 'src', f + '.js')));
-['00-anthro', '10-skeleton', '20-build'].forEach(f => require(path.join(HERE, 'src', f + '.js')));
+['00-refdata', '00-anthro', '10-skeleton', '30-limits', '20-build'].forEach(f => require(path.join(HERE, 'src', f + '.js')));
 window.GK.anthro.useModel(require(path.join(HERE, 'data', 'ansur-model.json')));
 const writePNG = require(path.join(HAND, 'tools', 'png.js'));
 
@@ -32,7 +32,14 @@ const out = a[3] || '/tmp/stick.png';
 const S = parseInt(a[4] || '900');
 
 const fig = G.figure.buildFigure(seed);
-const rig = G.skel.solve(fig, {});
+// POSE= a JSON pose on the command line, so a limit or a sign can be
+// checked by asking for the pose that would expose it
+const POSE = process.env.POSE ? JSON.parse(process.env.POSE) : {};
+const rig = G.skel.solve(fig, POSE);
+if (rig.clipped && rig.clipped.length) {
+  console.log('  clipped: ' + rig.clipped.length + ' axes, worst ' +
+    Math.max(...rig.clipped.map(c => Math.abs(c.by))).toFixed(1) + ' deg');
+}
 
 // ---- colour by chain, so a limb in the wrong place is obvious at a glance
 const CHAIN = (id) =>

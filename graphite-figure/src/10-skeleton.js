@@ -48,6 +48,14 @@
   //            parent's own frame, as fractions of stature: a clavicle
   //            leaves the spine sideways and forward and neither of those is
   //            a distance along a vertebra.
+  //    aimTo   the strongest form of all: a named world landmark this bone
+  //            must END on. Its direction AND its length both fall out of
+  //            the measurement, so neither is authored. The clavicle is the
+  //            case that forced it — ANSUR measures acromial height and
+  //            biacromial breadth, which between them fix exactly where the
+  //            acromion is, so guessing a collarbone length and pointing it
+  //            in a guessed direction was throwing away two measurements and
+  //            landing the shoulder 27mm low and 36mm narrow.
   //    atKey   for offsets that are not constants across figures. A hip is
   //            half a pelvis away from the midline and a wide pelvis puts it
   //            further out, so the offset is resolved per figure and looked
@@ -72,6 +80,15 @@
   //            joint is a hinge and saying so here is what stops a solver
   //            quietly bending it sideways to reach something.
   //    lat     +1 if the bone's own +Y should be flipped on the right side.
+  //    flip    per-axis sign, applied to the POSE value only. An aim bone's
+  //            local +Y falls wherever the aim direction puts it, and for a
+  //            limb aimed downward that is world-right on BOTH sides — so
+  //            positive abduction would carry the limb across the midline,
+  //            i.e. adduct it. Rather than leave callers to remember which
+  //            limbs are inverted, each says so here and "abduct" means away
+  //            from the midline everywhere. Caught by the span check: a
+  //            T-pose built with positive abduction folded the arms inward
+  //            and reported a 948mm span error.
   //
   //  Vertebrae are declared individually rather than as one "spine" bone.
   //  A spine posed as a single rotation reads as a broom handle: the whole
@@ -140,7 +157,7 @@
     // from the body instead of carrying the shoulder with it.
     add({
       // out along the shoulder, a little up and a little back
-      id: 'clavicle', parent: T1, atKey: 'sc', aim: [0.16, 0.97, -0.18],
+      id: 'clavicle', parent: T1, atKey: 'sc', aimTo: 'acromion',
       len: 'clavicle', side: true, lat: 1,
       dof: { flex: 'clavElev', abd: 'clavProt', twist: null },
     });
@@ -153,7 +170,7 @@
     });
     add({
       // straight down, with a few degrees of outward hang
-      id: 'humerus', parent: 'scapula', aim: [-0.995, 0.10, 0],
+      id: 'humerus', parent: 'scapula', aim: [-0.995, 0.10, 0], flip: { abd: -1 },
       len: 'humerus', side: true, lat: 1,
       dof: { flex: 'ghFlex', abd: 'ghAbd', twist: 'ghRot' },
     });
@@ -173,7 +190,7 @@
       // than fixed here
       // down and medially: the femora converge on the knees, by more the
       // wider the pelvis, which is why the aim is nudged per figure below
-      id: 'femur', parent: 'pelvis', atKey: 'hip', aim: [-0.996, -0.090, 0],
+      id: 'femur', parent: 'pelvis', atKey: 'hip', aim: [-0.996, -0.090, 0], flip: { abd: -1 },
       len: 'femur', side: true, lat: 1,
       dof: { flex: 'hipFlex', abd: 'hipAbd', twist: 'hipRot' },
     });
@@ -249,8 +266,16 @@
     // the side-bearing axes reverse on the right, so one pose value means
     // the same thing anatomically on both sides — "abduct" is away from the
     // midline, not "toward +Y"
-    const s = b.sign === undefined ? 1 : b.sign;
-    return [pick('flex'), pick('abd') * s, pick('twist') * s];
+    // ANATOMICAL convention, deliberately: positive abduction is away from
+    // the midline, positive rotation is external, on both sides. The side
+    // sign and the per-bone axis flip are NOT applied here — they are
+    // geometry, and they are applied when the frame is built. Applying them
+    // first puts the angle in a different convention from the limit table
+    // that is about to clamp it, and the clamp then reads an abduction as an
+    // adduction: a T-pose came out with one arm horizontal and the other
+    // hanging at 30 degrees, because the left arm's -90 hit the -30 degree
+    // adduction stop while the right arm's +90 sailed through.
+    return [pick('flex'), pick('abd'), pick('twist')];
   }
 
   /** a pose value by dotted key, e.g. 'lumbarFlex' or 'ghFlex' resolved per side later */
@@ -269,6 +294,22 @@
     const root = pose.root || {};
     const rootRot = mMul(TWIST(root.twist || 0), mMul(ABD(root.abd || 0), FLEX(root.flex || 0)));
 
+    // PASS ONE: what every bone was ASKED for. Separate from the walk because
+    // the joint limits are coupled sideways across the tree — a femur's
+    // flexion range depends on how far the knee below it is bent, and the
+    // walk reaches the femur first. Resolving every request up front means
+    // the clamp sees the whole pose at once instead of the part of it that
+    // happens to have been solved already.
+    const raw = {};
+    for (const b of TREE) raw[b.id] = anglesFor(fig, pose, b);
+    const lim = GK.limits ? GK.limits.clampAll(fig, raw) : { angles: raw, clipped: [] };
+    rig.angles = lim.angles;
+    // What a pose asked for and could not have. Recorded rather than
+    // swallowed: a clamp that leaves no trace makes an unreachable pose look
+    // like a reached one, and the figure quietly stops matching the request.
+    rig.clipped = lim.clipped;
+
+    // PASS TWO: the walk itself, on angles that are now known to be legal.
     for (const b of TREE) {
       const p = b.parent ? rig.bones[b.parent] : null;
       if (b.parent && !p) throw new Error('bone ' + b.id + ' solved before its parent ' + b.parent);
@@ -292,11 +333,29 @@
         A = p ? p.B.slice() : (root.pos || [0, 0, 0]).slice();
       }
 
-      const [af, aa, at2] = anglesFor(fig, pose, b);
+      // anatomical angles in, geometry out: the side sign and the bone's own
+      // axis flip are applied here, after the clamp has done its work in the
+      // convention the measured ranges are written in
+      const fl = b.flip || {};
+      const [af0, aa0, at0] = rig.angles[b.id];
+      const af = af0 * (fl.flex || 1);
+      const aa = aa0 * s * (fl.abd || 1);
+      const at2 = at0 * s * (fl.twist || 1);
       const posed = mMul(TWIST(at2), mMul(ABD(aa), FLEX(af)));
 
-      let frame;
-      if (b.aim) {
+      let frame, lenOverride = null;
+      if (b.aimTo) {
+        // point at a measured landmark and stop there
+        const t = fig.aimTargets[b.aimTo];
+        const target = [t[0] - fig.rootHeight, t[1] * s, t[2]];
+        const v = M.vsub(target, A);
+        lenOverride = M.vlen(v);
+        const want = M.vnorm(v);
+        const ref = Math.abs(want[2]) > 0.94 ? [1, 0, 0] : [0, 0, 1];
+        const zc = M.vnorm(M.vsub(ref, M.vmul(want, M.vdot(want, ref))));
+        const base = mOrtho([want, M.vcross(zc, want), zc]);
+        frame = mOrtho(mMul(base, mMul(TWIST(b.roll ? b.roll * s : 0), posed)));
+      } else if (b.aim) {
         // An aim is a world direction, so it is resolved against the world
         // and then handed the pose in its own local terms. +Z is kept as
         // close to anterior as the aim allows, which is what makes flexion
@@ -312,7 +371,8 @@
         const rest = mMul(TWIST(rt * s), mMul(ABD(ra * s), FLEX(rf)));
         frame = mOrtho(mMul(pFrame, mMul(rest, posed)));
       }
-      const len = (fig.len[b.len] === undefined ? 0 : fig.len[b.len]);
+      const len = lenOverride !== null ? lenOverride
+        : (fig.len[b.len] === undefined ? 0 : fig.len[b.len]);
       const B = vmad(A, frame[0], len);
 
       rig.bones[b.id] = { id: b.id, spec: b, A, B, frame, len, sign: s };

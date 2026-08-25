@@ -105,11 +105,21 @@
       sc: [Lm.suprasternale[0] - m.cervicaleheight, 0, Lm.suprasternale[2]],
     };
 
-    return {
+    const fig = {
       seed, m, seg, landmarks: Lm, girth: GK.anthro.girths(m),
       stature: m.stature, rootHeight: rootH,
       len, at, groups: weights(),
     };
+    // the measured joint envelope, per bone, so a pose can be clamped into
+    // something a body can actually do
+    fig.limits = GK.limits ? GK.limits.build(fig) : null;
+    // Landmarks a bone is required to END on, in world coordinates (height
+    // above the floor, lateral half-offset, anterior). The clavicle takes
+    // both its length and its direction from this rather than from a guess.
+    fig.aimTargets = {
+      acromion: [m.acromialheight, m.biacromialbreadth * 0.5, 0],
+    };
+    return fig;
   }
 
   GK.figure = { buildFigure, weights };
