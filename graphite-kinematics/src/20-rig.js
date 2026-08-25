@@ -715,7 +715,7 @@
     if (bend < 0.05) return 0;
     const pr = AN.segmentProfile(A, d, seg, 0);
     const r = Math.max(pr[0], pr[1]);
-    return Math.min(0.34, 0.62 * r * Math.tan(bend * 0.5) / Math.max(1e-6, len));
+    return Math.min(0.18, 0.62 * r * Math.tan(bend * 0.5) / Math.max(1e-6, len));
   }
 
   /** section centre of a digit segment, including any offset from segmentProfile */

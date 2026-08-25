@@ -432,7 +432,13 @@ console.log('\n— per-frame cost of a substepped step() —');
   report('p95', p95, 'ms');
   report('worst observed', max, 'ms');
   check('p95 under the 4ms/frame budget', p95, 0, 4, 'ms');
-  check('worst observed under the 4ms/frame budget', max, 0, 4, 'ms');
+  // The single worst sample is asserted far looser than the p95, because on a
+  // shared container it is not measuring this code. Observed on an unchanged
+  // tree: 2.2ms, 2.9ms, 12.6ms and 18.8ms for the same work, entirely from
+  // whatever else the machine was doing. A check that fails at random teaches
+  // people to ignore the suite, which costs more than the check is worth. The
+  // p95 above is the real budget; this one is here to catch a genuine blow-up.
+  check('worst observed not wildly over budget', max, 0, 40, 'ms');
 }
 
 console.log('\n' + pass + ' pass, ' + fail + ' fail');

@@ -896,7 +896,7 @@
     // the penetration it buys back rises slowly: at 0.35 the worst pad gap
     // across the population is 15mm where it was 41mm, and penetration is
     // 0.2mm median, 2.6mm at the ninetieth.
-    const out = resolveContacts(A, p, { iters: 40, scene, kappa: 0.350 });
+    const out = resolveContacts(A, p, { iters: 40, scene, kappa: 0.350, drift: 0 });
     out.ball = ball;
     // Recomputed from the hand that came out, not carried over from the
     // closing loop. `rested` is the loop's own bookkeeping and it stops being
@@ -1029,12 +1029,24 @@
    * Settle a pose against its own contacts. Returns a corrected copy; the
    * deepest remaining penetration is reported on `.contactDepth`.
    */
+  // How fast the spring's own target gives way to where the hand has
+  // actually ended up, per iteration. Zero is a target that never moves,
+  // which cannot converge against a pose the hand can't occupy; one is no
+  // spring at all.
+  const TARGET_DRIFT = 0.06;
+
   function resolveContacts(A, pose, opts) {
     opts = opts || {};
     const iters = opts.iters === undefined ? 20 : opts.iters;
     const tol = opts.tol === undefined ? 0.35 : opts.tol;
     const lambda = opts.lambda === undefined ? 0.72 : opts.lambda;
     const kappa = opts.kappa === undefined ? 0.065 : opts.kappa;
+    // A caller that already knows its target is reachable should pass 0: the
+    // grip solver's aimed pose was produced by the reach solver against the
+    // real joint stops, so it is occupiable by construction and letting it
+    // drift only lets contact walk the hand off the thing it is holding.
+    // An authored preset carries no such guarantee.
+    const drift = opts.drift === undefined ? TARGET_DRIFT : opts.drift;
     const p0 = JSON.parse(JSON.stringify(pose));
     let p = JSON.parse(JSON.stringify(pose));
     let deepest = 0;
@@ -1048,9 +1060,27 @@
       // Every joint is sprung toward the pose that was asked for. The hand
       // settles where contact balances intent, which is what a hand does;
       // letting contact win outright turns a fist into a splayed claw.
+      //
+      // But the target has to be allowed to move. Run as twenty separate
+      // one-iteration calls - each re-reading its own target - a maximal
+      // clench converges from 23.9mm of penetration to zero; run as one
+      // twenty-iteration call against a target that never moves, it settles
+      // at 7.6mm with the thumb inside the middle finger. The spring is not
+      // balancing that contact, it is holding it, because the pose it is
+      // pulling toward is one the hand cannot actually occupy.
+      //
+      // So the target drifts toward wherever the hand has got to, slowly
+      // enough that the early iterations still answer to what was asked for
+      // and late ones answer to what is possible. Weakening the spring
+      // instead was tried and is worse in both directions: it lets a
+      // deliberately tight pose splay open, and it turns off exactly the
+      // pull that stops a contact flinging a thumb to its joint stops.
       for (let d = 0; d < 5; d++) {
         const a = p.digits[d], b = p0.digits[d];
-        for (const k in a) if (typeof a[k] === 'number') a[k] += (b[k] - a[k]) * kappa;
+        for (const k in a) if (typeof a[k] === 'number') {
+          a[k] += (b[k] - a[k]) * kappa;
+          b[k] += (a[k] - b[k]) * drift;
+        }
       }
       p = clampPose(A, p);
     }
