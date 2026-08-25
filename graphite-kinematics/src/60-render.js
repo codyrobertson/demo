@@ -694,7 +694,10 @@
         // ...and a caller can ask for one of them on its own
         if (only && (opts.src || 'other') !== only) return;
         const selfTol = opts.selfTest ? eps * 3 + 1.6 : 0;
-        // slots: 0 x, 1 y, 2 front, 3 near, 4 ghost, 5 gain, 6 part id
+        // slots: 0 x, 1 y, 2 front, 3 near, 4 ghost, 5 gain, 6 part id,
+        // then 7 visibility, 8 ghost decay, 9 turn, 10 base gain - the last
+        // four are working values, resolved into 2/4/5 in the pass below once
+        // the edge's own strength is known.
         const tagged = pts.map(p => {
           const id = p[3] === undefined ? -1 : p[3];
           let v = 1 - df.hidden(p[0], p[1], p[2], id, eps, gap);
@@ -704,41 +707,63 @@
           // surface throws away exactly those points and nothing else.
           if (opts.selfTest) v *= 1 - df.hidden(p[0], p[1], p[2], id, selfTol, gap * 2, true);
           const behind = df.behind(p[0], p[1], p[2], id);
-          const step = df.stepBehind(p[0], p[1], p[2], id);
-          const merge = step === Infinity ? 1 : 0.16 + 0.84 * smoothstep(clamp01(step / 13));
-          // A shallow step doesn't always mean a weak edge — two knuckles
+          // A shallow step doesn't always mean a weak edge - two knuckles
           // pressed together part with almost no depth between them, yet the
           // surface still turns hard right there. So the turn the surface is
           // taking underfoot can rescue an edge the separation alone would
-          // have thrown away.
-          //
-          // But only so far. Taken at equal weight this term is not a rescue,
-          // it is an override: a silhouette sits by definition where the
-          // depth field falls off a cliff, so the slope is always steep there
-          // and the max always picked it. Every contour in the drawing came
-          // out at full strength and the separation behind it decided
-          // nothing. That is why a clenched fist read as five separate
-          // sausages - the outer boundary of the hand and the seam between
-          // two fingers pressed together were the same black line, and
-          // nothing said which was which.
+          // have thrown away, though only so far: a silhouette sits by
+          // definition where the depth field falls off a cliff, so its slope
+          // is always steep, and at equal weight this term stops being a
+          // rescue and becomes an override.
           const turn = smoothstep(clamp01(df.slopeAt(p[0], p[1]) / 0.35));
-          const gain = (p[4] === undefined ? 1 : p[4]) *
-            Math.max(merge, 0.45 * turn) * crowdGive(g, p[0], p[1]);
+          const base = (p[4] === undefined ? 1 : p[4]) * crowdGive(g, p[0], p[1]);
           const decay = Math.exp(-Math.max(0, behind - 2) / 11);
-          return [p[0], p[1], v * gain, p[2], (1 - v) * decay * gain, gain, id];
+          return [p[0], p[1], 0, p[2], 0, 0, id, v, decay, turn, base];
         });
-        // Overlap emphasis: where this form passes in front of another, a
-        // draughtsman leans on the line. Probe just outside the contour and
-        // ask whether something sits behind it there.
         for (let i = 0; i < tagged.length; i++) {
           const p = tagged[i];
           const a = tagged[Math.max(0, i - 1)], b = tagged[Math.min(tagged.length - 1, i + 1)];
           const dx = b[0] - a[0], dy = b[1] - a[1];
           const dl = Math.hypot(dx, dy) || 1;
-          const nx = -dy / dl * 5, ny = dx / dl * 5;
+          const ux = -dy / dl, uy = dx / dl;
+          // What is behind this edge? Asked at the contour point itself the
+          // answer is almost always "nothing", because a contour point sits
+          // exactly on its own part's boundary and the thing behind it starts
+          // a pixel or two further out - measured on a clenched fist, 841 of
+          // 1197 contour points reported open air, which cannot be true of a
+          // hand with its fingers folded into its own palm. Every one of them
+          // then drew at full strength, so the outer boundary of the hand and
+          // the seam between two fingers pressed together came out as the
+          // same black line and the fist read as five separate sausages.
+          //
+          // So ask just outside, both ways, and keep the nearest answer.
+          // Something in FRONT is not an answer: stepBehind already returns
+          // Infinity for that, which is what stops a finger crossing in front
+          // from lightening the edge it is crossing.
+          let step = df.stepBehind(p[0], p[1], p[3], p[6]);
+          for (const sgn of [-1, 1]) {
+            // Out to about a millimetre and a half in scene units. Adjacent
+            // fingers in a fist are pressed together with under a millimetre
+            // between their surfaces, which at this scale is seven pixels -
+            // a probe that only reached five found nothing and reported open
+            // air between two touching fingers. Reaching further than this
+            // stops finding neighbours and starts finding the next thing
+            // along: past sixteen pixels the count barely moves.
+            for (const off of [3, 7, 12]) {
+              const s2 = df.stepBehind(p[0] + ux * sgn * off, p[1] + uy * sgn * off, p[3], p[6]);
+              if (s2 < step) step = s2;
+            }
+          }
+          const merge = step === Infinity ? 1 : 0.16 + 0.84 * smoothstep(clamp01(step / 13));
+          const gain = p[10] * Math.max(merge, 0.45 * p[9]);
+          p[5] = gain;
+          p[2] = p[7] * gain;
+          p[4] = (1 - p[7]) * p[8] * gain;
+          // Overlap emphasis: where this form passes in front of another, a
+          // draughtsman leans on the line.
           let best = 0;
           for (const sgn of [-1, 1]) {
-            const bh = df.behind(p[0] + nx * sgn, p[1] + ny * sgn, p[3], p[6]);
+            const bh = df.behind(p[0] + ux * sgn * 5, p[1] + uy * sgn * 5, p[3], p[6]);
             if (bh > 0.5 && bh < 70) best = Math.max(best, clamp01(bh / 14));
           }
           p[2] *= 1 + best * 0.55;
