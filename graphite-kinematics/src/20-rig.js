@@ -104,20 +104,30 @@
     return 1 - 0.88 * smoothstep(clamp01(flex / (78 * DEG)));
   }
 
-  function solve(A, pose) {
+  /**
+   * `mount` plants the whole hand somewhere other than the world origin:
+   * {origin, frame}, the position of the wrist and the orientation of the
+   * forearm at it. Everything below derives from rig.root and rig.origin, so
+   * pre-multiplying those carries the entire hand — every metacarpal, every
+   * surface sample, every silhouette — without a second pass over the result.
+   * Omitted, the hand sits at the origin exactly as it always has.
+   */
+  function solve(A, pose, mount) {
     const rig = { anatomy: A, pose, digits: [], joints: [] };
     const W = pose.wrist;
+    const base = mount && mount.frame ? mOrtho(mount.frame) : IDENT();
 
     // forearm roll, then wrist deviation, then wrist flexion
     const root = mMul(TWIST(W.pron || 0), mMul(ABD(W.dev || 0), FLEX(W.flex || 0)));
-    rig.root = mOrtho(root);
-    rig.origin = [0, 0, 0];
+    rig.root = mOrtho(mMul(base, root));
+    rig.origin = mount && mount.origin ? mount.origin.slice() : [0, 0, 0];
+    rig.mount = mount || null;
 
     // carpus: a short block between the wrist crease and the metacarpal bases
     const carpalLen = 26 * A.size;
     rig.carpal = { frame: rig.root, A: vmad(rig.origin, rig.root[0], -carpalLen * 0.55), len: carpalLen };
     rig.forearm = {
-      frame: mOrtho(mMul(TWIST(W.pron || 0), IDENT())),
+      frame: mOrtho(mMul(base, TWIST(W.pron || 0))),
       A: rig.origin
     };
 
