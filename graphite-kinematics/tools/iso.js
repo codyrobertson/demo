@@ -6,7 +6,7 @@ const path = require('path');
 const G = window.GK, DEG = G.math.DEG;
 const writePNG = require('./png.js');
 const [key, az, el, out] = [process.argv[2]||'rest', +(process.argv[3]||0), +(process.argv[4]||0), process.argv[5]||'/tmp/iso.png'];
-const NAMES = ['contour','crease','fold','nail','print','palmcrease','ridge','vein','tendon','hair','hatch'];
+const NAMES = ['contour','crease','fold','nail','print','palmcrease','ridge','vein','tendon','hair','hatch','model'];
 const cell = 340, cols = 6, rows = Math.ceil(NAMES.length/cols);
 const W = cell*cols, H = cell*rows;
 const big = new Uint8ClampedArray(W*H*4).fill(255);

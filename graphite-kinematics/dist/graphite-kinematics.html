@@ -6514,14 +6514,15 @@
       }
 
       // ---- contours --------------------------------------------------------
-      if (layers.contour) this._contours(rig, view, df, ids, g, grade, stl, toneScale, wobScale, ghost, eps, gap);
+      if (layers.contour) this._contours(rig, view, df, ids, g, grade, stl, toneScale, wobScale, ghost, eps, gap,
+        state.trace || null, state.contourOnly || null);
 
       built.ms = Date.now() - t0;
       this.last = built;
       return built;
     }
 
-    _contours(rig, view, df, ids, g, grade, stl, toneScale, wobScale, ghost, eps, gap) {
+    _contours(rig, view, df, ids, g, grade, stl, toneScale, wobScale, ghost, eps, gap, trace, only) {
       const search = stl.search === undefined ? 0.35 : stl.search;
 
       /**
@@ -6531,6 +6532,14 @@
        */
       const emit = (pts, style, opts) => {
         opts = opts || {};
+        // Which construction drew this line. A drawing that has gone wrong
+        // shows a line in the wrong place, and the first question is always
+        // which of eight constructions put it there - a question the finished
+        // plate cannot answer, because every one of them lands in the same
+        // graphite. Recorded only when a caller asks (tools/parts.js).
+        if (trace) trace.push({ src: opts.src || 'other', pts: pts.slice() });
+        // ...and a caller can ask for one of them on its own
+        if (only && (opts.src || 'other') !== only) return;
         const selfTol = opts.selfTest ? eps * 3 + 1.6 : 0;
         // slots: 0 x, 1 y, 2 front, 3 near, 4 ghost, 5 gain, 6 part id
         const tagged = pts.map(p => {
@@ -6624,7 +6633,21 @@
       // the whole reason the thumb reads as a rounded form sitting beside the
       // hand rather than part of it.
       const webAngles = fw.thSide.map(P => view.px(P));
-      for (let d = 0; d < 5; d++) {
+      // Back to front, and it is not a nicety. Graphite accumulates into a
+      // field that later marks read: a stroke gives way where the paper is
+      // already dark and presses where it is bare. Laid down in digit order
+      // that feedback runs backwards half the time - a finger at the back of
+      // the hand gets the bare paper and the full pressure, and the one in
+      // front arrives second and yields to it. Sorted by depth, the same
+      // mechanism does what a hand does: the far form is stated first and the
+      // near one is laid over it, so the near one is the darker line and the
+      // drawing has an order in it.
+      const order = [0, 1, 2, 3, 4].sort((a, b) => {
+        const da = view.near(rig.digits[a].tip) + view.near(rig.digits[a].segs[1].A);
+        const db = view.near(rig.digits[b].tip) + view.near(rig.digits[b].segs[1].A);
+        return da - db;
+      });
+      for (const d of order) {
         // One outline per digit, traced from what the digit covers. Every
         // per-section construction that used to live here - two rails, a tip
         // cap, a patch for the last bone, a patch for the whole digit, and
@@ -6653,7 +6676,7 @@
             });
           }
           emit(outline, F.st(F.S.contour, { tone: 0.95, phase: d * 37 + 1 }),
-            { maxJump: jumpD });
+            { maxJump: jumpD, src: 'digit:' + rig.digits[d].name });
         }
         // The knuckle is a real step in the outline of a foreshortened digit,
         // and it is inside the border walk, not on it - so it still has to be
@@ -6661,7 +6684,7 @@
         const rings = RG.knuckleRings(rig, view, d);
         for (let ri = 0; ri < rings.length; ri++) {
           emit(rings[ri], F.st(F.S.contour, { tone: 0.95, phase: d * 37 + 40 + ri }),
-            { noSearch: true, noGhost: true, selfTest: true, maxJump: jumpD });
+            { noSearch: true, noGhost: true, selfTest: true, maxJump: jumpD, src: 'knuckle' });
         }
       }
 
@@ -6673,10 +6696,11 @@
           fade === false ? 1 : smoothstep(clamp01((u + 0.40) / 0.30))];
       });
       const jump = Math.max(14, this.w * 0.035);
-      emit(tagPalm(sil.sideA), F.st(F.S.contour, { tone: 0.90, phase: 200 }), { maxJump: jump, selfTest: true });
-      emit(tagPalm(sil.sideB), F.st(F.S.contour, { tone: 0.90, phase: 201 }), { maxJump: jump, selfTest: true });
+      emit(tagPalm(sil.sideA), F.st(F.S.contour, { tone: 0.90, phase: 200 }), { maxJump: jump, selfTest: true, src: 'palm' });
+      emit(tagPalm(sil.sideB), F.st(F.S.contour, { tone: 0.90, phase: 201 }), { maxJump: jump, selfTest: true, src: 'palm' });
       emit(tagPalm(sil.cap, false),
-        F.st(F.S.contourSoft, { tone: 0.30, taper: 0.86, phase: 202 }), { noSearch: true, selfTest: true });
+        F.st(F.S.contourSoft, { tone: 0.30, taper: 0.86, phase: 202 }),
+        { noSearch: true, selfTest: true, src: 'palmCap' });
       // The thumb's commissure, as the outline of the wedge it actually is:
       // a closed band running up the thumb's own flank, across the free
       // margin, back down the palm's, and across the depth of the
@@ -6686,15 +6710,15 @@
       if (rig.ball) {
         const bo = ballOutline(rig.ball, view).map(p => [p[0], p[1], p[2], ids.ball, 1]);
         emit(bo, F.st(F.S.contour, { tone: 0.86, weight: 1.05, taper: 0.5, phase: 300 }),
-          { noSearch: true, maxJump: jump });
+          { src: 'ball', noSearch: true, maxJump: jump });
       }
       emit(fw.band, F.st(F.S.contour, { tone: 1.05, weight: 1.18, taper: 0.5, phase: 208 }),
-        { maxJump: jump, selfTest: true });
+        { src: 'web', maxJump: jump, selfTest: true });
       // the free margins of the webs, spanning finger to finger
       const webs = RG.webContours(rig, view);
       for (let i = 0; i < webs.length; i++) {
         emit(webs[i], F.st(F.S.contour, { tone: 0.72, taper: 0.68, phase: 210 + i }),
-          { noSearch: true, maxJump: jump });
+          { src: 'web', noSearch: true, maxJump: jump });
       }
     }
 
