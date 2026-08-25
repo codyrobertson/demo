@@ -710,8 +710,19 @@
   //   tilt : how far palmar the metacarpal head sits (rotY), builds the arch
   //   roll : axial set of the metacarpal (rotX)
   const CMC_BASE = [
-    // thumb — sits far radial and palmar, and is rolled ~80 deg out of the palm plane
-    { pos: [10.0, -20.0, 10.0], fan: -42 * DEG, tilt: 20 * DEG, roll: -86 * DEG },
+    // thumb — the trapezium is in the DISTAL carpal row, so CMC1 sits at
+    // roughly the same proximodistal level as CMC2 (index), not behind it;
+    // it is far radial and palmar, and rolled ~63 deg out of the palm plane
+    // so the nail faces radially and a little dorsally at rest, not palmar.
+    // Measured, the nail comes out radial and a little PALMAR, and the pad
+    // ends up near enough edge-on that a palmar view of the hand shows the
+    // thumb's flank instead of its print and creases. Rolling to about -50
+    // fixes both, but the thenar's cross-section offset is expressed along
+    // the bone's own dorsal axis, so it rotates with the roll and stops
+    // covering the metacarpal in opposition. Reference that offset to the
+    // hand's palmar direction first, then roll, then refit the opposition
+    // chains - in that order, or the fist starts interpenetrating.
+    { pos: [17.5, -20.0, 10.0], fan: -42 * DEG, tilt: 20 * DEG, roll: -63 * DEG },
     { pos: [20.0, -11.5, -2.5], fan: -9.5 * DEG, tilt: 4 * DEG, roll: -8 * DEG },
     { pos: [21.0, -1.5, -3.5], fan: -0.5 * DEG, tilt: 0 * DEG, roll: 0 * DEG },
     { pos: [18.5, 7.5, -1.5], fan: 8.0 * DEG, tilt: 5 * DEG, roll: 9 * DEG },
@@ -943,8 +954,16 @@
   // ------------------------------------------------------ cross-section shape
   /**
    * Half-breadth (a, along the mediolateral axis) and half-depth (b, along the
-   * dorsopalmar axis) at parameter s of segment `seg` of digit `d`.
-   * s runs 0..1 over the bone and beyond 1 into the fingertip dome.
+   * dorsopalmar axis) at parameter s of segment `seg` of digit `d`. s runs
+   * 0..1 over the bone and beyond 1 into the fingertip dome.
+   *
+   * A third and fourth value, when present, displace the cross-section's
+   * CENTRE off the bone axis (medio-lateral, dorso-palmar) without changing
+   * a/b. Every digit is centred (0,0) except the thumb's metacarpal, whose
+   * flesh is not a tube around the bone: the thenar muscles sit palmar and
+   * radial to it, and its dorsal aspect is subcutaneous bone you can feel
+   * through the skin. Centring that mass on the bone draws a sausage; the
+   * offset is what makes it read as a hand's thenar instead.
    */
   function segmentProfile(A, d, seg, s) {
     const bone = A.bones[d];
@@ -958,9 +977,17 @@
         // The thumb's metacarpal is not buried: it is the thenar eminence,
         // a muscular mass that swells at mid-shaft and narrows to the knuckle.
         const a = W * M.profile(
-          [[0, 1.42], [0.26, 1.66 * A.palm.thenar], [0.56, 1.58 * A.palm.thenar],
-           [0.82, 1.22], [1, bone.jw[0]]], s) * A.palm.padding;
-        return [a, a * lerp(0.70, 0.92, s)];
+          [[0, 1.95], [0.26, 2.29 * A.palm.thenar], [0.56, 2.18 * A.palm.thenar],
+           [0.82, 1.55], [1, bone.jw[0]]], s) * A.palm.padding;
+        const b = a * lerp(0.70, 0.92, s);
+        // The mass is not centred on the bone: abductor/flexor/opponens
+        // pollicis brevis pile onto its palmar-radial side, while the dorsal
+        // side is just skin over bone. Push the cross-section centre palmar
+        // (positive dor) so the palmar half-thickness grows and the dorsal
+        // half shrinks, tapering to zero by the knuckle where the thumb's
+        // own column takes over and has to sit back on the bone axis again.
+        const offD = -b * M.profile([[0, 0.32], [0.30, 0.46], [0.62, 0.40], [1, 0]], s);
+        return [a, b, 0, offD];
       }
       // finger metacarpals are buried in the palm; only the head reads as form
       const a = W * lerp(1.18, bone.jw[0], s);
@@ -1055,7 +1082,7 @@
   const M = GK.math;
   const AN = GK.anatomy;
   const { DEG, clamp, clamp01, lerp, smoothstep, inv } = M;
-  const { vadd, vsub, vmul, vmad, vdot, vcross, vnorm, vlen, vlerp, vcopy, mApply, mMul, mOrtho } = M;
+  const { vadd, vsub, vmul, vmad, vdot, vcross, vnorm, vlen, vdist, vlerp, vcopy, mApply, mMul, mOrtho } = M;
 
   // ------------------------------------------------------- named rotations
   /** carries +X toward +Z (distal -> palmar): flexion */
@@ -1314,24 +1341,59 @@
     }
     // Where does the thumb metacarpal sit, in the sheet's own coordinates?
     // The radial border is pulled out to meet it, so the thenar opens and
-    // closes with the thumb instead of being a fixed lobe.
+    // closes with the thumb instead of being a fixed lobe. One representative
+    // point (the old approach) stands in fine for a thumb near rest, but
+    // opposition and cupping swing the metacarpal enough that a single sample
+    // stops speaking for the rest of it, and the border reaches for the wrong
+    // place while the base of the bone goes uncovered. Track several points
+    // along its length instead, and let each u pull toward whichever of them
+    // is relevant there.
     const tmc = rig.digits[0].segs[0];
-    const tMid = vmad(tmc.A, tmc.t, tmc.len * 0.62);
     const palmRef = {
       grid, norms, nu: PALM_NU, u0: PALM_U0, u1: PALM_U1, knots: V_KNOTS,
       vLo: () => -3, vHi: () => 3
     };
     rig.palm = palmRef;
-    let thumbV = -0.55, thumbU = 0.55, best = 1e18;
-    for (let iu = 0; iu <= 14; iu++) {
-      for (let iv = 0; iv <= 30; iv++) {
-        const uu = lerp(0.1, 1.0, iu / 14), vv = lerp(-1.4, 0.05, iv / 30);
-        const q = palmSpine(rig, uu, vv).P;
-        const dd = (q[0] - tMid[0]) ** 2 + (q[1] - tMid[1]) ** 2 + (q[2] - tMid[2]) ** 2;
-        if (dd < best) { best = dd; thumbV = vv; thumbU = uu; }
+    const samples = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0].map((sv) => {
+      const P = vmad(tmc.A, tmc.t, tmc.len * sv);
+      let bestD = 1e18, bu = 0.5, bv = -0.5;
+      for (let iu = 0; iu <= 16; iu++) {
+        for (let iv = 0; iv <= 32; iv++) {
+          const uu = lerp(-0.15, 1.05, iu / 16), vv = lerp(-1.45, 0.05, iv / 32);
+          const q = palmSpine(rig, uu, vv).P;
+          const dd = (q[0] - P[0]) ** 2 + (q[1] - P[1]) ** 2 + (q[2] - P[2]) ** 2;
+          if (dd < bestD) { bestD = dd; bu = uu; bv = vv; }
+        }
       }
-    }
-    thumbV = clamp(thumbV, -1.25, -0.24);
+      return { sv, u: bu, v: clamp(bv, -1.35, -0.10) };
+    });
+    const head = samples[samples.length - 1];   // the metacarpal head
+    const track = samples.slice().sort((p, q) => p.u - q.u);
+    // v the border should reach for at a given u, held flat past either end
+    // of the tracked span rather than extrapolated, which is what lets the
+    // wrist taper (below) and the web pinch (in vHi) still have the last word
+    const thumbVAt = (u) => {
+      if (u <= track[0].u) return track[0].v;
+      if (u >= track[track.length - 1].u) return track[track.length - 1].v;
+      for (let i = 0; i < track.length - 1; i++) {
+        const a = track[i], b = track[i + 1];
+        if (u <= b.u) return lerp(a.v, b.v, inv(u, a.u, b.u));
+      }
+      return track[track.length - 1].v;
+    };
+    const thumbV = thumbVAt(0.55), thumbU = 0.55;
+    // The thenar's resting profile: a lobe over the thumb metacarpal that
+    // returns to the rim at both ends - into the wrist proximally, into the
+    // first web distally.
+    const lobe = (u, c, wProx, wDist) =>
+      Math.exp(-Math.pow((u - c) / (u < c ? wProx : wDist), 2));
+    // wider proximally, where the eminence runs back to the wrist, than
+    // distally, where it has to be off the sheet by the metacarpal heads -
+    // past them the space between the rays is web, not palm, and a border
+    // still carrying thenar width out there draws as a straight radial edge
+    const REF_C = 0.46, REF_W = 0.54, REF_WD = 0.34, REF_A = 0.52;
+    /** furthest the border may be drawn beyond that resting profile */
+    const EMAX = 0.30;
 
     rig.palm = {
       grid, norms,
@@ -1342,16 +1404,27 @@
       // hypothenar. Extrapolating past the outer metacarpals does the work.
       vLo: (u) => {
         const uu = clamp(u, -0.6, 1.3);
-        // the radial border swings out to meet the thumb metacarpal, so the
-        // thenar and the first web open and close with the thumb itself
-        const reach = Math.min(0, (thumbV * 1.04) + 0.10);
-        const raw = -0.20 + reach * Math.exp(-Math.pow((uu - 0.46) / 0.54, 2));
+        const ref = -0.20 - REF_A * lobe(uu, REF_C, REF_W, REF_WD);
+        // Muscle does not follow bone wherever the bone goes. The thenar is
+        // anchored on the carpus and tethered across the first web, so an
+        // abducting thumb draws it out only so far before the web - not the
+        // palm - takes up the rest, and however the thumb is held the border
+        // must still come back to the rim past the metacarpal head, or the
+        // sheet keeps its full width out through the knuckles and reads as a
+        // flat wedge. So the tracked bone enters as a saturating excursion
+        // beyond the resting lobe, through a lobe of its own centred on the
+        // head, and never as a position. Opposition, which swings the bone
+        // back across the palm, leaves the resting thenar standing rather
+        // than flattening it: the muscle bunches, it does not vanish.
+        const want = Math.min(0, thumbVAt(uu) - ref);
+        const extra = -EMAX * (1 - Math.exp(want / EMAX));
+        const raw = Math.min(-0.20, ref + extra * lobe(uu, head.u, 0.46, 0.24));
         return VMID - (VMID - raw) * wristNarrow(uu);
       },
       /** where the radial border sits for a hand with the thumb at rest */
       vLoRef: (u) => {
         const uu = clamp(u, -0.6, 1.3);
-        const raw = -0.20 - 0.52 * Math.exp(-Math.pow((uu - 0.46) / 0.54, 2));
+        const raw = -0.20 - REF_A * lobe(uu, REF_C, REF_W, REF_WD);
         return VMID - (VMID - raw) * wristNarrow(uu);
       },
       /**
@@ -1504,12 +1577,22 @@
     const sg = rig.digits[d].segs[seg];
     const pr = AN.segmentProfile(A, d, seg, s);
     const ca = Math.cos(alpha), sa = Math.sin(alpha);
+    // pr[2]/pr[3], when present, displace the section's centre off the bone
+    // axis (see segmentProfile) - zero for every digit but the thumb's thenar
+    const offU = pr[2] || 0, offD = pr[3] || 0;
     const P = [
-      sg.A[0] + sg.t[0] * sg.len * s + sg.ul[0] * pr[0] * ca + sg.dor[0] * pr[1] * sa,
-      sg.A[1] + sg.t[1] * sg.len * s + sg.ul[1] * pr[0] * ca + sg.dor[1] * pr[1] * sa,
-      sg.A[2] + sg.t[2] * sg.len * s + sg.ul[2] * pr[0] * ca + sg.dor[2] * pr[1] * sa
+      sg.A[0] + sg.t[0] * sg.len * s + sg.ul[0] * (pr[0] * ca + offU) + sg.dor[0] * (pr[1] * sa + offD),
+      sg.A[1] + sg.t[1] * sg.len * s + sg.ul[1] * (pr[0] * ca + offU) + sg.dor[1] * (pr[1] * sa + offD),
+      sg.A[2] + sg.t[2] * sg.len * s + sg.ul[2] * (pr[0] * ca + offU) + sg.dor[2] * (pr[1] * sa + offD)
     ];
     return { P, a: pr[0], b: pr[1], seg: sg };
+  }
+
+  /** section centre of a digit segment, including any offset from segmentProfile */
+  function sectionCenter(rig, d, seg, s) {
+    const sg = rig.digits[d].segs[seg];
+    const pr = AN.segmentProfile(rig.anatomy, d, seg, s);
+    return vmad(vmad(vmad(sg.A, sg.t, sg.len * s), sg.ul, pr[2] || 0), sg.dor, pr[3] || 0);
   }
 
   /** outward surface normal on a digit segment */
@@ -1520,6 +1603,8 @@
     const p0 = AN.segmentProfile(A, d, seg, s);
     const p1 = AN.segmentProfile(A, d, seg, s + h);
     const da = (p1[0] - p0[0]) / h, db = (p1[1] - p0[1]) / h;
+    // the section-centre offset (see segmentProfile) can also move with s
+    const dOffU = ((p1[2] || 0) - (p0[2] || 0)) / h, dOffD = ((p1[3] || 0) - (p0[3] || 0)) / h;
     const ca = Math.cos(alpha), sa = Math.sin(alpha);
     // dP/dalpha
     const Pa = [
@@ -1529,9 +1614,9 @@
     ];
     // dP/ds
     const Ps = [
-      sg.t[0] * sg.len + sg.ul[0] * da * ca + sg.dor[0] * db * sa,
-      sg.t[1] * sg.len + sg.ul[1] * da * ca + sg.dor[1] * db * sa,
-      sg.t[2] * sg.len + sg.ul[2] * da * ca + sg.dor[2] * db * sa
+      sg.t[0] * sg.len + sg.ul[0] * (da * ca + dOffU) + sg.dor[0] * (db * sa + dOffD),
+      sg.t[1] * sg.len + sg.ul[1] * (da * ca + dOffU) + sg.dor[1] * (db * sa + dOffD),
+      sg.t[2] * sg.len + sg.ul[2] * (da * ca + dOffU) + sg.dor[2] * (db * sa + dOffD)
     ];
     let N = vnorm(vcross(Pa, Ps));
     // guarantee outward orientation against the radial direction of the section
@@ -1561,7 +1646,9 @@
     const ts = view.dir(sg.t);
     const nx = -ts[1], ny = ts[0];
     const q1 = digitSurface(rig, d, seg, s, a1).P;
-    const c = vmad(sg.A, sg.t, sg.len * s);
+    // the offset centre, not the bare bone axis: for the thumb's thenar the
+    // two are mm apart, enough to flip which side reads as left and right
+    const c = sectionCenter(rig, d, seg, s);
     const p1 = view.px(q1), pc = view.px(c);
     const side = (p1[0] - pc[0]) * nx + (p1[1] - pc[1]) * ny;
     return side >= 0 ? [a2, a1] : [a1, a2];
@@ -1616,8 +1703,16 @@
         // suppress whatever is buried in the interdigital web
         const okA = sg.seg !== 1 || s >= AN.webStart(A, d, aA);
         const okB = sg.seg !== 1 || s >= AN.webStart(A, d, aB);
-        if (okA) { left.push([pA[0], pA[1], nA, sg.pid, 1]); prevL = pA; }
-        if (okB) { right.push([pB[0], pB[1], nB, sg.pid, 1]); prevR = pB; }
+        // The thumb's metacarpal is thenar, not a tube: it belongs to the
+        // palm's mass over its proximal two-thirds, and stepBehind already
+        // fades its line where the palm sits close behind it, but a hand
+        // reads by contour count before it reads by contour weight, so the
+        // rail itself is faded out there too rather than left for the depth
+        // test alone - a real thumb never shows this as a third segment.
+        const railGain = (d === AN.THUMB && sg.seg === 0)
+          ? smoothstep(clamp01((s - 0.42) / 0.26)) : 1;
+        if (okA && railGain > 0.01) { left.push([pA[0], pA[1], nA, sg.pid, railGain]); prevL = pA; }
+        if (okB && railGain > 0.01) { right.push([pB[0], pB[1], nB, sg.pid, railGain]); prevR = pB; }
       }
     }
 
@@ -1721,6 +1816,121 @@
     };
   }
 
+  /** on-screen spine length across the metacarpals vs. the sheet's true (unforeshortened) width */
+  function palmAxisRatio(rig, view, u0, u1) {
+    const NC = 8;
+    let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9, wSum = 0;
+    for (let i = 0; i <= NC; i++) {
+      const u = lerp(u0, u1, i / NC);
+      const p = view.px(palmSpine(rig, u, VMID).P);
+      if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0];
+      if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
+      wSum += vdist(palmSurface(rig, u, 0).P, palmSurface(rig, u, 0.5).P) * view.scale;
+    }
+    const axisSpan = Math.hypot(x1 - x0, y1 - y0);
+    return axisSpan / Math.max(1e-6, wSum / (NC + 1));
+  }
+
+  /**
+   * The palm's outline as a union, exactly as digitUnion builds one for a
+   * foreshortened digit: sample the whole sheet, take the radial maximum
+   * about the projected centroid, bin by angle, fill the odd empty bin from
+   * its neighbours. A digit falls back to this outright because end-on it
+   * shrinks to a compact blob; the palm, being wider, never does —
+   * foreshortened it reads as a thin band rather than a blob — but the
+   * construction doesn't actually care about that shape, only that the
+   * surface is sampled densely enough, so it still recovers a clean band
+   * where the rails can't.
+   *
+   * Unlike digitUnion's outline, this one still has to survive palmSilhouette
+   * callers' self-occlusion test, so a bin keeps the winning sample verbatim
+   * rather than a radius reconstructed from a smoothed profile: a real point
+   * is on the palm's own front surface by construction and passes; an
+   * averaged one drifts depth and position out of step with each other and
+   * reads as buried inside the solid it belongs to. A gap-filled bin
+   * interpolates between two real neighbours, which stays close enough. Each
+   * point carries the u it was won at, which is all splitRing needs to cut
+   * the closed loop back into the two sides palmSilhouette hands its caller.
+   */
+  function palmUnionRing(rig, view, u0, u1) {
+    const NS = 40, NA = 80, NBK = 128;
+    const pts = [];
+    for (let i = 0; i <= NS; i++) {
+      const u = lerp(u0, u1, i / NS);
+      for (let k = 0; k < NA; k++) {
+        const q = palmSurface(rig, u, k / NA).P;
+        const p = view.px(q);
+        pts.push([p[0], p[1], view.near(q), u]);
+      }
+    }
+    let cx = 0, cy = 0;
+    for (const p of pts) { cx += p[0]; cy += p[1]; }
+    cx /= pts.length; cy /= pts.length;
+    const rad = new Float64Array(NBK).fill(-1);
+    const ring = new Array(NBK);
+    for (const p of pts) {
+      const dx = p[0] - cx, dy = p[1] - cy;
+      const r = Math.hypot(dx, dy);
+      let b = Math.floor(((Math.atan2(dy, dx) + Math.PI) / (Math.PI * 2)) * NBK) % NBK;
+      if (b < 0) b += NBK;
+      if (r > rad[b]) { rad[b] = r; ring[b] = p; }
+    }
+    let filled = 0;
+    for (let b = 0; b < NBK; b++) if (rad[b] >= 0) filled++;
+    if (filled < NBK * 0.5) return null;
+    for (let b = 0; b < NBK; b++) {
+      if (ring[b]) continue;
+      let lo = b, hi = b, n = 0;
+      while (!ring[(lo + NBK) % NBK] && n++ < NBK) lo--;
+      n = 0;
+      while (!ring[hi % NBK] && n++ < NBK) hi++;
+      const a = ring[((lo % NBK) + NBK) % NBK], c2 = ring[hi % NBK];
+      ring[b] = [(a[0] + c2[0]) * 0.5, (a[1] + c2[1]) * 0.5, (a[2] + c2[2]) * 0.5, (a[3] + c2[3]) * 0.5];
+    }
+    return ring;
+  }
+
+  /**
+   * Cuts palmUnionRing's closed loop into the two arcs running from its most
+   * proximal point to its most distal one, then resamples each to NU+1
+   * points at the same u values the rails use — not evenly by arc length —
+   * so index i means the same column on both sides of a lerp between them.
+   * Arc length would let a bump like the thenar land at a different index on
+   * the two curves, so blending them would land on a point on neither.
+   */
+  function splitRing(ring, NU, u0, u1) {
+    const NR = ring.length;
+    let bWrist = 0, bTip = 0, uMin = Infinity, uMax = -Infinity;
+    for (let b = 0; b < NR; b++) {
+      if (ring[b][3] < uMin) { uMin = ring[b][3]; bWrist = b; }
+      if (ring[b][3] > uMax) { uMax = ring[b][3]; bTip = b; }
+    }
+    const walk = (from, to) => {
+      const out = [];
+      let b = from;
+      for (let n = 0; n <= NR; n++) {
+        out.push(ring[b]);
+        if (b === to) break;
+        b = (b + 1) % NR;
+      }
+      return out;
+    };
+    const resample = (poly) => {
+      const out = [];
+      let j = 0;
+      for (let i = 0; i <= NU; i++) {
+        const target = lerp(u0, u1, i / NU);
+        while (j < poly.length - 2 && poly[j + 1][3] < target) j++;
+        const a = poly[j], b = poly[Math.min(poly.length - 1, j + 1)];
+        const span = b[3] - a[3];
+        const t = Math.abs(span) > 1e-9 ? clamp01((target - a[3]) / span) : 0;
+        out.push([lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)]);
+      }
+      return out;
+    };
+    return [resample(walk(bWrist, bTip)), resample(walk(bTip, bWrist).reverse())];
+  }
+
   /**
    * The true screen outline of the palm sheet, for any view.
    *
@@ -1731,6 +1941,29 @@
    * to the sheet's own screen tangent. That is well defined in every view —
    * face-on it returns the two borders, edge-on it returns the palmar and
    * dorsal faces — and it never degenerates.
+   *
+   * Except the tangent itself can, the same way digitUnion's rails do: near
+   * az 180 with the camera rising toward the fingertips, the sheet's u-axis
+   * points almost straight at the eye, so a 0.012 step in u is nearly all
+   * curvature and no slope, and the perpendicular built from it swings
+   * wherever that curvature noise points rather than tracking the form. Each
+   * column distrusts its own tangent exactly as far as a wide-baseline
+   * reading of the same slope disagrees with it, and leans toward the wide
+   * one by that amount — continuous in the disagreement, so nothing pops,
+   * and at elevation 0, where the two already agree, it reproduces the old
+   * rails exactly.
+   *
+   * That steadies the direction each column searches along, but a column is
+   * still only one slice: once neighbouring slices project on top of each
+   * other, u no longer orders the sheet on screen and no per-column extreme,
+   * however carefully aimed, traces a boundary that doesn't cross itself.
+   * The palm never gets small enough on screen to fall back to a whole
+   * separate outline the way a foreshortened digit does — it just gets
+   * thin — so palmUnionRing builds that fallback anyway, over the same
+   * domain the rails cover, and every column fades its rail toward the
+   * matching point on it in proportion to how thin the sheet reads
+   * (palmAxisRatio). Both mechanisms are continuous functions of the view,
+   * so an orbit through either transition never pops.
    */
   function palmSilhouette(rig, view, opts) {
     opts = opts || {};
@@ -1738,36 +1971,99 @@
     const u0 = opts.u0 !== undefined ? opts.u0 : -0.44;
     const u1 = opts.u1 !== undefined ? opts.u1 : 1.03;
     const sideA = [], sideB = [];
-    let betaA1 = 0, betaB1 = 0.5;
     let prevA = null, prevB = null;
     const d2 = (a, b) => (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]);
+    const WIDE = 0.28;
+    const tangentAt = (u, h) => {
+      const lo = Math.max(u0, u - h), hi = Math.min(u1, u + h);
+      const t = view.dir(vsub(palmSurface(rig, hi, 0.25).P, palmSurface(rig, lo, 0.25).P));
+      const tl = Math.hypot(t[0], t[1]);
+      return tl > 1e-6 ? [t[0] / tl, t[1] / tl] : null;
+    };
+    const distrust = [];
     for (let i = 0; i <= NU; i++) {
       const u = lerp(u0, u1, i / NU);
-      const c0 = palmSurface(rig, u - 0.012, 0.25).P;
-      const c1 = palmSurface(rig, u + 0.012, 0.25).P;
-      let t = view.dir(vsub(c1, c0));
-      let tl = Math.hypot(t[0], t[1]);
-      if (tl < 1e-6) { t = [0, 1]; tl = 1; }
-      const nx = -t[1] / tl, ny = t[0] / tl;
-      let minD = 1e18, maxD = -1e18, minP = null, maxP = null, bMin = 0, bMax = 0.5;
+      const tight = tangentAt(u, 0.012) || [0, 1];
+      const wide = tangentAt(u, WIDE);
+      let tx = tight[0], ty = tight[1], w = 0;
+      if (wide) {
+        const drift = Math.acos(clamp(tx * wide[0] + ty * wide[1], -1, 1)) * (180 / Math.PI);
+        w = smoothstep(clamp01((drift - 8) / (30 - 8)));
+        if (w > 0) {
+          tx = lerp(tx, wide[0], w); ty = lerp(ty, wide[1], w);
+          const tl = Math.hypot(tx, ty) || 1;
+          tx /= tl; ty /= tl;
+        }
+      }
+      distrust.push(w);
+      const nx = -ty, ny = tx;
+      let minD = 1e18, maxD = -1e18, minP = null, maxP = null;
       for (let k = 0; k < NB; k++) {
         const beta = k / NB;
         const q = palmSurface(rig, u, beta).P;
         const p = view.px(q);
         const dd = p[0] * nx + p[1] * ny;
-        if (dd < minD) { minD = dd; minP = [p[0], p[1], view.near(q)]; bMin = beta; }
-        if (dd > maxD) { maxD = dd; maxP = [p[0], p[1], view.near(q)]; bMax = beta; }
+        if (dd < minD) { minD = dd; minP = [p[0], p[1], view.near(q)]; }
+        if (dd > maxD) { maxD = dd; maxP = [p[0], p[1], view.near(q)]; }
       }
       // Keep each side of the outline continuous. The extremum can hand off
       // between the palmar and dorsal faces as the sheet turns, and an
       // unordered pair leaves a chord stitched across the form.
       if (prevA && prevB && d2(minP, prevA) + d2(maxP, prevB) > d2(maxP, prevA) + d2(minP, prevB)) {
-        const t = minP; minP = maxP; maxP = t;
-        const tb = bMin; bMin = bMax; bMax = tb;
+        const swap = minP; minP = maxP; maxP = swap;
       }
       sideA.push(minP); sideB.push(maxP);
       prevA = minP; prevB = maxP;
-      if (i === NU) { betaA1 = bMin; betaB1 = bMax; }
+    }
+    // A distrusted tangent still leaves a column free to pick between two
+    // nearly-tied points on the loop, which is where the last of the jitter
+    // survives. Leaning each point on its neighbours exactly as far as its
+    // own tangent was distrusted mops that up without softening a column
+    // that was never in question.
+    const relax = (side) => {
+      for (let pass = 0; pass < 3; pass++) {
+        const src = side.map(p => p.slice());
+        for (let i = 1; i < side.length - 1; i++) {
+          const w = distrust[i] * 0.5;
+          if (w <= 0) continue;
+          for (let c = 0; c < 3; c++) {
+            side[i][c] = lerp(src[i][c], (src[i - 1][c] + src[i][c] * 2 + src[i + 1][c]) * 0.25, w);
+          }
+        }
+      }
+    };
+    relax(sideA); relax(sideB);
+
+    // A steadied tangent still can't save a column once neighbouring columns
+    // start projecting on top of each other — past that point u no longer
+    // orders the sheet on screen, so no per-column extreme traces a boundary
+    // that doesn't cross itself. That is the same collapse digitUnion exists
+    // for, one level up; the palm just never gets compact enough on screen to
+    // fall back to a union of its own the way a digit does, so instead every
+    // column fades toward one, in proportion to how thin the sheet reads.
+    const ratio = palmAxisRatio(rig, view, u0, u1);
+    const edgeOn = 1 - smoothstep(clamp01((ratio - 0.70) / (1.35 - 0.70)));
+    if (edgeOn > 0.004) {
+      const ring = palmUnionRing(rig, view, u0, u1);
+      if (ring) {
+        let [unionA, unionB] = splitRing(ring, NU, u0, u1);
+        // The ring has no notion of which arc is "A": settle it once, by
+        // whichever pairing agrees better with the rails where the rails are
+        // themselves trusted, so the label can't flicker column to column.
+        let same = 0, swapCost = 0;
+        for (let i = 0; i <= NU; i++) {
+          const wt = 1 - distrust[i];
+          same += wt * (d2(sideA[i], unionA[i]) + d2(sideB[i], unionB[i]));
+          swapCost += wt * (d2(sideA[i], unionB[i]) + d2(sideB[i], unionA[i]));
+        }
+        if (swapCost < same) { const t = unionA; unionA = unionB; unionB = t; }
+        for (let i = 0; i <= NU; i++) {
+          for (let c = 0; c < 3; c++) {
+            sideA[i][c] = lerp(sideA[i][c], unionA[i][c], edgeOn);
+            sideB[i][c] = lerp(sideB[i][c], unionB[i][c], edgeOn);
+          }
+        }
+      }
     }
 
     // The palm has no distal end to close: four digits leave through it. The
@@ -1837,12 +2133,20 @@
     const A = rig.anatomy;
     const dg = rig.digits[d];
     const segs = dg.segs.filter(sg => sg.rendered);
+    // The thumb's metacarpal is thenar mass, not a tube, over its proximal
+    // reach - digitContour fades its rail out there (railGain) for the same
+    // reason a real thumb never reads as three segments. The union has no
+    // per-point gain to lean on, so it excludes that reach outright: pooled
+    // in, the offset thenar cross-sections compete with the phalanges for
+    // the radial maximum at every angle and the outline comes back jagged.
+    const thumbBase = (sg, sv) => d === AN.THUMB && sg.seg === 0 && sv < 0.42;
     // how compact is this digit on screen, relative to how thick it is?
     let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9, wSum = 0, wN = 0;
     for (const sg of segs) {
       for (let i = 0; i <= 4; i++) {
         const sv = sg.sMin + (sg.sMax - sg.sMin) * (i / 4);
-        const p = view.px(vmad(sg.A, sg.t, sg.len * sv));
+        if (thumbBase(sg, sv)) continue;
+        const p = view.px(sectionCenter(rig, d, sg.seg, sv));
         if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0];
         if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
         wSum += AN.segmentProfile(A, d, sg.seg, Math.min(sv, 1))[0] * view.scale * 2;
@@ -1859,6 +2163,7 @@
       const NS = 9, NA = 24;
       for (let i = 0; i <= NS; i++) {
         const sv = sg.sMin + (sg.sMax - sg.sMin) * (i / NS);
+        if (thumbBase(sg, sv)) continue;
         for (let k = 0; k < NA; k++) {
           const q = digitSurface(rig, d, sg.seg, sv, (k / NA) * Math.PI * 2).P;
           const p = view.px(q);
@@ -1941,17 +2246,36 @@
     };
     const aTh = facingAlpha(0, 1, 0.30, ixMCP);
     const aIx = facingAlpha(1, 1, 0.30, thMCP);
+    const aThM = facingAlpha(0, 0, 0.75, ixMCP);
 
-    // The sheet runs from deep in the palm out to a free margin between the
-    // two digits. Sample it as a ladder: thumb side, index side, one rung per
-    // step, with the margin the last rung.
-    const NR = 9;
+    // The sheet runs from deep in the commissure out to a free margin between
+    // the two digits. Deep matters: the thumb metacarpal stands some 30mm off
+    // the palm's sheet, so no radial border drawn on that sheet can ever meet
+    // it, and a web strung only between the two proximal phalanges leaves the
+    // whole space between the rays open - which is what makes a thumb read as
+    // a finger stuck on the side of the hand. So each side is a chain. The
+    // thumb's climbs its metacarpal, crosses the MCP and runs onto the
+    // phalanx; the index's starts on the palm's own radial border, so the two
+    // solids meet with no seam, and sweeps onto the phalanx the same way.
+    // Sample the pair as a ladder, one rung per step, the margin last.
+    const HALF = 0.42;
+    const sIxEnd = AN.webStart(A, 1, aIx) * 0.95;
+    const atBorder = palmSurface(rig, 1.0, 0).P;
+    const thRail = (t) => t < HALF
+      ? digitSurface(rig, 0, 0, lerp(0.44, 1.0, t / HALF), aThM).P
+      : digitSurface(rig, 0, 1, lerp(0, 0.38, (t - HALF) / (1 - HALF)), aTh).P;
+    const ixRail = (t) => {
+      if (t < HALF) return palmSurface(rig, lerp(0.42, 1.0, t / HALF), 0).P;
+      const k = (t - HALF) / (1 - HALF);
+      const onDigit = digitSurface(rig, 1, 1, lerp(0, sIxEnd, k), aIx).P;
+      return M.vlerp(atBorder, onDigit, M.smoothstep(k));
+    };
+    const NR = 16;
     const thSide = [], ixSide = [];
     for (let i = 0; i <= NR; i++) {
       const t = i / NR;
-      thSide.push(digitSurface(rig, 0, 1, lerp(-0.25, 0.38, t), aTh).P);
-      const sIx = lerp(-0.24, AN.webStart(A, 1, aIx) * 0.95, t);
-      ixSide.push(digitSurface(rig, 1, 1, sIx, aIx).P);
+      thSide.push(thRail(t));
+      ixSide.push(ixRail(t));
     }
     // free margin: the distal rung, sagging back toward the palm
     const PT = thSide[NR], PI = ixSide[NR];
@@ -1972,7 +2296,7 @@
   GK.rig = {
     FLEX, ABD, TWIST, IDENT, View, solve, abdGate,
     palmSpine, palmSurface, palmNormal, palmThickPalmar, palmThickDorsal, palmWrap,
-    digitSurface, digitNormal, silhouetteAlphas, digitContour, digitUnion, palmContour, palmSilhouette, webContours, firstWeb,
+    digitSurface, digitNormal, sectionCenter, silhouetteAlphas, digitContour, digitUnion, palmContour, palmSilhouette, webContours, firstWeb,
     PALM_NU, V_KNOTS
   };
 })(window.GK = window.GK || {});
@@ -2148,7 +2472,7 @@
     'grip': {
       label: 'Cylinder grip',
       spec: {
-        wrist: [0.02, 0.08, 0], arch: 0.48, thumb: [0.64, 0.20, 0.46, 0.58, 0.55],
+        wrist: [0.02, 0.08, 0], arch: 0.48, thumb: [0.57, 0.00, 0.54, 0.61, 0.76],
         f: [[0.60, 0.66, 0.44, -0.10], [0.63, 0.70, 0.47, 0], [0.66, 0.73, 0.49, 0.05], [0.70, 0.76, 0.51, 0.12]]
       }
     },
@@ -2158,14 +2482,14 @@
     'pinch': {
       label: 'Pinch',
       spec: {
-        wrist: [0, 0, 0], arch: 0.36, thumb: [0.70, 0.35, 0.61, 0.22, -0.02],
+        wrist: [0, 0, 0], arch: 0.36, thumb: [0.73, 0.24, 0.74, 0.01, -0.19],
         f: [[0.49, 0.42, 0.24, -0.25], [0.62, 0.70, 0.48, 0], [0.72, 0.82, 0.56, 0.05], [0.78, 0.86, 0.58, 0.10]]
       }
     },
     'ok': {
       label: 'OK',
       spec: {
-        wrist: [-0.05, 0, 0], arch: 0.22, thumb: [0.83, 0.43, 0.78, 0.14, 0.00],
+        wrist: [-0.05, 0, 0], arch: 0.22, thumb: [0.79, 0.25, 0.95, 0.16, -0.02],
         f: [[0.70, 0.22, 0.13, -0.30], [-0.10, -0.15, -0.25, 0.30], [-0.10, -0.20, -0.30, 0.35], [-0.05, -0.20, -0.30, 0.55]]
       }
     },
@@ -2200,14 +2524,14 @@
     'cup': {
       label: 'Cup',
       spec: {
-        wrist: [0.10, 0, 0], arch: 0.78, thumb: [0.30, 0.66, 0.54, 0.24, 0.10],
+        wrist: [0.10, 0, 0], arch: 0.78, thumb: [0.35, 0.30, 0.50, 0.28, 0.12],
         f: [[0.30, 0.34, 0.22, -0.45], [0.32, 0.36, 0.24, -0.20], [0.34, 0.40, 0.26, -0.20], [0.38, 0.46, 0.30, -0.40]]
       }
     },
     'tripod': {
       label: 'Writing grip',
       spec: {
-        wrist: [0.06, 0.14, 0], arch: 0.46, thumb: [0.79, 0.46, 0.51, 0.30, -0.09],
+        wrist: [0.06, 0.14, 0], arch: 0.46, thumb: [0.83, 0.40, 0.69, 0.16, -0.22],
         f: [[0.44, 0.40, 0.20, -0.20], [0.58, 0.49, 0.09, 0], [0.72, 0.84, 0.56, 0.10], [0.80, 0.90, 0.60, 0.18]]
       }
     },
@@ -2242,7 +2566,7 @@
     'clenchMax': {
       label: 'Full flexion',
       spec: {
-        wrist: [0.55, 0.20, 0], arch: 0.85, thumb: [0.95, 0.05, 0.55, 0.95, 0.90],
+        wrist: [0.55, 0.20, 0], arch: 0.85, thumb: [0.70, 0.05, 0.62, 0.85, 0.75],
         f: [[1, 1, 1, -0.2], [1, 1, 1, -0.05], [1, 1, 1, 0.05], [1, 1, 1, 0.2]]
       }
     }
@@ -2501,8 +2825,14 @@
     for (let i = 0; i <= 13; i++) {
       const u = lerp(-0.02, 1.01, i / 13);
       const lo = rig.palm.vLo(u), hi = rig.palm.vHi(u);
-      for (let j = 0; j <= 9; j++) {
-        const v = lerp(lo + 0.06, hi - 0.06, j / 9);
+      // The thumb-side border now swings out to track the thumb itself (see
+      // rig.js vLo), so its span is no longer fixed - a thumb pulled well
+      // clear widens it a lot. Sample count has to keep pace or the far
+      // (ulnar) side of the same fixed budget gets too sparse to hold the
+      // little finger in contact resolution.
+      const NJ = Math.max(9, Math.round(9 * (hi - lo) / 1.5));
+      for (let j = 0; j <= NJ; j++) {
+        const v = lerp(lo + 0.06, hi - 0.06, j / NJ);
         const sp = R.palmSpine(rig, u, v);
         // the palm's pad compresses under a fingertip; it is not a wall
         out.push({ P: sp.P, n: sp.n, t: R.palmThickPalmar(A, u, v) * 0.82 });
@@ -2719,6 +3049,32 @@
     }
 
     clear() { this.buf.fill(0); return this; }
+
+    /**
+     * How much graphite already sits around a point, in logical canvas
+     * pixels, read back through the same saturating response resolve() ends
+     * on — so it reads on a plain 0 (bare paper) .. 1 (solid) scale no
+     * matter the grade or supersampling that put it there. A small-radius
+     * mean rather than a single-cell probe, because the question is "is
+     * this neighbourhood getting crowded", not "is this exact pixel dark":
+     * a single fresh line under its own nib should not look saturated to
+     * itself, but a handful of lines converging within a few pixels should.
+     */
+    densityAt(x, y, r) {
+      const { W, H, buf, ss } = this;
+      const R = Math.max(1, Math.round((r === undefined ? 2.5 : r) * ss));
+      const cx = Math.round(x * ss), cy = Math.round(y * ss);
+      const x0 = Math.max(0, cx - R), x1 = Math.min(W - 1, cx + R);
+      const y0 = Math.max(0, cy - R), y1 = Math.min(H - 1, cy + R);
+      if (x1 < x0 || y1 < y0) return 0;
+      let sum = 0;
+      for (let yy = y0; yy <= y1; yy++) {
+        const row = yy * W;
+        for (let xx = x0; xx <= x1; xx++) sum += buf[row + xx];
+      }
+      const mean = sum / ((x1 - x0 + 1) * (y1 - y0 + 1));
+      return 1 - Math.exp(-1.55 * mean);
+    }
 
     /** deposit into the field; x,y in supersampled space */
     splat(x, y, r, amt) {
@@ -3009,6 +3365,39 @@
   function palmCurve(rig, uvs, palmar, off) {
     return uvs.map(p => [p[0], betaForV(rig, p[0], rig.palm.mapV(p[0], p[1]), palmar), off || p[2] || 0]);
   }
+  /**
+   * The first web's own surface, as (t, k): t runs from the depth of the
+   * commissure out to the free margin, k across it from thumb to index. The
+   * commissure is not part of the palm's sheet - it spans between two rays -
+   * so a mark authored in palm coordinates gets rebased onto the palm's own
+   * border and lands as a straight line lying across the hand. Marks stand a
+   * little proud of the sheet, so it occludes them from behind instead of
+   * fighting them for the same depth.
+   */
+  function webSheet(rig) {
+    const w = R.firstWeb(rig, new R.View(0, 0, 0, 1, [0, 0, 0], 0, 0));
+    const N = w.thSide.length - 1;
+    const prox = M.vnorm(M.vadd(rig.digits[0].segs[1].t, rig.digits[1].segs[1].t));
+    let face = M.vnorm(M.vcross(M.vsub(w.ixSide[N], w.thSide[N]),
+      M.vsub(w.thSide[N], w.thSide[0])));
+    if (M.vdot(face, rig.root[2]) < 0) face = M.vmul(face, -1);
+    const at = (t, k, lift) => {
+      const f = clamp01(t) * N;
+      const i = Math.min(N - 1, Math.floor(f)), fr = f - i;
+      const a = M.vlerp(w.thSide[i], w.thSide[i + 1], fr);
+      const b = M.vlerp(w.ixSide[i], w.ixSide[i + 1], fr);
+      const bow = clamp01(t) * Math.sin(Math.PI * k) * 0.18;
+      const base = M.vmad(M.vlerp(a, b, clamp01(k)), prox, -M.vdist(a, b) * bow);
+      return M.vmad(base, face, lift || 0);
+    };
+    // How taut the commissure is, read off the sheet itself rather than off
+    // the joint angles that produced it. Opposition and a wrapped grip slacken
+    // the web without touching either abduction angle, so an angle-driven
+    // guess calls them open when they are gathered.
+    const open = smoothstep(inv(M.vdist(w.PT, w.PI) / rig.anatomy.size, 20, 68));
+    return { at, open };
+  }
+
   /** sample a smooth curve through (u,v) control points */
   function uvSpline(ctrl, n) {
     const out = [];
@@ -3072,7 +3461,10 @@
         // the base of the proximal phalanx. Almost nobody draws this right.
         const isMCP = (jn === 'MCP');
         const base = isMCP ? 0.235 : (jn === 'PIP' ? 0.055 : 0.075);
-        const twin = (jn === 'PIP');                   // the PIP takes two
+        // The proximal interphalangeal joint takes two creases — and so does
+        // the thumb's metacarpophalangeal, which is the joint that does the
+        // same work in a ray with one fewer bone.
+        const twin = (jn === 'PIP') || (isThumb && jn === 'MCP');
         const span = lerp(1.02, 1.30, f) * (isMCP ? 1.16 : 1.0);
         const bow = (isMCP ? 0.030 : 0.016) * lerp(1, 1.5, f);
         const mainTone = lerp(0.60, 1.0, Math.pow(f, 0.72)) * (isMCP ? 0.94 : 1.0);
@@ -3283,16 +3675,56 @@
         });
       }
     }
-    // first web: the thumb-index commissure, a broad free margin
-    const pts = [];
-    for (let k = 0; k <= 18; k++) {
-      const t = k / 18;
-      pts.push([lerp(1.00, 0.76, t), lerp(-0.72, -0.24, t)]);
+    // ---- the first web -------------------------------------------------
+    // Two regimes, and they look nothing alike. Adducted, the skin of the
+    // commissure has surplus and buckles across the line of compression into
+    // folds stacked back from the margin. Abducted, it is a taut sheet and
+    // what shows is the pull running from the depth of the commissure out to
+    // the margin. The margin itself the renderer draws as a contour, so it is
+    // not repeated here.
+    const sheet = webSheet(rig);
+    const web = sheet.at, open = sheet.open;
+    const wRng = new M.Rng(A.seed ^ 0x7b21);
+    const gathered = 1 - open;
+
+    const nFold = Math.round(gathered * 4);
+    for (let i = 0; i < nFold; i++) {
+      const t0 = 0.93 - i * 0.11;
+      const pts = [];
+      for (let j = 0; j <= 18; j++) {
+        const k = lerp(0.12, 0.88, j / 18);
+        // a slack fold hangs toward the margin at its middle
+        const t = t0 + 0.05 * gathered * Math.sin(Math.PI * inv(k, 0.12, 0.88));
+        pts.push(web(t, k, 1.1 + i * 0.25));
+      }
+      out.push({
+        on: 'world', pts,
+        style: st(S.crease, {
+          tone: (0.50 + 0.90 * gathered) * (1 - i * 0.18), phase: nextPhase()
+        })
+      });
     }
-    out.push({
-      on: 'palm', pts: palmCurve(rig, pts, true, -0.3),
-      style: st(S.crease, { tone: 0.54, weight: 0.8, phase: nextPhase() })
-    });
+
+    const nTaut = Math.round(open * 4);
+    for (let i = 0; i < nTaut; i++) {
+      const k0 = 0.24 + 0.54 * (i / Math.max(1, nTaut - 1)) + wRng.sym(0.05);
+      // each pull runs its own length: a sheet under tension does not crease
+      // in a comb of equal strokes
+      const tA = 0.44 + wRng.f() * 0.14, tB = 0.86 + wRng.f() * 0.08;
+      const pts = [];
+      for (let j = 0; j <= 12; j++) {
+        const t = lerp(tA, tB, j / 12);
+        // the pull fans as it runs out, the way a sheet does off two anchors
+        const k = k0 + (k0 - 0.5) * 0.26 * inv(t, tA, tB);
+        pts.push(web(t, k, 1.1));
+      }
+      out.push({
+        on: 'world', pts,
+        style: st(S.fold, {
+          tone: (0.34 + 0.62 * open) * (0.7 + 0.5 * wRng.f()), phase: nextPhase()
+        })
+      });
+    }
   }
 
   // =========================================================================
@@ -4085,7 +4517,9 @@
     { p: [-4, -1.5, -0.5], r: [5.4, 5.0, 4.6] },  // lunate
     { p: [-5, 6.0, 0.0], r: [4.8, 4.4, 4.4] },    // triquetrum
     { p: [-4, 7.0, 5.6], r: [3.4, 3.2, 3.0] },    // pisiform
-    { p: [7, -10.5, 2.0], r: [5.6, 4.6, 4.4] },   // trapezium
+    // the trapezium carries the thumb's saddle: it sits well radial and
+    // palmar of the rest of the distal row, up against the base of MC1
+    { p: [6, -16.0, 5.5], r: [5.6, 4.6, 4.4] },   // trapezium
     { p: [7, -5.0, -1.0], r: [4.2, 3.8, 3.8] },   // trapezoid
     { p: [6, 0.5, 0.0], r: [6.4, 5.2, 5.2] },     // capitate
     { p: [5, 7.5, 1.5], r: [5.6, 4.8, 4.8] }      // hamate
@@ -4301,6 +4735,11 @@
       return Math.max(Math.abs(r - l), Math.abs(d - u)) * 0.5;
     }
 
+    /** slope(), addressed by screen pixel like behind() and stepBehind() rather than by cell */
+    slopeAt(x, y) {
+      return this.slope(Math.round(x / this.div - 0.5), Math.round(y / this.div - 0.5));
+    }
+
     /**
      * How hidden is a point at (x, y) lying at depth z on part `id`?
      * Returns 0 (clear) .. 1 (buried), antialiased over the four cells the
@@ -4453,6 +4892,23 @@
   // =========================================================================
 
   /**
+   * How much a mark should give way to graphite already down nearby — the
+   * paper's own memory of what has already been drawn, read straight out of
+   * the deposition field rather than inferred from geometry. Several
+   * individually reasonable marks (a handful of named palm creases, a ring
+   * of knuckle contour, a field of ridge texture) can each be exactly where
+   * they belong and still converge, from one view, into the same few
+   * screen pixels; nothing about any single one of them is wrong, so
+   * nothing about any single one of them would flag it. What they share is
+   * that the paper under them is getting dark, and that a hand notices.
+   */
+  function crowdGive(g, x, y) {
+    if (!g) return 1;
+    const ink = g.densityAt(x, y, 14);
+    return 1 - 0.97 * smoothstep(clamp01((ink - 0.02) / 0.08));
+  }
+
+  /**
    * Turn a surface curve into screen points with per-point visibility.
    * vis combines the horizon fade with the occlusion test.
    */
@@ -4465,6 +4921,7 @@
     const ids = opt.ids;
     const myId = cv.on === 'digit' ? ids.digit[cv.d][cv.seg]
       : cv.on === 'palm' ? ids.palm : -1;
+    let prevP = null, prevp = null;
     for (let i = 0; i < n; i++) {
       const q = cv.pts[i];
       let P, N = null;
@@ -4489,7 +4946,24 @@
         // black band along the silhouette.
         const h0 = opt.horizon === undefined ? 0.015 : opt.horizon;
         vis = smoothstep(clamp01((f - h0) / (h0 > 0.1 ? 0.34 : 0.22)));
+        // Facing isn't the only way a surface compresses: a segment seen
+        // close to end-on foreshortens along its whole LENGTH even where it
+        // still faces the eye well around its girth, and every mark meant to
+        // be spaced out along that length lands on the next one. Compare how
+        // far this step actually moved on the page to how far it moved on
+        // the surface — that ratio drops well before the facing test does,
+        // in exactly this case, because it is sensitive to the direction of
+        // the surface's motion and not just its tilt.
+        if (prevP) {
+          const dWorld = M.vdist(P, prevP);
+          if (dWorld > 1e-6) {
+            const dScreen = Math.hypot(p[0] - prevp[0], p[1] - prevp[1]);
+            const mag = dScreen / (dWorld * view.scale);
+            vis *= smoothstep(clamp01(mag / 0.85));
+          }
+        }
       }
+      prevP = P; prevp = p;
       // The skeleton is construction, not surface: it is drawn through the
       // flesh that contains it, so it takes no occlusion test at all.
       if (cv.xray) { out[i] = [p[0], p[1], 1, near, 0]; continue; }
@@ -4497,13 +4971,14 @@
       // conflated. A mark on the far side of the surface is simply not in the
       // picture; a mark this side of it that another form covers is
       // construction, and construction is what gets ghosted.
-      let hid = 0, behind = 0;
+      let hid = 0, behind = 0, give = 1;
       if (vis > 0.004) {
         hid = df.hidden(p[0], p[1], near, myId, eps, gap);
         behind = df.behind(p[0], p[1], near, myId);
+        give = crowdGive(opt.g, p[0], p[1]);
       }
       const decay = Math.exp(-Math.max(0, behind - 2) / 11);
-      out[i] = [p[0], p[1], vis * (1 - hid), near, vis * hid * decay];
+      out[i] = [p[0], p[1], vis * (1 - hid) * give, near, vis * hid * decay * give];
     }
     return out;
   }
@@ -4696,8 +5171,23 @@
         const gain = layerGain[cv.style.layer];
         if (gain !== undefined && gain <= 0.02) continue;
         const fine = FINE_LAYERS[cv.style.layer] || 0;
-        const pp = projectCurve(rig, view, df, cv, { eps, gap, ids, horizon: fine });
-        const tone = gain === undefined ? 1 : clamp(gain, 0, 2);
+        const pp = projectCurve(rig, view, df, cv, { eps, gap, ids, horizon: fine, g });
+        // Fold and crease carry the knuckle's own structure (the crest of a
+        // bent joint, the wrinkle it leaves), toned for where they usually
+        // sit: spaced out across an open hand, with plenty else nearby to
+        // read them against. Over an open patch of paper — nothing else
+        // within reach, which is exactly what a fist seen from above does
+        // to its own knuckle row — that same tone is too little to carry
+        // the line alone, so lean on it harder there. crowdGive already
+        // handles the opposite problem (too much nearby, not too little),
+        // so this only ever adds where the page is still genuinely bare.
+        let press = 1;
+        if ((cv.style.layer === 'fold' || cv.style.layer === 'crease') && pp.length) {
+          const mid = pp[pp.length >> 1];
+          const bare = 1 - clamp01(g.densityAt(mid[0], mid[1], 14) / 0.12);
+          press = lerp(1, 2.8, bare);
+        }
+        const tone = (gain === undefined ? 1 : clamp(gain, 0, 2)) * press;
         for (const r of runs(pp, 0.05, 2)) put(r, cv.style, tone);
 
         if (ghost > 0.01 && cv.style.layer !== 'print' && cv.style.layer !== 'ridge' &&
@@ -4739,7 +5229,13 @@
           const behind = df.behind(p[0], p[1], p[2], id);
           const step = df.stepBehind(p[0], p[1], p[2], id);
           const merge = step === Infinity ? 1 : 0.16 + 0.84 * smoothstep(clamp01(step / 13));
-          const gain = (p[4] === undefined ? 1 : p[4]) * merge;
+          // A shallow step doesn't always mean a weak edge — two knuckles
+          // pressed together part with almost no depth between them, yet the
+          // surface still turns hard right there. Weight by whichever signal
+          // for "this is a real edge" is stronger: the separation behind it,
+          // or the turn the surface itself is taking underfoot.
+          const turn = smoothstep(clamp01(df.slopeAt(p[0], p[1]) / 0.35));
+          const gain = (p[4] === undefined ? 1 : p[4]) * Math.max(merge, turn) * crowdGive(g, p[0], p[1]);
           const decay = Math.exp(-Math.max(0, behind - 2) / 11);
           return [p[0], p[1], v * gain, p[2], (1 - v) * decay * gain, gain, id];
         });
