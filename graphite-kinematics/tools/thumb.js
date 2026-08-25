@@ -83,8 +83,11 @@ console.log('\n— is the ray attached to the hand? —');
   // it tracks a lifted ray at about 0.9mm per mm and reports 99 once the ray
   // leaves the hand entirely. So state it per regime, and cover pinch and
   // tripod, which were never checked at all.
+  // Every preset, not a chosen handful: thumbsUp and countThree both had the
+  // ray clean off the hand - the drawing showed the metacarpal as a free
+  // third segment - and neither was among the poses being sampled.
   const OPPOSES = { ok: 1, pinch: 1, tripod: 1 };
-  for (const k of ['flat', 'spread', 'ok', 'cup', 'pinch', 'tripod']) {
+  for (const k of Object.keys(PO.PRESETS)) {
     const rig = rigFor(k);
     const mc = rig.digits[0].segs[0];
     let worst = -1e9;
