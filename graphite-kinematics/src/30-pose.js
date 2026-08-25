@@ -493,11 +493,22 @@
       if (!axis) return;
       out.push({ seg, axis, O: j.P, w, add });
     };
+    // The solver measures its correction in world space and writes it into a
+    // pose field. Three of those fields — cmcRad, cmcOpp and mcpAbd — are the
+    // ones solve() negates on a left hand, so writing a world-space step
+    // straight in sends it back out reversed: the correction is applied in
+    // the direction opposite to the one that was measured, and the contact it
+    // was solving gets deeper instead of shallower. Undoing the mirror here
+    // means the round trip is the identity (chirality squared is one) and the
+    // solver goes on working in world terms without knowing which hand it is
+    // on. Measured before this: a left clenchMax drifted 43.9mm from its
+    // mirror and the grip simply did not close.
+    const ch = rig.anatomy.chirality;
     if (d === 0) {
       const c = dg.joints[0], m = dg.joints[1], i = dg.joints[2];
-      push(0, c, c.axA, 0.55, x => pose.digits[0].cmcRad += x);
+      push(0, c, c.axA, 0.55, x => pose.digits[0].cmcRad += x * ch);
       push(0, c, c.axF, 0.55, x => pose.digits[0].cmcAbd += x);
-      push(0, c, c.axT, 0.35, x => pose.digits[0].cmcOpp -= x);
+      push(0, c, c.axT, 0.35, x => pose.digits[0].cmcOpp -= x * ch);
       push(1, m, m.axF, 1.5, x => pose.digits[0].mcpFlex += x);
       push(2, i, i.axF, 2.4, x => pose.digits[0].ipFlex += x);
     } else {
@@ -505,7 +516,7 @@
       // Splay is the stiffest thing a hand has: fingers pressed together stay
       // together and give at the joints instead. Letting abduction take the
       // correction turns every closed pose into a splayed one.
-      push(1, m, m.axA, 0.035, x => pose.digits[d].mcpAbd += x / (m.abdScale || 1));
+      push(1, m, m.axA, 0.035, x => pose.digits[d].mcpAbd += x * ch / (m.abdScale || 1));
       push(1, m, m.axF, 0.55, x => pose.digits[d].mcpFlex += x);
       push(2, pp, pp.axF, 1.5, x => pose.digits[d].pipFlex += x);
       push(3, dd, dd.axF, 2.6, x => pose.digits[d].dipFlex += x);

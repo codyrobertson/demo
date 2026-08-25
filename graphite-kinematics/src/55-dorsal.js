@@ -517,7 +517,13 @@
     // carpals
     for (let i = 0; i < CARPALS.length; i++) {
       const c = CARPALS[i];
-      const P = vadd(rig.origin, M.mApply(rig.root, [c.p[0] * sc + 6 * sc, c.p[1] * sc, c.p[2] * sc]));
+      // The carpal block is authored for a right wrist, so its ulnar
+      // coordinates flip with the hand. Without this the trapezium — which
+      // is placed well radial precisely because it carries the thumb — ends
+      // up on the little-finger side of a left hand, with the whole distal
+      // row mirrored about nothing.
+      const P = vadd(rig.origin, M.mApply(rig.root,
+        [c.p[0] * sc + 6 * sc, c.p[1] * sc * A.chirality, c.p[2] * sc]));
       out.push({
         on: 'world', xray: true, pts: billboardEllipse(view, P, c.r[0] * sc, c.r[1] * sc, 26),
         style: st(style, { tone: 0.88, phase: F.nextPhase() }), close: true, name: CARPAL_NAMES[i]
