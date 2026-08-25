@@ -668,6 +668,15 @@
       // A rail that leaps across the picture is not one line: a digit turning
       // through the view hands its silhouette from one flank to the other.
       const jumpD = Math.max(12, this.w * 0.030);
+      const fw = RG.firstWeb(rig, view);
+      // Where the web meets the thumb, the thumb's boundary is not free: it
+      // runs into tissue that belongs to both. The union outline closes
+      // unconditionally and knows nothing about that, so it draws a finished
+      // edge straight across the join, and at the elevations where the web is
+      // edge-on - and therefore drawing almost nothing itself - that edge is
+      // the whole reason the thumb reads as a rounded form sitting beside the
+      // hand rather than part of it.
+      const webAngles = fw.thSide.map(P => view.px(P));
       for (let d = 0; d < 5; d++) {
         // A digit pointing at the eye is drawn as one form, not as pieces -
         // but how compact it reads is a continuous function of the view
@@ -683,7 +692,21 @@
         const un = RG.digitUnion(rig, view, d);
         const edgeOn = un.edgeOn || 0;
         if (edgeOn > 0.004) {
-          emit(un.outline, F.st(F.S.contour, { tone: 0.94 * edgeOn, phase: d * 37 + 60 }),
+          let outline = un.outline;
+          if (d === AN.THUMB) {
+            outline = outline.map((p) => {
+              const a = Math.atan2(p[1] - un.cy, p[0] - un.cx);
+              let near = 9;
+              for (const w of webAngles) {
+                const b = Math.atan2(w[1] - un.cy, w[0] - un.cx);
+                let dA = Math.abs(a - b);
+                if (dA > Math.PI) dA = Math.PI * 2 - dA;
+                if (dA < near) near = dA;
+              }
+              return [p[0], p[1], p[2], p[3], p[4] * smoothstep(clamp01((near - 0.16) / 0.30))];
+            });
+          }
+          emit(outline, F.st(F.S.contour, { tone: 0.94 * edgeOn, phase: d * 37 + 60 }),
             { noSearch: true, selfTest: false, maxJump: jumpD });
         }
         if (edgeOn >= 0.996) continue;
@@ -746,7 +769,6 @@
       // commissure — where it bulges most, and where a bare mid-sheet had
       // nothing to show at all. selfTest buries whatever part of that band
       // faces away behind the part that covers it.
-      const fw = RG.firstWeb(rig, view);
       emit(fw.band, F.st(F.S.contour, { tone: 1.05, weight: 1.18, taper: 0.5, phase: 208 }),
         { maxJump: jump, selfTest: true });
       // the free margins of the webs, spanning finger to finger
