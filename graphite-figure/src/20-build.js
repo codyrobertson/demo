@@ -118,6 +118,14 @@
     // both its length and its direction from this rather than from a guess.
     fig.aimTargets = {
       acromion: [m.acromialheight, m.biacromialbreadth * 0.5, 0],
+      // the scapula ends ON the glenohumeral centre, so the humerus swings
+      // from where the survey says it swings from rather than from a guess
+      gh: Lm.gh,
+      // Stature is the single best-measured dimension in the survey, so the
+      // head ends on it rather than on a head length that has to be inferred
+      // from tragion-to-vertex plus an atlas offset nobody palpated. That
+      // offset was the residual -5.8mm the critic kept reporting.
+      vertex: [m.stature, 0, 0],
     };
     return fig;
   }

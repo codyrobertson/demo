@@ -146,7 +146,7 @@
       });
       prev = id;
     }
-    add({ id: 'skull', parent: prev, rest: [0, 0, 0], len: 'skull', dof: {} });
+    add({ id: 'skull', parent: prev, aimTo: 'vertex', len: 'skull', dof: {} });
 
     // ---- shoulder girdle and arm ----------------------------------------
     // The clavicle leaves the spine at T1, forward and to the side; the
@@ -164,7 +164,7 @@
     add({
       // the glenoid sits below and behind the acromion, and the blade lies
       // on the ribcage some 35 degrees forward of the coronal plane
-      id: 'scapula', parent: 'clavicle', aim: [-0.34, 0.88, -0.33], roll: 0.61,
+      id: 'scapula', parent: 'clavicle', aimTo: 'gh', roll: 0.61,
       len: 'scapula', side: true, lat: 1,
       dof: { flex: 'scapTilt', abd: 'scapRot', twist: 'scapWing' },
     });

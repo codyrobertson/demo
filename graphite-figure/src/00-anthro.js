@@ -78,9 +78,32 @@
   // than inter-ASIS, and the two are not the same landmark, so the ratio
   // below carries that substitution as well as the regression itself.
   const HJC_FROM_BICRISTALE = 0.34;
-  // EST: glenohumeral centre inboard and below the acromion, as a fraction
-  // of biacromial breadth. Order of magnitude from scapular geometry.
-  const GH_INBOARD = 0.085, GH_DROP = 0.075;
+  // DERIVED, not estimated — see tools/fit-arm.js, which fits these from the
+  // survey itself across all 6,068 subjects. Span pins the horizontal and the
+  // resting wrist height pins the vertical, and neither is a measurement the
+  // chain consumes, so both are free ground truth.
+  //
+  // The guesses these replace were 0.085 and 0.075. The drop was close; the
+  // inboard offset was out by 45%, which is most of a 269mm span error.
+  const GH_INBOARD = 0.1232;   // of biacromial breadth: 49mm at the mean
+  const GH_DROP = 0.0849;      // of biacromial breadth: 34mm at the mean
+
+  /**
+   * Surface landmarks are not joint centres, and the gap is not small. The
+   * acromion sits above and lateral to the glenohumeral centre; the radiale
+   * is the radial head rather than the elbow axis; the stylion is the styloid
+   * rather than the wrist axis. Chain the measured lengths and every arm is
+   * long — 25mm at the wrist, 269mm across the span.
+   *
+   * The span regression gives the correction directly and gives it twice: the
+   * upper arm enters a span at 0.9247 of its measured length and the forearm
+   * at 0.9240. Those were fitted independently and agree to seven parts in
+   * ten thousand, which is a much stronger statement than either alone — one
+   * factor covers both because the same kind of landmark offset is at each
+   * end of both bones. A hand, whose length is already measured to the
+   * fingertip rather than to a joint, enters at 0.979.
+   */
+  const JOINT_CENTRE_K = 0.9244;
   // EST: knee and ankle joint centres are taken at the palpated landmark
   // heights, which is very nearly true for the lateral epicondyle and the
   // lateral malleolus — both sit within a few millimetres of the axis.
@@ -112,7 +135,7 @@
     L.acromion = [m.acromialheight, half(m.biacromialbreadth), 0];
     L.gh = [
       m.acromialheight - m.biacromialbreadth * GH_DROP,
-      half(m.biacromialbreadth) - m.biacromialbreadth * GH_INBOARD,
+      m.biacromialbreadth * (0.5 - GH_INBOARD),
       0,
     ];
     L.knee = [m.lateralfemoralepicondyleheight * KNEE_AT_EPICONDYLE, 0, 0];
@@ -133,8 +156,10 @@
     // --- measured directly, or as a difference of two measured heights
     s.femur = m.trochanterionheight - m.lateralfemoralepicondyleheight;
     s.tibia = m.lateralfemoralepicondyleheight - m.lateralmalleolusheight;
-    s.humerus = m.acromionradialelength;
-    s.forearm = m.radialestylionlength;
+    s.humerus = m.acromionradialelength * JOINT_CENTRE_K;
+    s.forearm = m.radialestylionlength * JOINT_CENTRE_K;
+    s.humerusSurface = m.acromionradialelength;   // kept: the surface still needs it
+    s.forearmSurface = m.radialestylionlength;
     s.hand = m.handlength;
     s.foot = m.footlength;
     s.footHeight = m.lateralmalleolusheight;
@@ -182,5 +207,5 @@
     };
   }
 
-  GK.anthro = { useModel, sampleBody, landmarks, segments, girths, get model() { return MODEL; } };
+  GK.anthro = { useModel, sampleBody, landmarks, segments, girths, GH_INBOARD, GH_DROP, JOINT_CENTRE_K, get model() { return MODEL; } };
 })(window.GK = window.GK || {});
