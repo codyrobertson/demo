@@ -4,38 +4,17 @@
    offsets that scale with build rather than with height, and the weights that
    say how a group rotation is shared out along a chain.
 
-   PROVISIONAL SOURCE. The measurement tables below are Winter's segment
-   lengths as fractions of stature (Biomechanics and Motor Control of Human
-   Movement, seg. table), which are the numbers every figure text ultimately
-   quotes. They live here only until src/00-refdata.js lands with sourced
-   values and real population variance; buildFigure() already prefers GK.ref
-   when it is present, so that swap is a deletion rather than a rewrite.
+   MEASUREMENT COMES FROM DATA. Nothing in this file is a proportion any
+   more. src/00-anthro.js samples a body from a model fitted to ANSUR II —
+   6,068 adults, 93 directly measured dimensions — and this turns that sample
+   into the bone lengths and offsets the skeleton wants. What is left here is
+   the one thing a tape-measure survey cannot record: how a group rotation is
+   shared out along a chain of vertebrae.
    ========================================================================== */
 'use strict';
 (function (GK) {
   const M = GK.math;
   const { lerp, clamp } = M;
-
-  // fractions of stature, proximal joint to distal joint unless noted
-  const FRAC = {
-    pelvis: 0.030,        // sacral promontory up to the base of L5
-    lumbarSeg: 0.0200,    // 5 of them: 0.100 total
-    thoracicSeg: 0.01317, // 12: 0.158
-    cervicalSeg: 0.00743, // 7: 0.052
-    skull: 0.130,         // chin to vertex
-    clavicle: 0.105,
-    scapula: 0.050,       // acromioclavicular out to the glenoid
-    humerus: 0.186,       // acromion to lateral epicondyle
-    forearm: 0.146,       // epicondyle to radial styloid
-    femur: 0.245,         // greater trochanter to knee joint line
-    tibia: 0.246,         // knee to lateral malleolus
-    foot: 0.152,          // length, running forward from the ankle
-  };
-
-  // Half-widths, also as fractions of stature. These are the ones that carry
-  // build rather than height: two people of the same stature differ far more
-  // across the shoulders and the pelvis than they do along the femur.
-  const HALF = { hip: 0.052, sc: 0.000, scDrop: -0.012, scFwd: 0.045 };
 
   /**
    * How a group rotation is shared out along a chain. These are not equal
@@ -82,47 +61,56 @@
   }
 
   /**
-   * Build is one number rather than a per-segment perturbation, plus a small
-   * independent wobble on top. Perturbing every segment on its own produces
-   * bodies that do not exist: real limb segments co-vary with stature much
-   * more tightly than trunk breadths do, so a figure with a long femur and a
-   * short tibia is not a rare person, it is a wrong one.
+   * One body, from the ANSUR II fit. Nothing here is a ratio: the femur is a
+   * measured trochanterion height minus a measured lateral epicondyle height
+   * on the same synthetic person, and it arrives already correlated with the
+   * tibia, the span, the hand and the stature at the rates the survey found.
    */
   function buildFigure(seed, opts) {
     opts = opts || {};
-    const rng = new M.Rng(seed ^ 0x5f37);
-    const ref = GK.ref || null;
-
-    const stature = opts.stature || lerp(1560, 1900, rng.gaussIn(0.5, 0.16, 0, 1));
-    // one axis from light and narrow to heavy and broad, and one from
-    // long-limbed to short-limbed; both are real and they are not the same
-    const heft = rng.gaussIn(0.5, 0.19, 0, 1);
-    const limb = rng.gaussIn(0.5, 0.15, 0, 1);
-
-    const len = {};
-    for (const k in FRAC) {
-      const isLimb = /humerus|forearm|femur|tibia/.test(k);
-      const f = FRAC[k] * (isLimb ? lerp(0.955, 1.045, limb) : 1)
-        * lerp(0.992, 1.008, rng.f());     // the residual, which is small
-      len[k] = f * stature;
+    if (!GK.anthro || !GK.anthro.model) {
+      throw new Error('buildFigure: load the ANSUR fit first, via GK.anthro.useModel(...)');
     }
+    const m = GK.anthro.sampleBody(seed, opts);
+    const seg = GK.anthro.segments(m);
+    const Lm = GK.anthro.landmarks(m);
+    const rootH = seg.sacrumHeight;
 
-    const hipHalf = HALF.hip * lerp(0.90, 1.14, heft) * stature;
+    const len = {
+      // Zero, and it has to be. The root is placed AT the iliac crest,
+      // which is also where the lumbar measurements start, so any length
+      // given to the sacrum here is added to the spine a second time. The
+      // first pass gave it the crest-to-trochanter rise and the figure came
+      // out 195mm taller than its own stature — a hundred and ninety-five
+      // millimetres of spine that no measurement asked for. The sacrum's
+      // own form belongs to the pelvic volume, not to the bone chain.
+      pelvis: 0,
+      lumbarSeg: seg.lumbarSeg,
+      thoracicSeg: seg.thoracicSeg,
+      cervicalSeg: seg.cervicalSeg,
+      skull: seg.headLen,
+      clavicle: seg.clavicle,
+      scapula: seg.scapula,
+      humerus: seg.humerus,
+      forearm: seg.forearm,
+      femur: seg.femur,
+      tibia: seg.tibia,
+      foot: seg.foot,
+    };
+
+    // Offsets are differences between two measured heights on the same
+    // person, not fractions of stature. The root sits at the sacral base.
     const at = {
-      hip: [-FRAC.pelvis * stature, hipHalf, 0],
-      sc: [HALF.scDrop * stature, 0, HALF.scFwd * stature],
+      hip: [Lm.hip[0] - rootH, Lm.hip[1], 0],
+      sc: [Lm.suprasternale[0] - m.cervicaleheight, 0, Lm.suprasternale[2]],
     };
 
-    const fig = {
-      seed, stature, heft, limb, len, at, groups: weights(),
-      // biacromial breadth is carried by the clavicle's length rather than
-      // by an offset, so broad shoulders are a longer collarbone — which is
-      // what they anatomically are
-      ref,
+    return {
+      seed, m, seg, landmarks: Lm, girth: GK.anthro.girths(m),
+      stature: m.stature, rootHeight: rootH,
+      len, at, groups: weights(),
     };
-    fig.len.clavicle *= lerp(0.93, 1.10, heft);
-    return fig;
   }
 
-  GK.figure = { buildFigure, FRAC, HALF, weights };
+  GK.figure = { buildFigure, weights };
 })(window.GK = window.GK || {});

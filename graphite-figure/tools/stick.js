@@ -19,7 +19,8 @@ const HERE = path.join(__dirname, '..');
 // solve(), as a missing constant.
 ['00-math', '10-anatomy', '20-rig', '30-pose']
   .forEach(f => require(path.join(HAND, 'src', f + '.js')));
-['10-skeleton', '20-build'].forEach(f => require(path.join(HERE, 'src', f + '.js')));
+['00-anthro', '10-skeleton', '20-build'].forEach(f => require(path.join(HERE, 'src', f + '.js')));
+window.GK.anthro.useModel(require(path.join(HERE, 'data', 'ansur-model.json')));
 const writePNG = require(path.join(HAND, 'tools', 'png.js'));
 
 const G = window.GK, M = G.math, DEG = M.DEG;
@@ -101,7 +102,8 @@ for (const s of ['L', 'R']) {
   // one, measure its middle ray, and rebuild at the size that makes that ray
   // the hand length this stature calls for. Measuring rather than assuming a
   // constant keeps it right if the hand project's baseline ever moves.
-  const want = 0.108 * fig.stature;
+  // measured hand length for this body, not a fraction of its height
+  const want = fig.m.handlength;
   const probe = G.anatomy.buildAnatomy(seed ^ 0x11, {});
   const ray = probe.bones[2].lengths.reduce((x, y) => x + y, 0);
   const HA = G.anatomy.buildAnatomy(seed ^ (s === 'L' ? 0x11 : 0x22), {
@@ -123,7 +125,13 @@ for (const s of ['L', 'R']) {
 writePNG(out, buf, S, S);
 const h = (id) => rig.bones[id];
 console.log('seed ' + seed + '  stature ' + fig.stature.toFixed(0) + 'mm');
-console.log('  vertex   ' + h('skull').B[0].toFixed(0) + 'mm above root');
+// The check that matters: the skeleton's own height has to agree with the
+// stature the body was sampled at, and its sole has to sit on the floor.
+const vertex = fig.rootHeight + h('skull').B[0];
+const sole = fig.rootHeight + h('tibia.L').B[0] - fig.m.lateralmalleolusheight;
+console.log('  vertex   ' + vertex.toFixed(0) + 'mm vs stature ' + fig.stature.toFixed(0) +
+  'mm   (' + (vertex - fig.stature >= 0 ? '+' : '') + (vertex - fig.stature).toFixed(0) + 'mm)');
+console.log('  sole     ' + sole.toFixed(0) + 'mm off the floor');
 console.log('  wrist L  ' + h('forearm.L').B.map(v => v.toFixed(0)).join(', '));
 console.log('  ankle L  ' + h('tibia.L').B.map(v => v.toFixed(0)).join(', '));
 console.log('  toe   L  ' + h('foot.L').B.map(v => v.toFixed(0)).join(', '));
