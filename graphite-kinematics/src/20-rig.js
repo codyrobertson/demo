@@ -764,7 +764,17 @@
         const fn = vdot(digitNormal(rig, d, sg.seg, sRing, a), view.e);
         // only the arc where the surface grazes is an edge
         let g = gate * (1 - M.smoothstep(clamp01((Math.abs(fn) - 0.05) / 0.32)));
-        if (sRing < AN.webStart(A, d, a)) g *= 0.25;
+        // ...and where the web has buried it. This used to read `sRing <
+        // webStart`, which looks like a comparison and is a constant: webStart
+        // is a height times a smoothstep, so it is zero on the dorsal side and
+        // never negative anywhere, and the ring is sampled at a fixed -0.02.
+        // The test was therefore true at every angle on every finger in every
+        // pose, and the knuckle - the one mark that says a foreshortened
+        // finger has a joint in it rather than being a bent tube - has been
+        // drawing at a quarter strength since it was written. What the damping
+        // wants to know is whether there is any web at this angle at all.
+        const web = AN.webStart(A, d, a);
+        g *= lerp(1, 0.25, M.smoothstep(clamp01(web / 0.10)));
         const p = view.px(q);
         ring.push([p[0], p[1], view.near(q), sg.pid, g]);
       }

@@ -774,6 +774,9 @@
     const bestGap = [1e9, 1e9, 1e9, 1e9, 1e9];
     const bestAt = [null, null, null, null, null];
     const past = [0, 0, 0, 0, 0];
+    // how near a digit has to have been before "it is going away again" is
+    // evidence of anything
+    const NEARLY = 6.0;
     let settled = 0;
     const STEPS = opts.steps === undefined ? 26 : opts.steps;
     const rate = opts.rate === undefined ? 0.13 : opts.rate;
@@ -803,6 +806,13 @@
       // rule that only watches for contact never fires and the finger closes
       // into a fist beside a marble it was supposed to be holding. Measured:
       // the middle finger finished 13.6mm past a 16mm ball.
+      //
+      // But only once the digit has actually got near the thing. The contact
+      // solver runs between closing steps and jostles every gap by a
+      // millimetre or so, and read without that guard the rule fires on that
+      // jostle: the ring finger, still 28mm out and closing perfectly well,
+      // saw its gap tick upward twice and was frozen there for the rest of
+      // the run. A finger cannot be past a ball it has never reached.
       for (let d = 0; d < 5; d++) {
         const dg = rig.digits[d];
         const pad = GK.anatomy.segmentProfile(A, d, dg.segs.length - 1, 0.9)[1];
@@ -811,7 +821,7 @@
           bestGap[d] = gap;
           bestAt[d] = JSON.parse(JSON.stringify(p.digits[d]));
           past[d] = 0;
-        } else if (gap > bestGap[d] + 0.4 && ++past[d] >= 2 && !rested[d]) {
+        } else if (bestGap[d] < NEARLY && gap > bestGap[d] + 0.4 && ++past[d] >= 3 && !rested[d]) {
           // it has turned away from the ball twice running: put it back where
           // it was nearest and leave it there
           if (bestAt[d]) p.digits[d] = JSON.parse(JSON.stringify(bestAt[d]));
@@ -867,16 +877,44 @@
       if (len < 1e-6) continue;
       const pad = GK.anatomy.segmentProfile(A, d, dg.segs.length - 1, 0.9)[1];
       const target = M.vmad(ball.C, M.vmul(away, 1 / len), ball.r + pad * 0.6);
-      p = reach(A, p, d, target, { iters: 20, kappa: 0.006 });
+      // The step this solver takes is small on purpose, so the iteration
+      // count has to cover the whole swing. A thumb reaching round a 38mm
+      // ball travels ninety degrees of opposition; given twenty iterations it
+      // finished 29.6mm short, and given a hundred and twenty it finishes
+      // 1.2mm short. It was never that the target could not be reached.
+      p = reach(A, p, d, target, { iters: 120, kappa: 0.002 });
     }
-    // Settle with the spring almost off. The default pull toward the authored
-    // pose is what stops a contact turning a fist into a splayed claw, but the
-    // authored pose here is a fist and the ball is the whole point - at full
-    // strength it holds the proximal phalanges several millimetres inside a
-    // large ball rather than letting them ride up onto it.
-    const out = resolveContacts(A, p, { iters: 40, scene, kappa: 0.012 });
+    // Settle hard against the pose that was just aimed, because by this point
+    // the aim IS the answer: the reach solver has put each pad on the ball,
+    // and all this pass has left to do is take a couple of millimetres of
+    // penetration out of it. Left slack, it does not polish - it re-solves.
+    // A thumb 2.5mm into a 38mm ball was thrown to its own extension limit,
+    // 43mm clear of the thing it was holding, because swinging the whole
+    // digit away is a perfectly good way to remove a penetration and nothing
+    // told it otherwise. Swept over ten seeds, two starting poses and three
+    // radii, every digit's gap falls monotonically as this is tightened and
+    // the penetration it buys back rises slowly: at 0.35 the worst pad gap
+    // across the population is 15mm where it was 41mm, and penetration is
+    // 0.2mm median, 2.6mm at the ninetieth.
+    const out = resolveContacts(A, p, { iters: 40, scene, kappa: 0.350 });
     out.ball = ball;
-    out.held = rested;
+    // Recomputed from the hand that came out, not carried over from the
+    // closing loop. `rested` is the loop's own bookkeeping and it stops being
+    // true the moment the aiming pass and the final settle move a digit -
+    // reported as-is it says a finger is holding the ball while the finger is
+    // measurably somewhere else, which is worse than saying nothing.
+    {
+      const fin = R.solve(A, out);
+      out.held = [];
+      out.holdGap = [];
+      for (let d = 0; d < 5; d++) {
+        const dg = fin.digits[d];
+        const pad = GK.anatomy.segmentProfile(A, d, dg.segs.length - 1, 0.9)[1];
+        const gap = M.vdist(dg.tip, ball.C) - ball.r - pad;
+        out.holdGap[d] = gap;
+        out.held[d] = gap <= 1.2;
+      }
+    }
     return out;
   }
 
