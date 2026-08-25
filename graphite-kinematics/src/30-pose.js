@@ -734,6 +734,61 @@
   }
 
   /**
+   * A hand taking a ball and letting it go, as a function of one number.
+   *
+   * Returns a closure rather than a pose, because closing a hand on something
+   * is a settle inside a settle and costs a couple of hundred milliseconds -
+   * far too much to pay per frame. The two ends are worked out once and every
+   * frame is an interpolation between them, which is also why the closing
+   * reads as one motion instead of a series of separate grips.
+   *
+   * The hand does not travel: there is no translation in the rig, and faking
+   * one by sliding the ball into the palm looks like the ball doing the work.
+   * So the lift is carried by the wrist, which is a real degree of freedom,
+   * and the drop by the ball alone - once the fingers have opened past it
+   * there is nothing holding it, and it accelerates along the hand's own
+   * proximal axis, which is down the page in the framing this draws in.
+   */
+  function pickAndDrop(A, radius, opts) {
+    opts = opts || {};
+    const openKey = opts.open || 'spread';
+    const open = clampPose(A, mk(A, PRESETS[openKey].spec));
+    const grip = holdBall(A, open, radius);
+    const ball0 = grip.ball;
+    const rig0 = GK.rig.solve(A, open);
+    const down = M.vmul(rig0.root[0], -1);
+    // phase boundaries: settle, close, lift and hold, open, fall
+    const P = opts.phases || [0.08, 0.36, 0.60, 0.74];
+    const ease = M.ease.inOut, inv = M.inv;
+    return function (t) {
+      const u = ((t % 1) + 1) % 1;
+      let mix = 0, lift = 0, fall = 0;
+      if (u < P[0]) { mix = 0; }
+      else if (u < P[1]) { mix = ease(inv(u, P[0], P[1])); }
+      else if (u < P[2]) { mix = 1; lift = ease(inv(u, P[1], P[2])); }
+      else if (u < P[3]) { mix = 1 - ease(inv(u, P[2], P[3])); lift = 1 - ease(inv(u, P[2], P[3])) * 0.4; }
+      else { mix = 0; lift = 0.6; fall = inv(u, P[3], 1); }
+      const p = lerpPose(open, grip, mix);
+      // the wrist carries the lift, since nothing else can
+      p.wrist.flex += lift * 26 * DEG;
+      p.wrist.dev += lift * 7 * DEG;
+      const held = { C: ball0.C.slice(), r: ball0.r,
+        roughness: opts.roughness, anisotropy: opts.anisotropy };
+      if (fall > 0) {
+        // a real acceleration, not a slide: the first tenth of the fall is
+        // barely visible and the last is a blur, which is what selling a drop
+        // in a still sequence depends on
+        const drop = 0.5 * 2600 * Math.pow(fall * 0.42, 2);
+        held.C = M.vmad(held.C, down, drop);
+      }
+      const out = clampPose(A, p);
+      out.ball = held;
+      out.phase = fall > 0 ? 'falling' : mix > 0.98 ? 'held' : mix > 0.02 ? 'closing' : 'open';
+      return out;
+    };
+  }
+
+  /**
    * Pull one digit to a point in space.
    *
    * The same damped Jacobian transpose the contacts use, except the error is
@@ -824,7 +879,7 @@
   GK.pose = {
     blank, mk, clampPose, specOf, preset, PRESETS, PRESET_KEYS, couple, generate,
     resolveContacts, gatherContacts, jointDofs, reach,
-    holdBall, ballOnPalm, ballContacts,
+    holdBall, ballOnPalm, ballContacts, pickAndDrop,
     lerpPose, dofList, romTour, breathe, readout, nr
   };
 })(window.GK = window.GK || {});

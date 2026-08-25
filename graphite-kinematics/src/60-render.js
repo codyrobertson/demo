@@ -504,6 +504,15 @@
       swallow(fsil.sideA); swallow(fsil.sideB); swallow(fsil.cap);
       if (rig.ball) swallow(ballOutline(rig.ball, view));
 
+      // A caller can pin the framing instead. Anything that renders a
+      // sequence has to: re-fitting each frame makes the hand swim about
+      // inside its own plate, and a ball leaving the picture drags the whole
+      // drawing small as it goes.
+      if (state.fit) {
+        view.scale = state.fit.scale; view.cx = state.fit.cx; view.cy = state.fit.cy;
+        view.mmPerPx = 1 / view.scale;
+        return this._build2(A, pose, rig, view, state);
+      }
       const margin = state.margin === undefined ? 0.88 : state.margin;
       const zoom = V.zoom === undefined ? 1 : V.zoom;
       const scale = Math.min(this.w * margin / Math.max(1e-6, x1 - x0),
@@ -514,6 +523,10 @@
       // millimetres per pixel, for depth tolerances
       view.mmPerPx = 1 / scale;
 
+      return this._build2(A, pose, rig, view, state);
+    }
+
+    _build2(A, pose, rig, view, state) {
       // ---- depth field ----------------------------------------------------
       const ids = buildIds(rig);
       const df = new DepthField(this.w, this.h, (state.quality || 0) >= 1 ? 1 : 2);
