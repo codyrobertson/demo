@@ -531,13 +531,19 @@
   /** numeric surface normal on the palm */
   function palmNormal(rig, u, beta) {
     const h = 0.006;
-    const p0 = palmSurface(rig, u, beta).P;
+    // c0 answers both what palmSurface(rig, u, beta) used to be asked for
+    // twice: the centre point for the finite difference, and .n/.palmar for
+    // the orientation reference below. Calling it a second time returned the
+    // same object every time - rig and (u, beta) are exactly what it reads -
+    // so the second call was never disagreeing with the first, only paying
+    // for palmSpine and the thickness fields all over again to reconfirm it.
+    const c0 = palmSurface(rig, u, beta);
+    const p0 = c0.P;
     const pu = palmSurface(rig, clamp(u + h, -0.1, 1.12), beta).P;
     const pb = palmSurface(rig, u, beta + h).P;
     const Tu = vsub(pu, p0), Tb = vsub(pb, p0);
     let N = vnorm(vcross(Tb, Tu));
-    const c = palmSurface(rig, u, beta);
-    const ref = vmul(c.n, c.palmar ? 1 : -1);
+    const ref = vmul(c0.n, c0.palmar ? 1 : -1);
     if (vdot(N, ref) < 0) N = vmul(N, -1);
     return N;
   }
@@ -567,11 +573,20 @@
     return [u + m * (cu / n), m * (cd / n)];
   }
 
-  /** surface point on a digit segment; alpha 0 = ulnar, +pi/2 = dorsal */
-  function digitSurface(rig, d, seg, s, alpha) {
+  /**
+   * Surface point on a digit segment; alpha 0 = ulnar, +pi/2 = dorsal.
+   *
+   * `pr0`, when the caller already has it, is this section's segmentProfile
+   * - optional, and only ever passed by a caller about to ask digitNormal
+   * for the same (d, seg, s) right after, so it can hand that call the
+   * profile back too instead of making it re-derive one this function
+   * already has sitting in a local variable. Every other caller leaves it
+   * out and gets exactly what this function always computed for itself.
+   */
+  function digitSurface(rig, d, seg, s, alpha, pr0) {
     const A = rig.anatomy;
     const sg = rig.digits[d].segs[seg];
-    const pr = AN.segmentProfile(A, d, seg, s);
+    const pr = pr0 || AN.segmentProfile(A, d, seg, s);
     const ca = Math.cos(alpha), sa = Math.sin(alpha);
     const off = sectionOffset(rig, d, seg, pr);
     const offU = off[0], offD = off[1];
@@ -580,7 +595,7 @@
       sg.A[1] + sg.t[1] * sg.len * s + sg.ul[1] * (pr[0] * ca + offU) + sg.dor[1] * (pr[1] * sa + offD),
       sg.A[2] + sg.t[2] * sg.len * s + sg.ul[2] * (pr[0] * ca + offU) + sg.dor[2] * (pr[1] * sa + offD)
     ];
-    return { P: rig.soft ? softPoint(rig, P) : P, a: pr[0], b: pr[1], seg: sg };
+    return { P: rig.soft ? softPoint(rig, P) : P, a: pr[0], b: pr[1], seg: sg, pr, off };
   }
 
 
@@ -726,16 +741,29 @@
     return vmad(vmad(vmad(sg.A, sg.t, sg.len * s), sg.ul, off[0]), sg.dor, off[1]);
   }
 
-  /** outward surface normal on a digit segment */
-  function digitNormal(rig, d, seg, s, alpha) {
+  /**
+   * Outward surface normal on a digit segment.
+   *
+   * `pr0`/`off0` let a caller that just computed digitSurface at this same
+   * (d, seg, s) hand its segmentProfile and sectionOffset straight in,
+   * rather than have this function spend a segmentProfile call and a
+   * sectionOffset call re-deriving values it was just given the inputs to
+   * skip. projectCurve, knuckleRings and firstWeb all call digitSurface and
+   * digitNormal back to back at the same point for exactly this reason - a
+   * curve needs both the surface and the way it faces - and passing them
+   * through is arithmetically inert: p0 and o0 below end up holding the
+   * identical values a bare call would have computed, just once instead of
+   * twice.
+   */
+  function digitNormal(rig, d, seg, s, alpha, pr0, off0) {
     const A = rig.anatomy;
     const sg = rig.digits[d].segs[seg];
     const h = 0.004;
-    const p0 = AN.segmentProfile(A, d, seg, s);
+    const p0 = pr0 || AN.segmentProfile(A, d, seg, s);
     const p1 = AN.segmentProfile(A, d, seg, s + h);
     const da = (p1[0] - p0[0]) / h, db = (p1[1] - p0[1]) / h;
     // the section-centre offset (see sectionOffset) can also move with s
-    const o0 = sectionOffset(rig, d, seg, p0), o1 = sectionOffset(rig, d, seg, p1);
+    const o0 = off0 || sectionOffset(rig, d, seg, p0), o1 = sectionOffset(rig, d, seg, p1);
     const dOffU = (o1[0] - o0[0]) / h, dOffD = (o1[1] - o0[1]) / h;
     const ca = Math.cos(alpha), sa = Math.sin(alpha);
     // dP/dalpha
@@ -790,8 +818,9 @@
       const N = 44;
       for (let i = 0; i <= N; i++) {
         const a = (i / N) * Math.PI * 2;
-        const q = digitSurface(rig, d, sg.seg, sRing, a).P;
-        const fn = vdot(digitNormal(rig, d, sg.seg, sRing, a), view.e);
+        const surf = digitSurface(rig, d, sg.seg, sRing, a);
+        const fn = vdot(digitNormal(rig, d, sg.seg, sRing, a, surf.pr, surf.off), view.e);
+        const q = surf.P;
         // only the arc where the surface grazes is an edge
         let g = gate * (1 - M.smoothstep(clamp01((Math.abs(fn) - 0.05) / 0.32)));
         // ...and where the web has buried it. This used to read `sRing <
@@ -1178,18 +1207,31 @@
     if (y1 < y0 || x1 < x0) return;
     const d = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
     if (Math.abs(d) < 1e-12) return;
+    // Same hoist as DepthField.tri in 60-render.js, and for the same reason:
+    // l1 and l2 are affine in (px, py), so the four coefficients below are
+    // identical at every pixel this triangle covers and do not belong inside
+    // the loop that visits them. The division by `d` stays a division, done
+    // once per pixel exactly where it always was - turning it into a
+    // multiply by a precomputed 1/d would change the rounding of every l1
+    // and l2 in the mask by a bit that never shows on a smoothed, resampled
+    // silhouette, but "never shows" is not the bar this file holds itself
+    // to, so it is left a division.
+    const A1 = by - cy, B1 = cx - bx;
+    const A2 = cy - ay, B2 = ax - cx;
     for (let y = y0; y <= y1; y++) {
-      const py = y + 0.5;
+      const py = y + 0.5, dpy = py - cy;
+      const rowB1 = B1 * dpy, rowB2 = B2 * dpy;
+      const row = y * W;
       for (let x = x0; x <= x1; x++) {
-        const px = x + 0.5;
-        const l1 = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) / d;
+        const px = x + 0.5, dpx = px - cx;
+        const l1 = (A1 * dpx + rowB1) / d;
         if (l1 < -0.002) continue;
-        const l2 = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) / d;
+        const l2 = (A2 * dpx + rowB2) / d;
         if (l2 < -0.002) continue;
         const l3 = 1 - l1 - l2;
         if (l3 < -0.002) continue;
         const zz = l1 * az + l2 * bz + l3 * cz;
-        const i = y * W + x;
+        const i = row + x;
         if (!m.cov[i] || zz > m.dep[i]) {
           m.dep[i] = zz; m.own[i] = owner;
           m.gn[i] = l1 * ag + l2 * bg + l3 * cg;
@@ -1427,7 +1469,7 @@
       for (let i = 0; i < 28; i++) {
         const a = (i / 28) * Math.PI * 2;
         const q = digitSurface(rig, d, seg, sv, a);
-        const n = digitNormal(rig, d, seg, sv, a);
+        const n = digitNormal(rig, d, seg, sv, a, q.pr, q.off);
         const dot = vdot(n, vnorm(vsub(target, q.P)));
         if (dot > bestDot) { bestDot = dot; best = a; }
       }

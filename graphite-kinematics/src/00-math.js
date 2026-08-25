@@ -110,7 +110,12 @@
     }
     _h(i, j, k) {
       const pm = this.perm;
-      return this.g[pm[(pm[(pm[i & 511] + (j & 511)) & 1023 & 511] + (k & 511)) & 511]];
+      // `& 1023 & 511` and `& 511` mask to the same nine bits - 511 is a
+      // subset of the 1023 mask, so ANDing with 1023 first and throwing most
+      // of it away with a second AND right after was never selecting
+      // anything the single mask doesn't. Every hash this returns is called
+      // eight times for one noise sample, so it is worth not asking twice.
+      return this.g[pm[(pm[(pm[i & 511] + (j & 511)) & 511] + (k & 511)) & 511]];
     }
     /** 3-D value noise, output in [0,1] */
     n3(x, y, z) {
@@ -202,19 +207,29 @@
   }
 
   // ------------------------------------------------------------------- curves
-  /** uniform Catmull-Rom, scalar */
-  function crS(p0, p1, p2, p3, t) {
-    const t2 = t * t, t3 = t2 * t;
+  /** uniform Catmull-Rom, scalar, given t and its already-computed powers */
+  function crSt(p0, p1, p2, p3, t, t2, t3) {
     return 0.5 * ((2 * p1) + (-p0 + p2) * t +
       (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
       (-p0 + 3 * p1 - 3 * p2 + p3) * t3);
   }
-  /** uniform Catmull-Rom, vec3 */
+  /** uniform Catmull-Rom, scalar */
+  function crS(p0, p1, p2, p3, t) {
+    const t2 = t * t, t3 = t2 * t;
+    return crSt(p0, p1, p2, p3, t, t2, t3);
+  }
+  /** uniform Catmull-Rom, vec3
+   *  t2 and t3 depend on t alone, not on which of the three coordinates is
+   *  being blended, so computing them once here and handing them to crSt
+   *  three times is the same nine multiplies crS would have done on its own
+   *  three calls, minus the four of those nine that were computing the exact
+   *  same t*t and t*t*t over again each time. */
   function crV(p0, p1, p2, p3, t) {
+    const t2 = t * t, t3 = t2 * t;
     return [
-      crS(p0[0], p1[0], p2[0], p3[0], t),
-      crS(p0[1], p1[1], p2[1], p3[1], t),
-      crS(p0[2], p1[2], p2[2], p3[2], t)
+      crSt(p0[0], p1[0], p2[0], p3[0], t, t2, t3),
+      crSt(p0[1], p1[1], p2[1], p3[1], t, t2, t3),
+      crSt(p0[2], p1[2], p2[2], p3[2], t, t2, t3)
     ];
   }
   /** sample a Catmull-Rom spline through pts[] at fractional index fi (clamped ends) */

@@ -30,11 +30,18 @@
       const n = this.w * this.h;
       this.z0 = new Float32Array(n); this.i0 = new Int16Array(n);
       this.z1 = new Float32Array(n); this.i1 = new Int16Array(n);
+      // A cache for slope(), filled in lazily rather than all at once: see
+      // the note on slope() below for why this is safe and _slopeSet exists
+      // rather than a sentinel value, and why it stays unallocated (null)
+      // until the first query, since a caller that never asks about slope
+      // (nothing does, off the contour/occlusion path) should not pay for it.
+      this._slope = null; this._slopeSet = null;
       this.clear();
     }
     clear() {
       this.z0.fill(-1e18); this.z1.fill(-1e18);
       this.i0.fill(-1); this.i1.fill(-1);
+      this._slope = null; this._slopeSet = null;
       return this;
     }
     /** rasterise a triangle owned by part `id`, peeling two layers */
@@ -50,22 +57,40 @@
       const den = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
       if (Math.abs(den) < 1e-12) return;
       const iden = 1 / den;
+      // l0 and l1 are affine in (px, py): every one of these four
+      // coefficients is the same at every pixel the triangle covers, so this
+      // hoists them out of a loop that, until now, recomputed all four from
+      // scratch on every single pixel - the actual cost of this function,
+      // since a triangle is on average tens of pixels and this ran twice
+      // that often for nothing. What is pulled out is exactly the
+      // sub-expressions as they were written, not a reassociated equivalent
+      // of them, so the value each pixel multiplies by iden is bit-for-bit
+      // what it was before. A wrong version of this hoist still looks right
+      // on every triangle in this file and only disagrees with the original
+      // on one rasterised near some part's own silhouette, where l0 or l1
+      // sits within float noise of the -0.003 cutoff - which is exactly
+      // where nobody would go looking for it.
+      const A0 = by - cy, B0 = cx - bx;
+      const A1 = cy - ay, B1 = ax - cx;
       for (let y = y0; y <= y1; y++) {
-        const py = y + 0.5;
+        const py = y + 0.5, dpy = py - cy;
+        const rowB0 = B0 * dpy, rowB1 = B1 * dpy;
+        const row = y * W;
         for (let x = x0; x <= x1; x++) {
-          const px = x + 0.5;
-          const l0 = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) * iden;
+          const px = x + 0.5, dpx = px - cx;
+          const l0 = (A0 * dpx + rowB0) * iden;
           if (l0 < -0.003) continue;
-          const l1 = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) * iden;
+          const l1 = (A1 * dpx + rowB1) * iden;
           if (l1 < -0.003) continue;
           const l2 = 1 - l0 - l1;
           if (l2 < -0.003) continue;
           const zz = l0 * az + l1 * bz + l2 * cz;
-          const i = y * W + x;
-          if (zz > z0[i]) {
-            if (i0[i] !== id) { z1[i] = z0[i]; i1[i] = i0[i]; }
+          const i = row + x;
+          const cur = z0[i], curId = i0[i];
+          if (zz > cur) {
+            if (curId !== id) { z1[i] = cur; i1[i] = curId; }
             z0[i] = zz; i0[i] = id;
-          } else if (id !== i0[i] && zz > z1[i]) {
+          } else if (id !== curId && zz > z1[i]) {
             z1[i] = zz; i1[i] = id;
           }
         }
@@ -92,14 +117,43 @@
       return this.i1[i] === -1 ? -1e18 : this.z1[i];
     }
 
-    /** local steepness of the depth field, in scene units per cell */
+    /**
+     * Local steepness of the depth field, in scene units per cell.
+     *
+     * The depth field itself (z0) is written once, by rasterise(), before
+     * the first call to slope() and never again - every mark in the plate
+     * is projected and occlusion-tested against the SAME finished field, not
+     * one still being drawn into. That is exactly the condition memoising
+     * this on first ask requires: the value at a cell cannot change out from
+     * under the cache between one query and the next, so the second query
+     * of a cell is not skipping work that might now give a different
+     * answer, it is skipping work that is guaranteed to give the same one.
+     * A silhouette walks its own border at a few pixels per point and a
+     * dense field of ridge or fingerprint strokes crosses itself constantly,
+     * so the same handful of cells near any busy patch of the drawing get
+     * asked about over and over - hidden() alone taps up to four of them
+     * per point it tests, twice over on a self-tested contour.
+     *
+     * What would NOT be safe is caching this across draws, which is why it
+     * is a property of one DepthField instance - built fresh every draw()
+     * and thrown away at the end of it - rather than of the Renderer, and
+     * why clear() drops it: a cache that outlived the field it was measuring
+     * would go on answering questions about a pose, view or anatomy that
+     * has since changed, and that is a wrong drawing wearing the frame of a
+     * fast one.
+     */
     slope(cx, cy) {
-      const W = this.w, H = this.h, z = this.z0;
+      const W = this.w, H = this.h;
       if (cx < 1 || cy < 1 || cx >= W - 1 || cy >= H - 1) return 0;
+      const n = W * H;
+      if (!this._slope) { this._slope = new Float32Array(n); this._slopeSet = new Uint8Array(n); }
       const i = cy * W + cx;
+      if (this._slopeSet[i]) return this._slope[i];
+      const z = this.z0;
       const l = z[i - 1], r = z[i + 1], u = z[i - W], d = z[i + W];
-      if (l < -1e17 || r < -1e17 || u < -1e17 || d < -1e17) return 0;
-      return Math.max(Math.abs(r - l), Math.abs(d - u)) * 0.5;
+      const v = (l < -1e17 || r < -1e17 || u < -1e17 || d < -1e17) ? 0 : Math.max(Math.abs(r - l), Math.abs(d - u)) * 0.5;
+      this._slope[i] = v; this._slopeSet[i] = 1;
+      return v;
     }
 
     /** slope(), addressed by screen pixel like behind() and stepBehind() rather than by cell */
@@ -354,8 +408,12 @@
       const q = cv.pts[i];
       let P, N = null;
       if (cv.on === 'digit') {
+        // digitSurface already worked out this section's profile and its
+        // centre offset to place P; handing them to digitNormal (see its
+        // own comment) is what lets the busiest call in this loop skip
+        // redoing that part of the work for the same point a line below.
         const sp = RG.digitSurface(rig, cv.d, cv.seg, q[0], q[1]);
-        N = RG.digitNormal(rig, cv.d, cv.seg, q[0], q[1]);
+        N = RG.digitNormal(rig, cv.d, cv.seg, q[0], q[1], sp.pr, sp.off);
         P = q[2] ? vmad(sp.P, N, q[2]) : sp.P;
       } else if (cv.on === 'palm') {
         const sp = RG.palmSurface(rig, q[0], q[1]);
