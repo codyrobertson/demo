@@ -536,7 +536,7 @@
     return out;
   }
 
-  function gatherContacts(A, rig, tol) {
+  function gatherContacts(A, rig, tol, scene) {
     const AN2 = GK.anatomy;
     const segs = [];
     for (let d = 0; d < 5; d++) {
@@ -589,6 +589,7 @@
         }
       }
     }
+    if (scene && scene.ball) for (const c of ballContacts(A, rig, scene.ball, tol)) cs.push(c);
     return cs;
   }
 
@@ -607,6 +608,129 @@
       const k = lambda * c.depth / sum;
       for (let i = 0; i < dofs.length; i++) dofs[i].add(k * dofs[i].w * g[i]);
     }
+  }
+
+  // =========================================================================
+  //  HOLDING SOMETHING
+  // =========================================================================
+
+  /**
+   * Where a ball of a given radius sits when the hand closes on it: against
+   * the palm, on the palm's own outward normal, a little way into the flesh
+   * so the pads have something to press. Placed from the hand rather than
+   * given, because a ball positioned by hand and a hand posed to hold it are
+   * two ways of getting the same thing wrong.
+   */
+  function ballOnPalm(A, rig, radius) {
+    const R = GK.rig;
+    const sp = R.palmSurface(rig, 0.52, 0.22);
+    const n = R.palmNormal(rig, 0.52, 0.22);
+    return { C: M.vmad(sp.P, n, radius * 0.92), r: radius };
+  }
+
+  /**
+   * Contacts against something the hand is holding, in the same record its own
+   * contacts use, so the settle loop needs to know nothing about it: a digit
+   * inside the sphere is pushed out along the radius, which is the sphere's
+   * outward normal there.
+   */
+  function ballContacts(A, rig, ball, tol) {
+    const AN2 = GK.anatomy;
+    const cs = [];
+    for (let d = 0; d < 5; d++) {
+      for (const sg of rig.digits[d].segs) {
+        if (!sg.rendered || sg.seg < 1) continue;
+        for (const sv of [0.3, 0.7, 1.0]) {
+          const C = M.vmad(sg.A, sg.t, sg.len * sv);
+          const r = AN2.segmentProfile(A, d, sg.seg, Math.min(sv, 1))[1];
+          const away = M.vsub(C, ball.C);
+          const dist = M.vlen(away);
+          if (dist < 1e-6) continue;
+          const pen = (ball.r + r) - dist;
+          if (pen <= tol) continue;
+          cs.push({ d, seg: sg.seg, P: C, n: M.vmul(away, 1 / dist), depth: pen });
+        }
+      }
+    }
+    return cs;
+  }
+
+  /**
+   * Close the hand on a ball.
+   *
+   * Not by aiming the pads at it. Driving every tip onto the sphere's surface
+   * lands them all on its equator, which is five fingers touching a circle
+   * rather than a hand holding anything, and for a ball too big to wrap it
+   * drives the proximal phalanges straight through it instead.
+   *
+   * A hand closes until it meets resistance, so this does too: flex everything
+   * by a few degrees, settle against the ball and against itself, and stop
+   * flexing whichever digits have arrived. Each finger then stops where the
+   * ball is, not where it was told, and the same code holds a marble and a
+   * grapefruit.
+   */
+  function holdBall(A, pose, radius, opts) {
+    opts = opts || {};
+    const R = GK.rig;
+    let p = clampPose(A, JSON.parse(JSON.stringify(pose)));
+    const ball = opts.ball || ballOnPalm(A, R.solve(A, p), radius);
+    const scene = { ball };
+    const rested = [false, false, false, false, false];
+    const STEPS = opts.steps === undefined ? 26 : opts.steps;
+    const rate = opts.rate === undefined ? 0.13 : opts.rate;
+    const shut = clampPose(A, mk(A, PRESETS[opts.toward || 'fist'].spec));
+    for (let it = 0; it < STEPS; it++) {
+      const rig = R.solve(A, p);
+      // A digit has arrived when its LAST bone is resting on the ball. Any
+      // contact at all is the wrong test: a proximal phalanx lying across a
+      // big ball touches it from the first step, and stopping there leaves
+      // the finger straight - it was never the part that was going to close.
+      // A contact only counts once it is on the segment whose flexion would
+      // otherwise still be carrying the tip inward.
+      const onBall = {};
+      for (const c of ballContacts(A, rig, ball, -0.4))
+        if (c.seg >= rig.digits[c.d].segs.length - 1) onBall[c.d] = 1;
+      for (let d = 0; d < 5; d++) {
+        if (rested[d]) continue;
+        const dg = rig.digits[d];
+        const pad = GK.anatomy.segmentProfile(A, d, dg.segs.length - 1, 0.9)[1];
+        if (onBall[d] || M.vdist(dg.tip, ball.C) <= ball.r + pad) rested[d] = true;
+      }
+      if (rested.every(Boolean)) break;
+      // Close along an authored trajectory rather than an invented one. Which
+      // joints move, and in what proportion, is exactly what the grip preset
+      // already encodes - it was fitted and then hand-corrected - and a
+      // schedule guessed here instead got the fingers closing while the thumb
+      // waved beside the ball, because the three motions that carry a thumb
+      // onto something held do not divide evenly.
+      for (let d = 0; d < 5; d++) {
+        if (rested[d]) continue;
+        const q = p.digits[d], t = shut.digits[d];
+        for (const k in q) if (typeof q[k] === 'number') q[k] += (t[k] - q[k]) * rate;
+      }
+      // no spring while closing, or the hand pulls back out of its own grip
+      p = resolveContacts(A, clampPose(A, p), { iters: 6, scene, kappa: 0 });
+    }
+    // The closing trajectory gets the fingers onto the ball and leaves the
+    // thumb about a pad's width short, every size, because the authored grip
+    // it is following was authored around fingers rather than around this
+    // object. So finish the thumb by aiming it: the reach solver respects the
+    // joint stops, so if the thumb genuinely cannot get there it stays where
+    // it is rather than being forced.
+    for (const d of (opts.aim || [0])) {
+      const rig = R.solve(A, p);
+      const dg = rig.digits[d];
+      const away = M.vsub(dg.tip, ball.C);
+      const len = M.vlen(away);
+      if (len < 1e-6) continue;
+      const pad = GK.anatomy.segmentProfile(A, d, dg.segs.length - 1, 0.9)[1];
+      const target = M.vmad(ball.C, M.vmul(away, 1 / len), ball.r + pad * 0.6);
+      p = reach(A, p, d, target, { iters: 20, kappa: 0.006 });
+    }
+    const out = resolveContacts(A, p, { iters: 20, scene });
+    out.ball = ball;
+    out.held = rested;
+    return out;
   }
 
   /**
@@ -676,7 +800,7 @@
     let deepest = 0;
     for (let it = 0; it < iters; it++) {
       const rig = GK.rig.solve(A, p);
-      const cs = gatherContacts(A, rig, tol);
+      const cs = gatherContacts(A, rig, tol, opts.scene);
       deepest = 0;
       for (const c of cs) deepest = Math.max(deepest, c.depth);
       if (!cs.length) break;
@@ -700,6 +824,7 @@
   GK.pose = {
     blank, mk, clampPose, specOf, preset, PRESETS, PRESET_KEYS, couple, generate,
     resolveContacts, gatherContacts, jointDofs, reach,
+    holdBall, ballOnPalm, ballContacts,
     lerpPose, dofList, romTour, breathe, readout, nr
   };
 })(window.GK = window.GK || {});
