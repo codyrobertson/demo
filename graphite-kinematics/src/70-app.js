@@ -18,6 +18,7 @@
     entropy: 0.55,
     speed: 1,
     motion: 'still',
+    contacts: true,
     artic: { curl: 0, spread: 0, opposition: 0, arch: 0, wristFlex: 0, wristDev: 0, pronation: 0 },
     // a mild oblique reads far better than a flat dorsal view: a curled
     // pose seen straight on foreshortens into a stack of rings
@@ -88,6 +89,7 @@
       seed: params.seed, pose,
       view: params.view,
       style: params.style,
+      contacts: params.contacts,
       detail: quality === 0 ? {
         print: params.detail.print * 0.55, ridge: params.detail.ridge * 0.45,
         lattice: params.detail.lattice * 0.5, hair: params.detail.hair * 0.6,
@@ -154,9 +156,18 @@
     const badge = document.getElementById('badge');
     if (badge) {
       const g = PEN.gradeAt(params.style.grade);
+      // How far the hand is still pressing into itself after settling. A
+      // couple of millimetres is soft tissue; more than that is a pose the
+      // solver could not reconcile, and worth seeing while you pose.
+      let contact = '';
+      if (lastBuilt && lastBuilt.rig && lastBuilt.rig.pose) {
+        const cd = lastBuilt.rig.pose.contactDepth;
+        if (typeof cd === 'number') contact = '\ncontact ' + cd.toFixed(1) + ' mm';
+        else if (!params.contacts) contact = '\ncontact off';
+      }
       badge.textContent = 'seed ' + params.seed + '  ·  ' + g.name + '\n' +
         (lastQuality === 0 ? 'draft' : 'plate') + '  ' + lastMs + ' ms' +
-        (lastBuilt ? '  ·  ' + lastBuilt.curves.length + ' curves' : '');
+        (lastBuilt ? '  ·  ' + lastBuilt.curves.length + ' curves' : '') + contact;
     }
   }
 
@@ -433,6 +444,11 @@
     markDirty();
   };
 
+  window.setContacts = function (on) {
+    params.contacts = !!on;
+    markDirty();
+  };
+
   window.setMotion = function (v) {
     params.motion = v;
     if (v === 'cycle') { cycleFrom = null; cycleT = 0; }
@@ -488,6 +504,7 @@
     buildUI();
     updateSeedDisplay();
     $('motion').value = 'still';
+    $('contacts').checked = true;
     $('entropy').value = params.entropy; $('entropy-value').textContent = params.entropy.toFixed(2);
     $('speed').value = params.speed; $('speed-value').textContent = params.speed.toFixed(2);
     $('paper').value = '#f4f1e8'; $('paper-value').textContent = '#f4f1e8';
