@@ -191,28 +191,29 @@
         }
       }
     }
-    // the first web, as a thin sheet, so the thumb is attached to the hand
+    // The first web, as the wedge it actually is: a palmar face and a
+    // dorsal face, plus a rim strip closing the free margin between them.
+    // Rasterised as a bare mid-sheet this fills nothing from anywhere near
+    // edge-on - a membrane projects to a sliver - which is why the thumb
+    // used to read as a lump laid beside the hand rather than joined to it.
     {
       const w = RG.firstWeb(rig, view);
-      const N = w.thSide.length;
       const proj = (P) => { const p = view.px(P); return [p[0], p[1], view.near(P)]; };
-      for (let i = 0; i < N - 1; i++) {
-        const t = i / (N - 1), t2 = (i + 1) / (N - 1);
-        const a0 = w.thSide[i], b0 = w.ixSide[i];
-        const a1 = w.thSide[i + 1], b1 = w.ixSide[i + 1];
-        const NC = 6;
-        for (let k = 0; k < NC; k++) {
-          const u0 = k / NC, u1 = (k + 1) / NC;
-          // pull the distal rungs back toward the free margin's sag
-          const bow = (tt, uu) => tt * Math.sin(Math.PI * uu) * 0.18;
-          const P = (aa, bb, uu, tt) => {
-            const base = M.vlerp(aa, bb, uu);
-            const prox = M.vnorm(M.vadd(rig.digits[0].segs[1].t, rig.digits[1].segs[1].t));
-            return M.vmad(base, prox, -M.vdist(aa, bb) * bow(tt, uu));
-          };
-          df.quad(proj(P(a0, b0, u0, t)), proj(P(a0, b0, u1, t)),
-            proj(P(a1, b1, u1, t2)), proj(P(a1, b1, u0, t2)), ids.palm);
+      const NT = w.thSide.length - 1, NC = 6;
+      for (const side of [1, -1]) {
+        for (let i = 0; i < NT; i++) {
+          const t0 = i / NT, t1 = (i + 1) / NT;
+          for (let k = 0; k < NC; k++) {
+            const k0 = k / NC, k1 = (k + 1) / NC;
+            df.quad(proj(w.wedgeAt(t0, k0, side)), proj(w.wedgeAt(t0, k1, side)),
+              proj(w.wedgeAt(t1, k1, side)), proj(w.wedgeAt(t1, k0, side)), ids.palm);
+          }
         }
+      }
+      for (let k = 0; k < NC; k++) {
+        const k0 = k / NC, k1 = (k + 1) / NC;
+        df.quad(proj(w.wedgeAt(1, k0, 1)), proj(w.wedgeAt(1, k1, 1)),
+          proj(w.wedgeAt(1, k1, -1)), proj(w.wedgeAt(1, k0, -1)), ids.palm);
       }
     }
     const NU = 30, NB = 36, id = ids.palm;
@@ -668,25 +669,41 @@
       // through the view hands its silhouette from one flank to the other.
       const jumpD = Math.max(12, this.w * 0.030);
       for (let d = 0; d < 5; d++) {
-        // a digit pointing at the eye is drawn as one form, not as pieces
+        // A digit pointing at the eye is drawn as one form, not as pieces -
+        // but how compact it reads is a continuous function of the view
+        // (digitUnion.edgeOn), not a threshold, because an orbit or a
+        // range-of-motion tour crosses whatever threshold there were
+        // constantly. So both treatments are drawn through the transition,
+        // the ordinary one fading out as the union fades in, and - the part
+        // a plain cross-fade would still get wrong - the rails and cap are
+        // pulled toward the union's own outline as they go, looked up by
+        // angle about its centroid, so what fades out is already sitting
+        // where what fades in will be, and neither pop is left uncovered
+        // for the other to fill.
         const un = RG.digitUnion(rig, view, d);
-        if (un.use) {
-          emit(un.outline, F.st(F.S.contour, { tone: 0.94, phase: d * 37 + 60 }),
+        const edgeOn = un.edgeOn || 0;
+        if (edgeOn > 0.004) {
+          emit(un.outline, F.st(F.S.contour, { tone: 0.94 * edgeOn, phase: d * 37 + 60 }),
             { noSearch: true, selfTest: false, maxJump: jumpD });
-          continue;
         }
+        if (edgeOn >= 0.996) continue;
+        const fade = 1 - edgeOn;
+        const bend = edgeOn <= 0.004 ? (pts => pts) : (pts => pts.map((p) => {
+          const u = un.at(Math.atan2(p[1] - un.cy, p[0] - un.cx));
+          return [lerp(p[0], u[0], edgeOn), lerp(p[1], u[1], edgeOn), lerp(p[2], u[2], edgeOn), p[3], p[4]];
+        }));
         const c = RG.digitContour(rig, view, d, { steps: 12 });
-        emit(c.right, F.st(F.S.contour, { phase: d * 37 + 1 }), { maxJump: jumpD });
-        emit(c.left, F.st(F.S.contour, { phase: d * 37 + 3 }), { maxJump: jumpD });
+        emit(bend(c.right), F.st(F.S.contour, { tone: fade, phase: d * 37 + 1 }), { maxJump: jumpD });
+        emit(bend(c.left), F.st(F.S.contour, { tone: fade, phase: d * 37 + 3 }), { maxJump: jumpD });
         // A ring or a tip cap is only an outline where the tube points away
         // from the eye. Pointing toward it, the near half of the same tube
         // covers the far half — and identity exclusion, which is what keeps a
         // silhouette from occluding itself, would otherwise let it through.
-        if (c.cap.length) emit(c.cap, F.st(F.S.contour, { tone: 0.80, phase: d * 37 + 2 }),
+        if (c.cap.length) emit(bend(c.cap), F.st(F.S.contour, { tone: 0.80 * fade, phase: d * 37 + 2 }),
           { noSearch: true, selfTest: true, maxJump: jumpD });
         for (let ri = 0; ri < c.rings.length; ri++) {
           // where a digit foreshortens, its knuckle ring IS the outline
-          emit(c.rings[ri], F.st(F.S.contour, { tone: 0.95, phase: d * 37 + 40 + ri }),
+          emit(bend(c.rings[ri]), F.st(F.S.contour, { tone: 0.95 * fade, phase: d * 37 + 40 + ri }),
             { noSearch: true, noGhost: true, selfTest: true, maxJump: jumpD });
         }
       }
@@ -703,10 +720,15 @@
       emit(tagPalm(sil.sideB), F.st(F.S.contour, { tone: 0.90, phase: 201 }), { maxJump: jump, selfTest: true });
       emit(tagPalm(sil.cap, false),
         F.st(F.S.contourSoft, { tone: 0.30, taper: 0.86, phase: 202 }), { noSearch: true, selfTest: true });
-      // the free margin of the thumb's commissure
+      // The thumb's commissure, as the outline of the wedge it actually is:
+      // a closed band running up the thumb's own flank, across the free
+      // margin, back down the palm's, and across the depth of the
+      // commissure — where it bulges most, and where a bare mid-sheet had
+      // nothing to show at all. selfTest buries whatever part of that band
+      // faces away behind the part that covers it.
       const fw = RG.firstWeb(rig, view);
-      emit(fw.margin, F.st(F.S.contour, { tone: 0.74, taper: 0.66, phase: 208 }),
-        { noSearch: true, maxJump: jump });
+      emit(fw.band, F.st(F.S.contour, { tone: 1.05, weight: 1.18, taper: 0.5, phase: 208 }),
+        { maxJump: jump, selfTest: true });
       // the free margins of the webs, spanning finger to finger
       const webs = RG.webContours(rig, view);
       for (let i = 0; i < webs.length; i++) {

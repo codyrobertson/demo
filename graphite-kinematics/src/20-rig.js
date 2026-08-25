@@ -641,6 +641,15 @@
     for (let k = 0; k < segs.length; k++) {
       const sg = segs[k];
       const isLast = k === segs.length - 1;
+      // The rails close the dome themselves ordinarily (see below), but
+      // where the tip cap is about to take over that same ground, the two
+      // constructions disagree enough on its exact shape to draw as a seam
+      // - a tube sliced flat, not a fingertip. Fade the rails out approaching
+      // the tip on the identical gate the cap fades in on, tapered rather
+      // than cut at s=1, so the handoff is one continuous form instead of
+      // two competing ones drawn on top of each other.
+      const domeGate = isLast ? M.smoothstep(clamp01((Math.abs(vdot(sg.t, view.e)) - 0.58) / 0.20)) : 0;
+      const domeFadeFrom = isLast ? 1 - 1.6 * AN.tipExtent(A, d) : 0;
       const n = isLast ? Math.round(stepsPer * 2.2) : stepsPer;
       for (let i = 0; i <= n; i++) {
         // cluster samples toward the tip, where the dome turns fastest
@@ -674,8 +683,9 @@
         // reads by contour count before it reads by contour weight, so the
         // rail itself is faded out there too rather than left for the depth
         // test alone - a real thumb never shows this as a third segment.
-        const railGain = (d === AN.THUMB && sg.seg === 0)
+        let railGain = (d === AN.THUMB && sg.seg === 0)
           ? smoothstep(clamp01((s - 0.42) / 0.26)) : 1;
+        if (domeGate > 0 && s > domeFadeFrom) railGain *= 1 - domeGate * inv(s, domeFadeFrom, sg.sMax);
         if (okA && railGain > 0.01) { left.push([pA[0], pA[1], nA, sg.pid, railGain]); prevL = pA; }
         if (okB && railGain > 0.01) { right.push([pB[0], pB[1], nB, sg.pid, railGain]); prevR = pB; }
       }
@@ -1120,7 +1130,13 @@
     }
     const axisSpan = Math.hypot(x1 - x0, y1 - y0);
     const width = wSum / Math.max(1, wN);
-    if (axisSpan > width * 2.1) return { use: false };
+    // How much this digit wants the union treatment, continuous rather than
+    // a hard switch on the same 2.1 threshold: an orbit or a range-of-motion
+    // tour crosses it constantly, and a hard switch pops there. Straddling
+    // it with a band lets a caller cross-fade in rather than cut over.
+    const ratio = axisSpan / Math.max(1e-6, width);
+    const edgeOn = 1 - smoothstep(clamp01((ratio - 1.7) / (2.5 - 1.7)));
+    if (edgeOn <= 0.004) return { use: false, edgeOn: 0 };
 
     // sample the whole digit's surface and take the radial maximum
     const pts = [];
@@ -1153,7 +1169,7 @@
     // circularly: taking a per-bin maximum straight out gives a sawtooth.
     let filled = 0;
     for (let b = 0; b < NB; b++) if (rad[b] >= 0) filled++;
-    if (filled < NB * 0.5) return { use: false };
+    if (filled < NB * 0.5) return { use: false, edgeOn: 0 };
     for (let b = 0; b < NB; b++) {
       if (rad[b] >= 0) continue;
       let lo = b, hi = b, n = 0;
@@ -1179,7 +1195,17 @@
       const th = (i / NB) * Math.PI * 2 - Math.PI;
       outline.push([cx + Math.cos(th) * rad[i], cy + Math.sin(th) * rad[i], dep[i], segs[0].pid, 1]);
     }
-    return { use: true, outline };
+    // Look up this outline by angle about its own centroid, so a caller can
+    // pull the ordinary rail-and-cap treatment toward it point by point
+    // instead of cutting from one construction to the other.
+    const at = (ang) => {
+      let a = ang - Math.floor((ang + Math.PI) / (Math.PI * 2)) * (Math.PI * 2);
+      const fi = (a + Math.PI) / (Math.PI * 2) * NB;
+      const i0 = Math.floor(fi) % NB, i1 = (i0 + 1) % NB, t = fi - Math.floor(fi);
+      const p0 = outline[i0], p1 = outline[i1];
+      return [lerp(p0[0], p1[0], t), lerp(p0[1], p1[1], t), lerp(p0[2], p1[2], t)];
+    };
+    return { use: true, edgeOn, outline, cx, cy, at };
   }
 
   /**
@@ -1188,8 +1214,18 @@
    * the hand — the distal thumb metacarpal really does stand clear of the
    * palm, so without the web the thumb draws as an object floating beside it.
    *
-   * Returns the free margin (the edge that shows in outline) and a ladder of
-   * rungs across the sheet, which the rasteriser fills so the web occludes.
+   * Returns the free margin (the edge that shows in outline), a ladder of
+   * rungs across the sheet, which the rasteriser fills so the web occludes,
+   * and wedgeAt — because the commissure is not that ladder's bare sheet. It
+   * is a wedge of real muscle, the adductor pollicis on the palmar side and
+   * the bulkier first dorsal interosseous on the dorsal, and a membrane has
+   * no depth to present when the hand turns edge-on: it projects to a
+   * sliver and the thumb reads as a lump laid beside the hand rather than
+   * joined to it. wedgeAt(t, k, side) offsets the ladder into a palmar and
+   * a dorsal face — side +1 / -1, or 0 for the bare mid-sheet the ladder
+   * already describes — tapered to nothing at k=0 and k=1, where the
+   * commissure simply IS the thumb's or the index's own skin, so the two
+   * faces close against those surfaces without a seam.
    */
   function firstWeb(rig, view) {
     const A = rig.anatomy;
@@ -1255,7 +1291,76 @@
       const p = view.px(q);
       margin.push([p[0], p[1], view.near(q), rig.palm.pid, 1]);
     }
-    return { thSide, ixSide, margin, PT, PI, sag };
+
+    // ---- the wedge: real thickness, not a membrane ------------------------
+    // A normal per rung, not one normal for the whole sheet: deep in the
+    // commissure the wedge lies nearly flat against the palm, and by the
+    // margin it has rolled out to stand between the two phalanges, so a
+    // single normal borrowed from one end points the bulge the wrong way
+    // over most of the other. Central differences on the rung midline give
+    // the along-sheet tangent; the ladder's own width gives the across one.
+    const spine = thSide.map((p, i) => M.vlerp(p, ixSide[i], 0.5));
+    const rungNormal = thSide.map((p, i) => {
+      const i0 = Math.max(0, i - 1), i1 = Math.min(NR, i + 1);
+      const along = vsub(spine[i1], spine[i0]);
+      const across = vsub(ixSide[i], thSide[i]);
+      let n = vnorm(vcross(across, along));
+      if (vdot(n, rig.root[2]) < 0) n = vmul(n, -1);   // palmar-positive
+      return n;
+    });
+    const S = A.size, pad = A.palm.padding;
+    // Roughly 8-12mm through at the depth of the commissure, tapering to
+    // 2-4mm at the free margin; the interosseous outbulks the adductor, so
+    // the dorsal face carries the larger share throughout.
+    const throughAt = (t) => lerp(12.0, 3.5, smoothstep(clamp01(t))) * S * pad;
+    const bow = (t, k) => t * Math.sin(Math.PI * k) * 0.18;
+    /** a point on the wedge: t 0(deep)..1(margin), k 0(thumb)..1(index) flank, side -1 dorsal / 0 mid-sheet / +1 palmar */
+    const wedgeAt = (t, k, side) => {
+      t = clamp01(t); k = clamp01(k);
+      const fi = t * NR;
+      const i = Math.min(NR - 1, Math.floor(fi)), fr = fi - i;
+      const a = M.vlerp(thSide[i], thSide[i + 1], fr), b = M.vlerp(ixSide[i], ixSide[i + 1], fr);
+      const P = vmad(M.vlerp(a, b, k), prox, -M.vdist(a, b) * bow(t, k));
+      if (!side) return P;
+      // the taper that closes the wedge against the thumb's and the index's
+      // own skin at k=0 and k=1 - without it the faces poke past surfaces
+      // already modelled elsewhere and the join shows as a seam
+      const taper = Math.sin(Math.PI * k);
+      const through = throughAt(t) * taper;
+      const n = M.vlerp(rungNormal[i], rungNormal[i + 1], fr);
+      return vmad(P, n, side > 0 ? through * 0.42 : -through * 0.58);
+    };
+    // The wedge's own outline: a closed loop around its boundary, not a
+    // search over its surface. Two of that boundary's four sides are
+    // already known and already flat - thSide and ixSide, k=0 and k=1,
+    // where the taper closes the wedge seamlessly against the thumb's and
+    // the index's own skin - so only the other two, the free-standing ends
+    // at t=0 and t=1, need a face chosen for them. Each end sweeps k with
+    // whichever of the palmar or dorsal point is nearer the eye, blended
+    // rather than switched so the loop never jumps as a view carries the
+    // choice past its crossover. The t=1 end is the free margin and bulges
+    // 2-4mm; the t=0 end is the depth of the commissure and bulges the
+    // most, 8-12mm, which is the width this loop is chiefly for: a
+    // membrane has nothing to show there at all.
+    const NK_CAP = 16, EDGE_SOFT = 1.5;
+    const capAt = (t) => {
+      const pts = [];
+      for (let j = 0; j <= NK_CAP; j++) {
+        const k = j / NK_CAP;
+        const qP = wedgeAt(t, k, 1), qD = wedgeAt(t, k, -1);
+        const bl = smoothstep(clamp01((view.near(qP) - view.near(qD)) / EDGE_SOFT + 0.5));
+        const q = M.vlerp(qD, qP, bl);
+        const p = view.px(q);
+        pts.push([p[0], p[1], view.near(q), rig.palm.pid, 1]);
+      }
+      return pts;
+    };
+    const flat = (rail) => rail.map((q) => {
+      const p = view.px(q);
+      return [p[0], p[1], view.near(q), rig.palm.pid, 1];
+    });
+    const band = flat(thSide).concat(capAt(1), flat(ixSide.slice().reverse()), capAt(0).reverse());
+    return { thSide, ixSide, margin, PT, PI, sag, wedgeAt, band };
   }
 
   GK.rig = {
