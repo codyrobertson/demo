@@ -27,6 +27,7 @@
     view: { az: -32 * DEG, el: 14 * DEG, roll: 0, zoom: 1 },
     style: {
       grade: 3, tone: 1, wobble: 1, ghost: 0.14, search: 0.35,
+      ballRough: 0.3, ballAniso: 0,
       paper: [244, 241, 232], ink: [26, 25, 23]
     },
     detail: { print: 1, ridge: 0.5, lattice: 0.55, hair: 1, vein: 1 },
@@ -45,6 +46,7 @@
   let dragging = false, dragX = 0, dragY = 0;
   let grab = null;              // the digit currently held, if any
   let ballKey = null, ballPose = null;
+  let pickSeq = null, pickKey = null;
 
   const cloneSpec = (s) => JSON.parse(JSON.stringify(s));
 
@@ -86,13 +88,33 @@
       '|' + JSON.stringify(params.artic);
     if (key !== ballKey && !grab) {
       ballPose = PO.holdBall(A, effectivePose(A), params.ball);
+      ballPose.ball.roughness = params.style.ballRough;
+      ballPose.ball.anisotropy = params.style.ballAniso;
       ballKey = key;
     }
     return ballPose;
   }
 
+  /**
+   * The pick-up sequence costs a couple of hundred milliseconds to set up and
+   * eight to play, so it is built once per seed and ball and then run. It
+   * carries its own ball, which is the point of it.
+   */
+  function pickupFor(A) {
+    const rad = params.ball > 0 ? params.ball : 26;
+    const key = params.seed + '|' + rad + '|' + params.style.ballRough + '|' + params.style.ballAniso;
+    if (key !== pickKey) {
+      pickSeq = PO.pickAndDrop(A, rad, {
+        roughness: params.style.ballRough, anisotropy: params.style.ballAniso
+      });
+      pickKey = key;
+    }
+    return pickSeq(tAnim * 0.13 * params.speed);
+  }
+
   /** the pose after motion is applied */
   function posedFor(A) {
+    if (params.motion === 'pickup') return pickupFor(A);
     const held = heldFor(A);
     if (held && params.motion === 'still') return held;
     if (params.motion === 'rom') return PO.romTour(A, tAnim * 0.045 * params.speed, effectivePose(A));
@@ -511,6 +533,10 @@
     slider(art, 'pronation', 'Forearm rotation', -1, 1, 0.01, 0, f2, v => params.artic.pronation = v);
     slider(art, 'ball', 'Hold a ball (mm)', 0, 50, 1, 0, v => Math.round(v) + 'mm',
       v => { params.ball = v; ballKey = null; });
+    slider(art, 'ballRough', 'Ball roughness', 0, 1, 0.01, 0.3, f2,
+      v => { params.style.ballRough = v; ballKey = null; pickKey = null; });
+    slider(art, 'ballAniso', 'Ball grain', 0, 1, 0.01, 0, f2,
+      v => { params.style.ballAniso = v; ballKey = null; pickKey = null; });
     const man = document.createElement('label');
     man.className = 'check';
     man.innerHTML = '<input type="checkbox"><span>Drag the fingertips</span>';
