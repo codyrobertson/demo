@@ -279,7 +279,7 @@
         hid = df.hidden(p[0], p[1], near, myId, eps, gap);
         behind = df.behind(p[0], p[1], near, myId);
       }
-      const decay = Math.exp(-Math.max(0, behind - 2) / 20);
+      const decay = Math.exp(-Math.max(0, behind - 2) / 11);
       out[i] = [p[0], p[1], vis * (1 - hid), near, vis * hid * decay];
     }
     return out;
@@ -500,7 +500,7 @@
           const step = df.stepBehind(p[0], p[1], p[2], id);
           const merge = step === Infinity ? 1 : 0.16 + 0.84 * smoothstep(clamp01(step / 13));
           const gain = (p[4] === undefined ? 1 : p[4]) * merge;
-          const decay = Math.exp(-Math.max(0, behind - 2) / 20);
+          const decay = Math.exp(-Math.max(0, behind - 2) / 11);
           return [p[0], p[1], v * gain, p[2], (1 - v) * decay * gain, gain, id];
         });
         // Overlap emphasis: where this form passes in front of another, a
@@ -588,8 +588,9 @@
       const jump = Math.max(14, this.w * 0.035);
       emit(tagPalm(sil.sideA), F.st(F.S.contour, { tone: 0.90, phase: 200 }), { maxJump: jump, selfTest: true });
       emit(tagPalm(sil.sideB), F.st(F.S.contour, { tone: 0.90, phase: 201 }), { maxJump: jump, selfTest: true });
+      // the knuckle margin is a transition, not an edge
       emit(tagPalm(sil.cap, false),
-        F.st(F.S.contourSoft, { tone: 0.28, taper: 0.86, phase: 202 }), { noSearch: true, selfTest: true });
+        F.st(F.S.contourSoft, { tone: 0.16, taper: 0.90, phase: 202 }), { noSearch: true, selfTest: true });
     }
 
     resolve(state) {

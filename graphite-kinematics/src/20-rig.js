@@ -710,8 +710,13 @@
     const N = 56;
     for (let i = 0; i <= N; i++) {
       const beta = wrap(from + dir * span * (i / N));
+      const palmar = beta < 0.5;
       const v = palmSurface(rig, uD, beta).v;
-      const q = palmSurface(rig, rig.palm.uDistal(v, beta < 0.5), beta).P;
+      // The solid runs a little past the metacarpal heads so a hyperextended
+      // digit still merges into it, but the drawn margin must stop at the
+      // heads: carried further it lays a chord straight across the knuckles.
+      const uEnd = Math.min(rig.palm.uDistal(v, palmar), palmar ? 1.18 : 1.012);
+      const q = palmSurface(rig, uEnd, beta).P;
       const p = view.px(q);
       cap.push([p[0], p[1], view.near(q)]);
     }

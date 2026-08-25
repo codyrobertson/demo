@@ -19,7 +19,9 @@
     speed: 1,
     motion: 'still',
     artic: { curl: 0, spread: 0, opposition: 0, arch: 0, wristFlex: 0, wristDev: 0, pronation: 0 },
-    view: { az: 0, el: 0, roll: 0, zoom: 1 },
+    // a mild oblique reads far better than a flat dorsal view: a curled
+    // pose seen straight on foreshortens into a stack of rings
+    view: { az: -32 * DEG, el: 14 * DEG, roll: 0, zoom: 1 },
     style: {
       grade: 3, tone: 1, wobble: 1, ghost: 0.14, search: 0.35,
       paper: [244, 241, 232], ink: [26, 25, 23]
@@ -369,9 +371,9 @@
     buildDOF($('dof-sliders'));
 
     const vw = $('view-sliders'); vw.innerHTML = '';
-    slider(vw, 'az', 'Azimuth  (0 dorsal · 180 palmar)', -180, 180, 1, 0, fdeg, v => params.view.az = v * DEG);
-    slider(vw, 'el', 'Elevation', -78, 78, 1, 0, fdeg, v => params.view.el = v * DEG);
-    slider(vw, 'zoom', 'Zoom', 0.35, 4, 0.01, 1, f2, v => params.view.zoom = v);
+    slider(vw, 'az', 'Azimuth  (0 dorsal · 180 palmar)', -180, 180, 1, Math.round(params.view.az / DEG), fdeg, v => params.view.az = v * DEG);
+    slider(vw, 'el', 'Elevation', -78, 78, 1, Math.round(params.view.el / DEG), fdeg, v => params.view.el = v * DEG);
+    slider(vw, 'zoom', 'Zoom', 0.35, 4, 0.01, params.view.zoom, f2, v => params.view.zoom = v);
 
     const pn = $('pencil-sliders'); pn.innerHTML = '';
     slider(pn, 'grade', 'Grade', 0, 6, 0.05, 3, v => PEN.gradeAt(v).name, v => params.style.grade = v);
