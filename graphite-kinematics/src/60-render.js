@@ -1,0 +1,597 @@
+/* ============================================================================
+   GRAPHITE KINEMATICS — 60 · render
+   Curves in surface space become graphite on paper. Back-facing runs fade over
+   the horizon; occluded runs are not deleted but ghosted, the way a draughtsman
+   leaves construction visible beneath the finished line.
+   ========================================================================== */
+(function (GK) {
+  'use strict';
+  const M = GK.math;
+  const AN = GK.anatomy;
+  const RG = GK.rig;
+  const F = GK.features;
+  const D = GK.dorsal;
+  const PEN = GK.pencil;
+  const { TAU, DEG, clamp, clamp01, lerp, smoothstep } = M;
+  const { vadd, vsub, vmul, vmad, vdot, vnorm } = M;
+
+  // =========================================================================
+  //  DEPTH FIELD
+  //  Two peeled layers, each carrying the identity of the part that wrote it.
+  //  Identity is what makes the test honest: a silhouette must never be
+  //  occluded by the solid it is the silhouette *of*, and without an id the
+  //  only way to prevent that is to shrink every part until its contact edges
+  //  leak. With an id, self is simply skipped and nothing has to be shrunk.
+  // =========================================================================
+  class DepthField {
+    constructor(w, h, div) {
+      this.div = div || 2;
+      this.w = Math.ceil(w / this.div); this.h = Math.ceil(h / this.div);
+      const n = this.w * this.h;
+      this.z0 = new Float32Array(n); this.i0 = new Int16Array(n);
+      this.z1 = new Float32Array(n); this.i1 = new Int16Array(n);
+      this.clear();
+    }
+    clear() {
+      this.z0.fill(-1e18); this.z1.fill(-1e18);
+      this.i0.fill(-1); this.i1.fill(-1);
+      return this;
+    }
+    /** rasterise a triangle owned by part `id`, peeling two layers */
+    tri(ax, ay, az, bx, by, bz, cx, cy, cz, id) {
+      const d = this.div, W = this.w, H = this.h;
+      const z0 = this.z0, i0 = this.i0, z1 = this.z1, i1 = this.i1;
+      ax /= d; ay /= d; bx /= d; by /= d; cx /= d; cy /= d;
+      const x0 = Math.max(0, Math.floor(Math.min(ax, bx, cx)));
+      const x1 = Math.min(W - 1, Math.ceil(Math.max(ax, bx, cx)));
+      const y0 = Math.max(0, Math.floor(Math.min(ay, by, cy)));
+      const y1 = Math.min(H - 1, Math.ceil(Math.max(ay, by, cy)));
+      if (x1 < x0 || y1 < y0) return;
+      const den = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
+      if (Math.abs(den) < 1e-12) return;
+      const iden = 1 / den;
+      for (let y = y0; y <= y1; y++) {
+        const py = y + 0.5;
+        for (let x = x0; x <= x1; x++) {
+          const px = x + 0.5;
+          const l0 = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) * iden;
+          if (l0 < -0.003) continue;
+          const l1 = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) * iden;
+          if (l1 < -0.003) continue;
+          const l2 = 1 - l0 - l1;
+          if (l2 < -0.003) continue;
+          const zz = l0 * az + l1 * bz + l2 * cz;
+          const i = y * W + x;
+          if (zz > z0[i]) {
+            if (i0[i] !== id) { z1[i] = z0[i]; i1[i] = i0[i]; }
+            z0[i] = zz; i0[i] = id;
+          } else if (id !== i0[i] && zz > z1[i]) {
+            z1[i] = zz; i1[i] = id;
+          }
+        }
+      }
+    }
+    quad(a, b, c, d, id) {
+      this.tri(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2], id);
+      this.tri(a[0], a[1], a[2], c[0], c[1], c[2], d[0], d[1], d[2], id);
+    }
+
+    /** depth of the nearest surface at a cell, whoever wrote it */
+    frontAny(cx, cy) {
+      if (cx < 0 || cy < 0 || cx >= this.w || cy >= this.h) return -1e18;
+      const i = cy * this.w + cx;
+      return this.i0[i] === -1 ? -1e18 : this.z0[i];
+    }
+
+    /** depth of the nearest surface at a cell that is NOT part `id` */
+    frontOther(cx, cy, id) {
+      if (cx < 0 || cy < 0 || cx >= this.w || cy >= this.h) return -1e18;
+      const i = cy * this.w + cx;
+      if (this.i0[i] === -1) return -1e18;
+      if (this.i0[i] !== id) return this.z0[i];
+      return this.i1[i] === -1 ? -1e18 : this.z1[i];
+    }
+
+    /** local steepness of the depth field, in scene units per cell */
+    slope(cx, cy) {
+      const W = this.w, H = this.h, z = this.z0;
+      if (cx < 1 || cy < 1 || cx >= W - 1 || cy >= H - 1) return 0;
+      const i = cy * W + cx;
+      const l = z[i - 1], r = z[i + 1], u = z[i - W], d = z[i + W];
+      if (l < -1e17 || r < -1e17 || u < -1e17 || d < -1e17) return 0;
+      return Math.max(Math.abs(r - l), Math.abs(d - u)) * 0.5;
+    }
+
+    /**
+     * How hidden is a point at (x, y) lying at depth z on part `id`?
+     * Returns 0 (clear) .. 1 (buried), antialiased over the four cells the
+     * sample straddles, with the tolerance widened where the depth field is
+     * steep — which is exactly where a silhouette grazes and a fixed
+     * tolerance would carve a halo out of the line.
+     */
+    hidden(x, y, z, id, tol, soft, includeSelf) {
+      const fx = x / this.div - 0.5, fy = y / this.div - 0.5;
+      const cx = Math.floor(fx), cy = Math.floor(fy);
+      let acc = 0, wsum = 0;
+      for (let j = 0; j <= 1; j++) {
+        for (let i = 0; i <= 1; i++) {
+          const gx = cx + i, gy = cy + j;
+          const w = (i ? (fx - cx) : (1 - (fx - cx))) * (j ? (fy - cy) : (1 - (fy - cy)));
+          if (w <= 0) continue;
+          wsum += w;
+          const zf = includeSelf ? this.frontAny(gx, gy) : this.frontOther(gx, gy, id);
+          if (zf <= -1e17) continue;
+          const t = tol + this.slope(gx, gy) * 1.6;
+          acc += w * clamp01((zf - z - t) / soft);
+        }
+      }
+      return wsum > 0 ? acc / wsum : 0;
+    }
+
+    /** how far in FRONT of a point the nearest other surface sits */
+    behind(x, y, z, id) {
+      const cx = Math.round(x / this.div - 0.5), cy = Math.round(y / this.div - 0.5);
+      const zf = this.frontOther(cx, cy, id);
+      return zf <= -1e17 ? 0 : Math.max(0, zf - z);
+    }
+
+    /**
+     * The depth step a silhouette describes: how far BEHIND it the next
+     * surface lies. Infinite when the line is drawn against nothing at all.
+     * A contour is only as strong as the step it reports — where two forms
+     * merge, the step is small and so is the line, which is the difference
+     * between a thenar swelling into a palm and a cylinder laid on top of it.
+     */
+    stepBehind(x, y, z, id) {
+      const cx = Math.round(x / this.div - 0.5), cy = Math.round(y / this.div - 0.5);
+      const zf = this.frontOther(cx, cy, id);
+      if (zf <= -1e17) return Infinity;
+      const d = z - zf;
+      return d > 0 ? d : Infinity;
+    }
+  }
+
+  /**
+   * Fill the depth field with every solid part of the hand, one identity per
+   * rendered segment plus one for the palm. Parts are rasterised at very
+   * nearly full size: with identities there is nothing to protect against.
+   */
+  function rasterise(rig, view, df, shrink, ids) {
+    const A = rig.anatomy;
+    shrink = shrink === undefined ? 0.965 : shrink;
+    const NA = 20;
+    for (let d = 0; d < 5; d++) {
+      const dg = rig.digits[d];
+      for (const sg of dg.segs) {
+        if (!sg.rendered) continue;
+        const id = ids.digit[d][sg.seg];
+        const NS = sg.seg === dg.segs.length - 1 ? 11 : 8;
+        let prev = null;
+        for (let i = 0; i <= NS; i++) {
+          const s = (i / NS) * sg.sMax;
+          const ring = [];
+          for (let k = 0; k < NA; k++) {
+            const a = (k / NA) * TAU;
+            const q = RG.digitSurface(rig, d, sg.seg, s, a);
+            const axis = vmad(sg.A, sg.t, sg.len * s);
+            const P = M.vlerp(axis, q.P, shrink);
+            const p = view.px(P);
+            ring.push([p[0], p[1], view.near(P)]);
+          }
+          if (prev) for (let k = 0; k < NA; k++) {
+            const k2 = (k + 1) % NA;
+            df.quad(prev[k], prev[k2], ring[k2], ring[k], id);
+          }
+          prev = ring;
+        }
+      }
+    }
+    const NU = 30, NB = 36, id = ids.palm;
+    const uTop = [];
+    for (let k = 0; k <= NB; k++) {
+      const beta = k / NB;
+      const v = RG.palmSurface(rig, 1.0, beta).v;
+      uTop.push(rig.palm.uDistal(v, beta < 0.5));
+    }
+    let prevRow = null;
+    for (let i = 0; i <= NU; i++) {
+      const row = [];
+      for (let k = 0; k <= NB; k++) {
+        const u = lerp(-0.42, uTop[k], i / NU);
+        const s = RG.palmSurface(rig, u, k / NB);
+        const P = M.vlerp(s.spine, s.P, shrink);
+        const p = view.px(P);
+        row.push([p[0], p[1], view.near(P)]);
+      }
+      if (prevRow) for (let k = 0; k < NB; k++) df.quad(prevRow[k], prevRow[k + 1], row[k + 1], row[k], id);
+      prevRow = row;
+    }
+  }
+
+  /** stable part identities: one per rendered segment, one for the palm */
+  function buildIds(rig) {
+    const ids = { palm: 0, digit: [] };
+    let next = 1;
+    for (let d = 0; d < 5; d++) {
+      const row = [];
+      for (const sg of rig.digits[d].segs) {
+        row[sg.seg] = sg.rendered ? next++ : -1;
+        sg.pid = row[sg.seg];
+      }
+      ids.digit.push(row);
+    }
+    rig.palm.pid = 0;
+    ids.count = next;
+    return ids;
+  }
+
+  // =========================================================================
+  //  CURVE PROJECTION
+  // =========================================================================
+
+  /**
+   * Turn a surface curve into screen points with per-point visibility.
+   * vis combines the horizon fade with the occlusion test.
+   */
+  function projectCurve(rig, view, df, cv, opt) {
+    const A = rig.anatomy;
+    const n = cv.pts.length;
+    const out = new Array(n);
+    const eps = opt.eps === undefined ? 0.9 : opt.eps;
+    const gap = opt.gap === undefined ? 2.2 : opt.gap;
+    const ids = opt.ids;
+    const myId = cv.on === 'digit' ? ids.digit[cv.d][cv.seg]
+      : cv.on === 'palm' ? ids.palm : -1;
+    for (let i = 0; i < n; i++) {
+      const q = cv.pts[i];
+      let P, N = null;
+      if (cv.on === 'digit') {
+        const sp = RG.digitSurface(rig, cv.d, cv.seg, q[0], q[1]);
+        N = RG.digitNormal(rig, cv.d, cv.seg, q[0], q[1]);
+        P = q[2] ? vmad(sp.P, N, q[2]) : sp.P;
+      } else if (cv.on === 'palm') {
+        const sp = RG.palmSurface(rig, q[0], q[1]);
+        N = RG.palmNormal(rig, q[0], q[1]);
+        P = q[2] ? vmad(sp.P, N, q[2]) : sp.P;
+      } else {
+        P = q;
+      }
+      const p = view.px(P);
+      const near = view.near(P);
+      let vis = 1;
+      if (N) {
+        const f = vdot(N, view.e);
+        // Fine detail compresses as it turns away and must be gone well
+        // before the horizon, or every ridge on the far side stacks into a
+        // black band along the silhouette.
+        const h0 = opt.horizon === undefined ? 0.015 : opt.horizon;
+        vis = smoothstep(clamp01((f - h0) / (h0 > 0.1 ? 0.34 : 0.22)));
+      }
+      let behind = 0;
+      if (vis > 0.004) {
+        vis *= 1 - df.hidden(p[0], p[1], near, myId, eps, gap);
+        behind = df.behind(p[0], p[1], near, myId);
+      }
+      out[i] = [p[0], p[1], vis, near, Math.exp(-Math.max(0, behind - 2) / 20)];
+    }
+    return out;
+  }
+
+  /** split a visibility-tagged polyline into runs above a threshold */
+  function runs(pts, lo, invert, gainIdx, maxJump) {
+    const res = [];
+    let cur = null;
+    const jump2 = maxJump ? maxJump * maxJump : 0;
+    for (let i = 0; i < pts.length; i++) {
+      if (jump2 && cur && i > 0) {
+        const dx = pts[i][0] - pts[i - 1][0], dy = pts[i][1] - pts[i - 1][1];
+        if (dx * dx + dy * dy > jump2) cur = null;
+      }
+      const v = invert ? 1 - pts[i][2] : pts[i][2];
+      const gain = gainIdx === undefined ? 1 : (pts[i][gainIdx] === undefined ? 1 : pts[i][gainIdx]);
+      if (v > lo) {
+        if (!cur) { cur = { pts: [], vis: [] }; res.push(cur); }
+        cur.pts.push([pts[i][0], pts[i][1]]);
+        cur.vis.push(v * gain);
+      } else if (cur) {
+        // carry one fading point past the edge so the mark tapers out
+        cur.pts.push([pts[i][0], pts[i][1]]); cur.vis.push(v * 0.5 * gain);
+        cur = null;
+      }
+    }
+    return res.filter(r => r.pts.length >= 2);
+  }
+
+  // =========================================================================
+  //  RENDERER
+  // =========================================================================
+  // how far from the horizon each kind of mark gives up
+  const FINE_LAYERS = {
+    ridge: 0.30, print: 0.26, hatch: 0.30, hair: 0.24, vein: 0.22, tendon: 0.22,
+    fold: 0.12, crease: 0.09, palmcrease: 0.12, nail: 0.10
+  };
+
+  const DEFAULT_LAYERS = {
+    contour: true, crease: true, fold: true, nail: true, print: true,
+    palmcrease: true, ridge: true, vein: true, tendon: true, hair: true,
+    hatch: true, bone: false, label: false
+  };
+
+  class Renderer {
+    constructor(w, h) {
+      this.w = w; this.h = h;
+      this.g = null;
+      this.cacheSeed = null;
+    }
+
+    /** rebuild only what depends on the seed */
+    anatomyFor(seed) {
+      if (!this._an || this._anSeed !== seed) {
+        this._an = AN.buildAnatomy(seed);
+        this._anSeed = seed;
+      }
+      return this._an;
+    }
+
+    build(state) {
+      const A = this.anatomyFor(state.seed);
+      const rig = RG.solve(A, state.pose);
+      const V = state.view;
+      const view = new RG.View(V.az, V.el, V.roll || 0, 1, [0, 0, 0], 0, 0);
+
+      // ---- auto-frame -----------------------------------------------------
+      const keys = [];
+      for (const j of rig.joints) keys.push(j.P);
+      for (const dg of rig.digits) {
+        keys.push(dg.tip);
+        const last = dg.segs[dg.segs.length - 1];
+        for (const a of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+          keys.push(RG.digitSurface(rig, dg.digit, last.seg, last.sMax, a).P);
+          keys.push(RG.digitSurface(rig, dg.digit, 1, 0.5, a).P);
+        }
+      }
+      for (let i = 0; i <= 10; i++) {
+        for (let k = 0; k < 8; k++) {
+          keys.push(RG.palmSurface(rig, lerp(-0.22, 1.05, i / 10), k / 8).P);
+        }
+      }
+      let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+      for (const P of keys) {
+        const rx = P[0] * view.r[0] + P[1] * view.r[1] + P[2] * view.r[2];
+        const ry = -(P[0] * view.u[0] + P[1] * view.u[1] + P[2] * view.u[2]);
+        if (rx < x0) x0 = rx; if (rx > x1) x1 = rx;
+        if (ry < y0) y0 = ry; if (ry > y1) y1 = ry;
+      }
+      const margin = state.margin === undefined ? 0.90 : state.margin;
+      const zoom = V.zoom === undefined ? 1 : V.zoom;
+      const scale = Math.min(this.w * margin / Math.max(1e-6, x1 - x0),
+        this.h * margin / Math.max(1e-6, y1 - y0)) * zoom;
+      view.scale = scale;
+      view.cx = this.w * 0.5 - scale * (x0 + x1) * 0.5;
+      view.cy = this.h * 0.5 - scale * (y0 + y1) * 0.5;
+      // millimetres per pixel, for depth tolerances
+      view.mmPerPx = 1 / scale;
+
+      // ---- depth field ----------------------------------------------------
+      const ids = buildIds(rig);
+      const df = new DepthField(this.w, this.h, (state.quality || 0) >= 1 ? 1 : 2);
+      rasterise(rig, view, df, undefined, ids);
+
+      // ---- feature curves -------------------------------------------------
+      const L = Object.assign({}, DEFAULT_LAYERS, state.layers || {});
+      const det = state.detail || {};
+      const q = state.quality === undefined ? 1 : state.quality;
+      const curves = [];
+      if (L.crease || L.fold) F.digitFolds(rig, curves);
+      if (L.crease) F.webs(rig, curves);
+      if (L.nail) F.nails(rig, curves);
+      if (L.print && (det.print === undefined ? 1 : det.print) > 0.02) F.fingerprints(rig, curves, q);
+      if (L.palmcrease) F.palmCreases(rig, curves);
+      if (L.ridge && (det.ridge === undefined ? 1 : det.ridge) > 0.02) F.palmRidges(rig, curves, q);
+      if (L.tendon) D.tendons(rig, curves);
+      if (L.vein) D.veins(rig, curves);
+      if (L.fold) D.knuckleField(rig, curves);
+      if (L.hair) D.hair(rig, curves);
+      if (L.hatch) D.skinLattice(rig, curves, det.lattice === undefined ? 0.6 : det.lattice);
+      if (L.bone) D.skeleton(rig, view, curves);
+
+      return { A, rig, view, df, ids, curves, layers: L };
+    }
+
+    draw(state) {
+      const t0 = Date.now();
+      const built = this.build(state);
+      const { rig, view, df, ids, curves, layers } = built;
+      const A = built.A;
+      const stl = state.style || {};
+      const q = state.quality === undefined ? 1 : state.quality;
+      const ss = q >= 2 ? 2 : 1;
+      if (!this.g || this.g.w !== this.w || this.g.h !== this.h || this.g.ss !== ss || this.g.seed !== state.seed) {
+        this.g = new PEN.Graphite(this.w, this.h, ss, state.seed);
+      } else {
+        this.g.clear();
+      }
+      const g = this.g;
+      const grade = PEN.gradeAt(stl.grade === undefined ? 3 : stl.grade);
+      const toneScale = stl.tone === undefined ? 1 : stl.tone;
+      const wobScale = stl.wobble === undefined ? 1 : stl.wobble;
+      const ghost = stl.ghost === undefined ? 0.14 : stl.ghost;
+      const det = state.detail || {};
+      const layerGain = {
+        print: det.print === undefined ? 1 : det.print,
+        ridge: det.ridge === undefined ? 1 : det.ridge,
+        hatch: det.lattice === undefined ? 1 : det.lattice,
+        hair: det.hair === undefined ? 1 : det.hair,
+        vein: det.vein === undefined ? 1 : det.vein
+      };
+      // Tolerances in scene units. Identity keeps a part from occluding
+      // itself, so these only have to absorb rasterisation error.
+      const eps = Math.max(0.30, view.mmPerPx * 1.1);
+      const gap = Math.max(0.90, view.mmPerPx * 3.2);
+
+      const put = (r, style, extraTone) => {
+        g.stroke(r.pts, {
+          grade,
+          tone: (style.tone || 0.5) * toneScale * (extraTone === undefined ? 1 : extraTone),
+          weight: style.weight, passes: style.passes, taper: style.taper,
+          wobble: (style.wobble || 1) * wobScale, jitter: style.jitter,
+          grain: style.grain, phase: (style.phase || 0) * 0.137 + 3.1,
+          vis: r.vis
+        });
+      };
+
+      // ---- feature curves --------------------------------------------------
+      for (const cv of curves) {
+        const gain = layerGain[cv.style.layer];
+        if (gain !== undefined && gain <= 0.02) continue;
+        const fine = FINE_LAYERS[cv.style.layer] || 0;
+        const pp = projectCurve(rig, view, df, cv, { eps, gap, ids, horizon: fine });
+        const tone = gain === undefined ? 1 : clamp(gain, 0, 2);
+        for (const r of runs(pp, 0.05, false)) put(r, cv.style, tone);
+
+        if (ghost > 0.01 && cv.style.layer !== 'print' && cv.style.layer !== 'ridge' &&
+          cv.style.layer !== 'hatch' && cv.style.layer !== 'hair') {
+          for (const r of runs(pp, 0.10, true, 4)) {
+            put(r, F.st(cv.style, { passes: 1, taper: 0.85 }), tone * ghost);
+          }
+        }
+      }
+
+      // ---- contours --------------------------------------------------------
+      if (layers.contour) this._contours(rig, view, df, ids, g, grade, stl, toneScale, wobScale, ghost, eps, gap);
+
+      built.ms = Date.now() - t0;
+      this.last = built;
+      return built;
+    }
+
+    _contours(rig, view, df, ids, g, grade, stl, toneScale, wobScale, ghost, eps, gap) {
+      const search = stl.search === undefined ? 0.35 : stl.search;
+
+      /**
+       * pts carry [x, y, near, partId, gain]. Everything about whether a mark
+       * survives is decided here: how much of it another part covers, how
+       * deeply, and whether it rides an overlapping edge worth pressing on.
+       */
+      const emit = (pts, style, opts) => {
+        opts = opts || {};
+        const selfTol = opts.selfTest ? eps * 3 + 1.6 : 0;
+        const tagged = pts.map(p => {
+          const id = p[3] === undefined ? -1 : p[3];
+          let v = 1 - df.hidden(p[0], p[1], p[2], id, eps, gap);
+          // The palm outline is a per-section extreme, not a true silhouette:
+          // where the sheet's own sections overlap in screen space, one can
+          // dive inside the form. Testing it against the palm's own front
+          // surface throws away exactly those points and nothing else.
+          if (opts.selfTest) v *= 1 - df.hidden(p[0], p[1], p[2], id, selfTol, gap * 2, true);
+          const behind = df.behind(p[0], p[1], p[2], id);
+          const step = df.stepBehind(p[0], p[1], p[2], id);
+          const merge = step === Infinity ? 1 : 0.16 + 0.84 * smoothstep(clamp01(step / 13));
+          return [p[0], p[1], v, p[2], (p[4] === undefined ? 1 : p[4]) * merge,
+            Math.exp(-Math.max(0, behind - 2) / 20), id];
+        });
+        // Overlap emphasis: where this form passes in front of another, a
+        // draughtsman leans on the line. Probe just outside the contour and
+        // ask whether something sits behind it there.
+        for (let i = 0; i < tagged.length; i++) {
+          const p = tagged[i];
+          const a = tagged[Math.max(0, i - 1)], b = tagged[Math.min(tagged.length - 1, i + 1)];
+          const dx = b[0] - a[0], dy = b[1] - a[1];
+          const dl = Math.hypot(dx, dy) || 1;
+          const nx = -dy / dl * 5, ny = dx / dl * 5;
+          let best = 0;
+          for (const sgn of [-1, 1]) {
+            const bh = df.behind(p[0] + nx * sgn, p[1] + ny * sgn, p[3], p[6]);
+            if (bh > 0.5 && bh < 70) best = Math.max(best, clamp01(bh / 14));
+          }
+          p[4] *= 1 + best * 0.55;
+        }
+        for (const r of runs(tagged, 0.06, false, 4, opts.maxJump)) {
+          g.stroke(r.pts, {
+            grade, tone: style.tone * toneScale, weight: style.weight,
+            passes: style.passes, taper: style.taper,
+            wobble: (style.wobble || 1) * wobScale, jitter: style.jitter,
+            phase: (style.phase || 0) * 0.137 + 11.7, vis: r.vis
+          });
+        }
+        if (ghost > 0.01 && !opts.noGhost) {
+          for (const r of runs(tagged, 0.12, true, 5)) {
+            if (M.polyLen(r.pts) < 22) continue;
+            g.stroke(r.pts, {
+              grade, tone: style.tone * toneScale * ghost * 0.9, weight: style.weight * 0.85,
+              passes: 1, taper: 0.85, wobble: (style.wobble || 1) * wobScale * 1.3,
+              jitter: style.jitter, phase: (style.phase || 0) * 0.31 + 5.3, vis: r.vis
+            });
+          }
+        }
+        // the searching lines a hand lays down beside the one it means
+        if (search > 0.02 && !opts.noSearch) {
+          for (let k = 0; k < 2; k++) {
+            const off = (k === 0 ? 1 : -1) * (1.6 + k * 1.4);
+            const shifted = tagged.map((p, i) => {
+              const a = tagged[Math.max(0, i - 1)], b = tagged[Math.min(tagged.length - 1, i + 1)];
+              const dx = b[0] - a[0], dy = b[1] - a[1];
+              const dl = Math.hypot(dx, dy) || 1;
+              return [p[0] - dy / dl * off, p[1] + dx / dl * off, p[2], p[3], p[4], p[5], p[6]];
+            });
+            for (const r of runs(shifted, 0.30, false, 4)) {
+              // A hand searches alongside a line it is committing to, not
+              // beside every twelve-pixel fragment a busy pose leaves behind.
+              if (M.polyLen(r.pts) < 46) continue;
+              g.stroke(r.pts, {
+                grade, tone: style.tone * toneScale * 0.16 * search, weight: style.weight * 0.8,
+                passes: 1, taper: 0.9, wobble: (style.wobble || 1) * wobScale * 1.9,
+                jitter: style.jitter * 2.0, phase: (style.phase || 0) * 0.7 + k * 21.3, vis: r.vis
+              });
+            }
+          }
+        }
+      };
+
+      for (let d = 0; d < 5; d++) {
+        const c = RG.digitContour(rig, view, d, { steps: 12 });
+        emit(c.right, F.st(F.S.contour, { phase: d * 37 + 1 }));
+        emit(c.left, F.st(F.S.contour, { phase: d * 37 + 3 }));
+        // A ring or a tip cap is only an outline where the tube points away
+        // from the eye. Pointing toward it, the near half of the same tube
+        // covers the far half — and identity exclusion, which is what keeps a
+        // silhouette from occluding itself, would otherwise let it through.
+        if (c.cap.length) emit(c.cap, F.st(F.S.contour, { phase: d * 37 + 2 }),
+          { noSearch: true, selfTest: true });
+        for (let ri = 0; ri < c.rings.length; ri++) {
+          // where a digit foreshortens, its knuckle ring IS the outline
+          emit(c.rings[ri], F.st(F.S.contour, { tone: 0.95, phase: d * 37 + 40 + ri }),
+            { noSearch: true, noGhost: true, selfTest: true });
+        }
+      }
+
+      const u0 = -0.44, u1 = 1.030;
+      const sil = RG.palmSilhouette(rig, view, { nu: 56, nb: 96, u0, u1 });
+      const tagPalm = (arr, fade) => arr.map((p, k) => {
+        const u = lerp(u0, u1, k / (arr.length - 1));
+        return [p[0], p[1], p[2], ids.palm,
+          fade === false ? 1 : smoothstep(clamp01((u + 0.40) / 0.30))];
+      });
+      const jump = Math.max(14, this.w * 0.035);
+      emit(tagPalm(sil.sideA), F.st(F.S.contour, { tone: 0.90, phase: 200 }), { maxJump: jump, selfTest: true });
+      emit(tagPalm(sil.sideB), F.st(F.S.contour, { tone: 0.90, phase: 201 }), { maxJump: jump, selfTest: true });
+      emit(tagPalm(sil.cap, false),
+        F.st(F.S.contourSoft, { tone: 0.28, taper: 0.86, phase: 202 }), { noSearch: true, selfTest: true });
+    }
+
+    resolve(state) {
+      const stl = (state && state.style) || {};
+      return this.g.resolve({
+        paper: stl.paper || [244, 241, 232],
+        ink: stl.ink || [26, 25, 23],
+        k: stl.k === undefined ? 1.55 : stl.k,
+        gamma: stl.gamma === undefined ? 1.0 : stl.gamma,
+        sheen: stl.sheen,
+        vignette: stl.vignette,
+        paperGrain: stl.paperGrain
+      });
+    }
+  }
+
+  GK.render = { Renderer, DepthField, rasterise, buildIds, projectCurve, runs, DEFAULT_LAYERS };
+})(window.GK = window.GK || {});
