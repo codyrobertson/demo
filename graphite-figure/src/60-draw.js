@@ -237,6 +237,41 @@
   }
 
   /**
+   * How "close up" a part is being drawn, 0..1, from its own screen span —
+   * the same partPx every LOD gate in this file already reads (see
+   * partPxOf below; hoisted, so calling it here before its own declaration
+   * is fine). 0 below LOD_CLOSE_LO, 1 at or above LOD_CLOSE_HI, a plain
+   * ramp between.
+   *
+   * Shared by modelling() and planeBreaks() so both close-up refinements
+   * below — fewer, better-placed modelling marks and a wider plane-break
+   * gate — engage at the same scale. LOD_CLOSE_LO (200px) sits above every
+   * whole-figure HEAD partPx measured against this file's own repro set
+   * (head partPx ~159-160 at 850px, no FRAME — see this feature's report),
+   * so closeUpFactor is exactly 0 there; LOD_CLOSE_HI (400px) sits below
+   * every bust head partPx measured off the FRAME=1284,1668 repros
+   * (415-556px across front/three-quarter/side/back at seed 12345 and 3),
+   * so it is fully engaged for all of them, not fading in mid-way through
+   * the very cases it exists for.
+   *
+   * partPx ALONE is not what keeps the whole-figure plate unchanged,
+   * though — it is part-relative, not camera-relative, and a physically
+   * large part (the trunk; a limb at full stretch) clears LOD_CLOSE_LO at
+   * ordinary whole-figure scale simply by being big, not by being viewed
+   * close up. Measured directly: leaving both call sites below open to
+   * every part changed 7981 pixels of the whole-figure plate, spanning
+   * head to legs, until each was additionally gated to `part.name ===
+   * 'head'` — the part this was actually diagnosed on (51-head.js's own
+   * planar construction, not a property either caller's geometry shares).
+   * That per-call `part.name` gate, not this function, is the thing
+   * actually holding the whole-figure gate; read it alongside this one.
+   */
+  const LOD_CLOSE_LO = 200, LOD_CLOSE_HI = 400;
+  function closeUpFactor(partPx) {
+    return clamp01((partPx - LOD_CLOSE_LO) / (LOD_CLOSE_HI - LOD_CLOSE_LO));
+  }
+
+  /**
    * The modelling: strokes running ALONG a form, inside its shadow.
    *
    * Along rather than across, because a stroke that follows the length of a
@@ -250,7 +285,35 @@
     opts = opts || {};
     const L = opts.lamp || lamp(view);
     const nrm = normals(rows);
-    const NM = opts.marks === undefined ? 7 : opts.marks;
+    const NMraw = opts.marks === undefined ? 7 : opts.marks;
+    /* FEWER MARKS AT CLOSE RANGE, NOT MORE — the opposite of the usual LOD
+       instinct, and the reason is this function's own scale-blindness: it
+       reads no scale at all today, so the SAME sixteen strokes a whole-
+       figure head needs to read as tone (this file's header: "a head is a
+       hundred pixels of page") are still exactly sixteen once the same
+       head fills a bust plate at 400+ partPx, where each one is big enough
+       to resolve as its own discrete line rather than blend into a
+       shading average. Sixteen discrete lines is corduroy. Cut by up to
+       half at close range, closeUpFactor-gated so a whole-figure plate
+       (partPx ~159 here, comfortably under LOD_CLOSE_LO) draws exactly the
+       marks it always has — see closeUpFactor's own comment for why that
+       floor is load-bearing, not incidental. Never below 3: fewer than
+       that stops being hatching and starts being a couple of stray lines.
+       EST, tuned against the bust repro renders (see this feature's
+       report).
+       HEAD ONLY. partPx is a PART-relative screen span, not a camera zoom
+       level — a trunk or a stretched limb legitimately reaches 200-400+
+       partPx at ORDINARY whole-figure scale simply by being physically
+       bigger than a head, not by being viewed close up (measured: this
+       gate, left part-agnostic, changed 7981 whole-figure pixels spanning
+       head to legs — the trunk and limbs ramping on their own, unasked —
+       until it was scoped down to this one part; see this feature's
+       report). The problem diagnosed is specific to the head's own planar
+       construction besides (51-head.js), so scoping the fix to match is
+       not a compromise, it is where the numbers actually point. */
+    const partPx = partPxOf(rows, view.mmPerPx);
+    const closeUp = part.name === 'head' ? closeUpFactor(partPx) : 0;
+    const NM = Math.max(3, Math.round(NMraw * (1 - closeUp * 0.5)));
     const rng = opts.rng || new M.Rng(0x5eed);
     const NS = rows.length;
     const out = [];
@@ -286,7 +349,25 @@
         const edge = clamp01((q.fac - HZ) / 0.30);      // and off again at the rim
         const core = Math.pow(Math.sin(clamp01(t) * Math.PI), 0.55);
         const ends = Math.sin(clamp01((i - i0) / Math.max(1, i1 - i0)) * Math.PI);
-        const tone = depth * core * (0.10 + 0.90 * edge * edge) * (0.35 + 0.65 * ends);
+        /* NOT THE GOOD PART OF THE SHADOW — A DIFFERENT, FLATLY-PRESENTED
+           FACET. `edge` alone treats every fac past its own 0.40 ceiling
+           as equally worth full tone, which is fine on a smoothly-turning
+           limb (bandAt's qualifying arc there is narrow, so a high-fac
+           point inside it is still close to the terminator) but breaks on
+           the head's planar construction: several differently-tilted
+           planes can each independently pass bandAt's own lamp test (see
+           this feature's report), which widens the qualifying arc far
+           past one coherent turn — and the wide part of it can be a
+           second facet's flat, near-dead-on-to-camera face, not a
+           deepening shadow. Rolled off past fac 0.55 (comfortably beyond
+           edge's own saturation point, so the ordinary "off again at the
+           rim" softening this file already does at the LOW end of fac is
+           untouched) and only at close range: closeUp 0 leaves this
+           multiplier at exactly 1, so nothing here changes the whole-
+           figure plate. EST, tuned against the three-quarter bust repro
+           (see this feature's report). */
+        const frontRolloff = 1 - closeUp * clamp01((q.fac - 0.55) / (0.88 - 0.55));
+        const tone = depth * core * (0.10 + 0.90 * edge * edge) * (0.35 + 0.65 * ends) * frontRolloff;
         if (tone < 0.05) { flush(); continue; }
         run.push([q.P[0], q.P[1], q.P[2], tone]);
       }
@@ -795,19 +876,63 @@
       // edge-on for half its own length is still a major ridge, not a
       // small one that happens to be long. minPx ~90 for a chain spanning
       // a third or more of the part's own station range (a temporal line,
-      // the foot's full instep run), rising toward ~220 for one barely
-      // three stations long (a single corner) — the "majors read small,
-      // fine ones need scale" split landmarks() already states for its own
-      // hand-authored marks (see visibleAt's own comment), turned into a
-      // formula because nothing here is hand-tuned enough to give each
-      // detected chain its own minPx by eye. The span fractions are EST,
-      // picked against the foot and trunk test renders: the foot's
+      // the foot's full instep run), rising toward a ceiling for one
+      // barely three stations long (a single corner) — the "majors read
+      // small, fine ones need scale" split landmarks() already states for
+      // its own hand-authored marks (see visibleAt's own comment), turned
+      // into a formula because nothing here is hand-tuned enough to give
+      // each detected chain its own minPx by eye. The span fractions are
+      // EST, picked against the foot and trunk test renders: the foot's
       // heel-behind-the-ankle run covers about a third of the foot's own
       // 14 stations and wants to read at ordinary foot scale; a single jaw
       // or cheekbone corner on a 44-station head covers under a tenth and
       // should not.
+      //
+      // THE CEILING ITSELF IS close-up-GATED, not the flat 220 a single-LOD
+      // caller once made do with. A 44-station, na=52 head finds far more
+      // short fragments than the foot or trunk's coarser rings ever do —
+      // fifteen separate chains on the test head at bust scale, most of
+      // them under a tenth of the part's own station range, because
+      // 51-head.js's planar construction ties several DIFFERENT plane
+      // pairs (brow-shelf/forehead, temple, the ear-adjacent parietal
+      // seam, the occiput transition) to the same anchor height (browH
+      // doubles as occiputH by that file's own construction) — so at any
+      // one camera angle several of them line up at the same apparent
+      // height and, drawn at the flat 220 ceiling every one of them
+      // already clears well before ordinary bust framing, tile into what
+      // reads as one continuous strap or, in three-quarter light, a
+      // jagged stitched-together line, however cleanly each one is
+      // individually detected and chained. A flat ceiling has no way to
+      // keep asking for more scale as the plate keeps zooming in — once
+      // partPx clears 220 (a fairly modest crop) EVERY chain shows at
+      // once and never thins further. Ramping the ceiling itself with
+      // closeUpFactor lets the short fragments keep needing MORE scale as
+      // the plate keeps zooming in, the way landmarks()'s own per-mark
+      // minPx already lets finer marks (eyeSocket, nostril) wait for more
+      // scale than coarse ones (jaw, SCM). EST ceiling, tuned against the
+      // bust repro renders (see this feature's report) to clear the short
+      // fragments at bust partPx (415-556 on the FRAME=1284,1668 repro
+      // set) while leaving the longer, likely-major chains (spanFrac
+      // above roughly a third, minPx pinned at 90 regardless of the
+      // ceiling) exactly as visible as they were.
+      //
+      // HEAD ONLY, same reasoning and the same measurement as
+      // modelling()'s own identical gate just above: partPx is part-
+      // relative, not camera-relative, and a trunk or limb reaches this
+      // ceiling's engagement range at ordinary WHOLE-FIGURE scale purely
+      // by being a physically bigger part, not by being zoomed in —
+      // confirmed the same way, by a whole-figure pixel diff that only
+      // went to zero once this, too, was scoped to the head. The dense
+      // cluster of short co-height fragments this ceiling exists to thin
+      // is a consequence of 51-head.js's own construction (several
+      // distinct plane pairs anchored at the same browH/occiputH height —
+      // see this feature's report); the foot's heel/instep run and the
+      // trunk's iliac crest, this section's own header names as proof
+      // this detector needs no per-part table, keep exactly the flat-220
+      // behaviour they were tuned against.
       const spanFrac = (ch.pts[ch.pts.length - 1].i - ch.pts[0].i) / Math.max(1, NS - 1);
-      const minPx = lerp(220, 90, clamp01((spanFrac - 0.08) / (0.35 - 0.08)));
+      const ceiling = lerp(220, 620, part.name === 'head' ? closeUpFactor(partPx) : 0);
+      const minPx = lerp(ceiling, 90, clamp01((spanFrac - 0.08) / (0.35 - 0.08)));
       if (partPx < minPx) continue;
 
       // Split on whatever the raw chain does not survive — a missing ring,
