@@ -84,6 +84,24 @@ for (let i = 0; i < N; i++) {
   }
   crownW *= 2;
 
+  /* The shoulder checks read the trunk's width ABOVE the measured chest
+     height, not its global maximum. The bideltoid tape runs across the
+     deltoids, and on most bodies the shoulder corner is the trunk's widest
+     point anyway — but not on all of them: one sampled body carries a
+     measured hip breadth at 93% of its bideltoid, its correctly-drawn
+     pelvis out-reaches its correctly-drawn shoulder, and the global-max
+     version graded that body's HIPS against a shoulder tape and failed a
+     shoulder that was in fact on its band. Banding at chest height is
+     measured, not tuned: above the chest the trunk's silhouette is the
+     shoulder's. */
+  let shW = 0;
+  for (const row of T.rows) {
+    if (!row) continue;
+    for (const q of row) {
+      if (q[0] + R > m.chestheight && Math.abs(q[1]) > shW) shW = Math.abs(q[1]);
+    }
+  }
+
   const vals = [
     headH / measH,
     headW / m.headbreadth,
@@ -91,8 +109,8 @@ for (let i = 0; i < N; i++) {
     headH / headW,
     fig.stature / headH,
     (H.x0 + R) - m.suprasternaleheight,
-    T.y1 / (m.bideltoidbreadth / 2),
-    T.y1 * 2 / headW,
+    shW / (m.bideltoidbreadth / 2),
+    shW * 2 / headW,
     (H.x1 + R) - fig.stature,
   ];
   vals.forEach((v, k) => {
