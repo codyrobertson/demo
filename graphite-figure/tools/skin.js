@@ -448,8 +448,19 @@ if (!process.env.NOMODEL) {
     // reaches them and to a station along the part where it does not
     // landmarks() resolves its own stations now — ANSUR heights, projected
     // bones, and the LOD gate all live beside the marks themselves, and the
-    // caller only says how big the plate is
-    for (const c of DRAW.landmarks(P, rows, { rig, mmPerPx: view.mmPerPx })) {
+    // caller only says how big the plate is. eye rides along so a mark (or a
+    // detected break) coinciding with the silhouette can bow out to the
+    // outline that already draws it.
+    const pbCtx = { rig, mmPerPx: view.mmPerPx, eye: view.e };
+    for (const c of DRAW.landmarks(P, rows, pbCtx)) {
+      put(c.pts, P.id, {
+        tone: 0.95, weight: 1.0, taper: 0.6, jitter: 0.45, phase: c.id.length * 7.7,
+      });
+    }
+    // and the plane breaks — ridges the surface actually has, detected from
+    // its own normals rather than authored, so when a form gains a facet the
+    // drawing gains its edge with no second hand-off
+    for (const c of DRAW.planeBreaks(P, rows, pbCtx)) {
       put(c.pts, P.id, {
         tone: 0.95, weight: 1.0, taper: 0.6, jitter: 0.45, phase: c.id.length * 7.7,
       });

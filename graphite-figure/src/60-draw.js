@@ -347,7 +347,7 @@
   const BREAK_ANGLE = 20 * DEG;
   // A candidate edge also has to clear this multiple of its OWN ring's
   // median edge-bend — the local-contrast test BREAK_ANGLE alone cannot
-  // be, because "sharp" only means something relative to how curved the
+  // run, because "sharp" only means something relative to how curved the
   // surrounding surface already is. A flank's ordinary bend is elevated
   // but roughly UNIFORM across a wide arc of the ring (an ellipse's
   // curvature changes smoothly with angle); a real facet edge is a spike
@@ -1058,10 +1058,23 @@
       // head part's own surface, which is a different part with a different
       // sampling and does not need a seam-crossing trick — the two already
       // overlap there and each reads correctly drawn on its own.
+      //
+      // Upper anchor pulled in from LEFT-0.32 to LEFT-0.18, and tone down a
+      // step (0.60 to 0.48): the "back-of-head mane" this feature's report
+      // chases turned out to be mostly this mark, not the head's own —
+      // "behind the ear" is real anatomy and the origin genuinely sits a
+      // little past full-lateral, but at az 0/40 (dead behind, three-
+      // quarter behind) that same few degrees is enough for the whole
+      // 20-station run down to the notch to survive occlusion and read as
+      // a strand falling past the shoulder, on BOTH sides at once. Pulled
+      // in rather than cut: a neck viewed from behind ought to show a hint
+      // of the SCM's posterior border, which real anatomy does too — this
+      // keeps that hint and loses the full-strength double-strand version
+      // of it. EST, judged against az 0/40 renders, not a measurement.
       {
-        id: 'scm.L', tone: 0.60, minPx: 90, n: 22,
+        id: 'scm.L', tone: 0.48, minPx: 90, n: 22,
         ctrl: [
-          [rowS(0.955), LEFT - 0.32],
+          [rowS(0.955), LEFT - 0.18],
           [rowS(0.78), FRONT - 0.62],
           [atH('suprasternaleheight'), FRONT - 0.07],
         ],
@@ -1081,9 +1094,14 @@
       },
       // the anterior border of the trapezius: the line the shoulder hangs
       // from. Runs from near the base of the neck out to the shoulder point.
+      // Upper anchor pulled from LEFT-0.10 to LEFT+0.04 and tone down a
+      // step (0.42 to 0.36) for the same reason and against the same az
+      // 0/40 renders as scm.L just above — a smaller contributor to the
+      // "mane" than scm was, but a contributor, and the two were tuned
+      // together rather than one at a time against the same crops.
       {
-        id: 'trapezius.L', tone: 0.42, minPx: 90, n: 18,
-        ctrl: [[rowS(0.90), LEFT - 0.10], [rowS(0.80), LEFT + 0.32], [atH('suprasternaleheight', 8), FRONT - 0.85]],
+        id: 'trapezius.L', tone: 0.36, minPx: 90, n: 18,
+        ctrl: [[rowS(0.90), LEFT + 0.04], [rowS(0.80), LEFT + 0.32], [atH('suprasternaleheight', 8), FRONT - 0.85]],
       },
 
       // ---- the chest --------------------------------------------------
@@ -1150,6 +1168,20 @@
     // One continuous arc: a real brow ridge runs across the glabella, and
     // cut in two at the midline it reads as permanently surprised rather
     // than as bone.
+    //
+    // SUPERSEDED, not fixed here, once the head is planar. A hand-authored
+    // brow and a real dihedral edge along the same arc double the same
+    // line — the "cap brim" this feature's report diagnoses is exactly
+    // that, brow doubled against the hairline right below it. This entry's
+    // own tone/minPx stay the ordinary, sculptural-head numbers; the
+    // supersede — checked dynamically, by whether planeBreaks() actually
+    // finds anything on this part, not by a static per-part flag that
+    // would go stale the moment either side's geometry moved without the
+    // other's constant following it — lives in PLANE_SUPERSEDED and is
+    // applied in landmarks() below, right before visibleAt() ever sees
+    // this table. Demoted rather than dropped outright: a detector this
+    // new failing to fire somewhere should leave a faint brow behind
+    // rather than no brow at all.
     {
       id: 'brow', tone: 0.52, minPx: 130, n: 24,
       // A near-constant station swept across a wide beta range is a line of
@@ -1318,28 +1350,60 @@
     // vertex (94.7mm on the test figure) is mostly crown and a fraction
     // read as "most of the way up" in that space is still a long way short
     // of where hair actually starts.
+    //
+    // SECOND PASS — the "cap brim". Even with the station genuinely
+    // dropping from crown to temple, this and brow are both near-full-tone
+    // marks sitting one above the other across most of the same beta range
+    // (brow FRONT±0.92·faceW, this FRONT±1.10·faceW), and at a head-filling
+    // crop (FRAME=1330,1690, az 140 — this feature's own report) the two
+    // read as one striped band, not two separate features: exactly a cap's
+    // brim over the eyes. Two changes, not one, because they fix different
+    // halves of the same complaint. First, a hairline is a TEXTURE
+    // boundary — where scalp gives way to a hundred thousand individual
+    // hairs, each catching light differently — not a surface plane change,
+    // so it belongs fainter and finer than a mark that stands for an
+    // actual edge, and is pushed higher up the LOD floor to match (a
+    // texture cue earns its keep at closer range than a structural line
+    // does — compare eyeSocket/eyeLid at 240-260). Second, the arch itself
+    // is widened and given two more control points: brow to vertex
+    // (0.12·up to 0.93·up) is 0.81 of `up`, and the old 0.28-0.62 swing
+    // used well under half of that, most of it sitting near the flatter,
+    // slower-turning top of the skull where a real recession is closer to
+    // the FRONT of that span. Two more points let the curve fall away
+    // faster near the temple and climb more of the remaining rise near
+    // the centre, rather than one smooth arc doing both at once — which
+    // is what still reads as a ring at any width once it is a single
+    // symmetric curve. tone and minPx are this feature's own report;
+    // the ctrl heights are EST, picked against the same crop.
     {
-      id: 'hairline', tone: 0.36, minPx: 115, n: 22,
-      // Station barely moved across that whole beta sweep (0.46 to 0.60 of
-      // `up`), and a station a mark barely varies while its beta sweeps
-      // wide is a ring perpendicular to the head's own axis — a latitude
-      // line, which is a cap edge on any head, not a hairline on this one.
-      // A hairline recedes a long way from its centre-front peak down
-      // toward the temple before the beta sweep even gets there, so the
-      // station has to drop hard, not stay near-level.
+      id: 'hairline', tone: 0.22, minPx: 260, n: 26,
       ctrl: [
-        [ofUp(0.28), (ctx) => FRONT - 1.10 * faceW(ctx)],
-        [ofUp(0.48), (ctx) => FRONT - 0.62 * faceW(ctx)],
-        [ofUp(0.62), FRONT],
-        [ofUp(0.48), (ctx) => FRONT + 0.62 * faceW(ctx)],
-        [ofUp(0.28), (ctx) => FRONT + 1.10 * faceW(ctx)],
+        [ofUp(0.16), (ctx) => FRONT - 1.15 * faceW(ctx)],
+        [ofUp(0.30), (ctx) => FRONT - 0.85 * faceW(ctx)],
+        [ofUp(0.50), (ctx) => FRONT - 0.45 * faceW(ctx)],
+        [ofUp(0.68), FRONT],
+        [ofUp(0.50), (ctx) => FRONT + 0.45 * faceW(ctx)],
+        [ofUp(0.30), (ctx) => FRONT + 0.85 * faceW(ctx)],
+        [ofUp(0.16), (ctx) => FRONT + 1.15 * faceW(ctx)],
       ],
     },
     // the occiput: the back of the vault's own curve, low enough to read
     // as where the skull rounds into the neck rather than as a second
-    // hairline
+    // hairline. Tone and minPx both pulled in from the first pass (0.24,
+    // 135) once az 0/40 crops (this feature's own report) showed it
+    // combining with the hairline's own back-reaching temple ends and the
+    // trunk's neck marks (scm.L/.R reach a little past full-lateral at
+    // their own upper anchor, LEFT-0.32 — see scm's comment — which is
+    // enough to read from behind) into a "mane" cascading past the
+    // shoulders. This alone does not fix that — scm is tuned separately,
+    // below — but a fainter, later-appearing occiput is one fewer line in
+    // the same combination. Superseded outright once a real plane break
+    // covers this part (PLANE_SUPERSEDED below): the occiput is a girth
+    // change more than a texture boundary, so unlike the hairline it
+    // stands to be a genuine geometric edge on a planar skull, not just
+    // dimmed.
     {
-      id: 'occipital', tone: 0.24, minPx: 135, n: 16,
+      id: 'occipital', tone: 0.16, minPx: 190, n: 16,
       ctrl: [[ofUp(0.30), BACK - 0.30], [ofUp(0.20), BACK], [ofUp(0.30), BACK + 0.30]],
     },
   ];
@@ -1421,15 +1485,49 @@
    * (this now calls G.field.stationAtHeight itself, so it can reach any
    * ANSUR height rather than only the ones a caller's closure knew about),
    * and a fourth argument carries the rig and the plate's mmPerPx.
+   *
+   * ctx.eye, if the caller has it (view.e — see planeBreaks()), is read
+   * here too, but only ever handed onward to planeBreaks() itself, for the
+   * PLANE_SUPERSEDED check below. Pass the same ctx to both calls (skin.js
+   * already builds one object for exactly this) and the two agree with
+   * each other about what a plate's plane breaks actually are, rather than
+   * this function silently re-deriving a slightly different answer.
    */
+  // Marks a real plane break can stand in for, once the geometry actually
+  // HAS one where the mark is — see PLANE BREAKS above. Checked dynamically
+  // per call (does planeBreaks() find anything AT ALL on this part), not by
+  // a static "this part is planar" flag: a flag would need updating by
+  // hand the moment either side's geometry changed, and would be wrong for
+  // exactly as long as nobody remembered to. The two entries here are
+  // both head-only and both explained where they are authored above:
+  // brow is superseded hard, because a real dihedral in the same place
+  // doubles the line and IS the "cap brim" this feature's report chases;
+  // occipital the same way, because a planar skull's vault-to-neck step is
+  // a genuine edge rather than the soft roll the current construction
+  // gives it. hairline is deliberately absent — it is a texture boundary,
+  // not a plane break, and no amount of head construction changes that.
+  const PLANE_SUPERSEDED = {
+    brow: { minPx: 320, tone: 0.15 },
+    occipital: { minPx: 300, tone: 0.08 },
+  };
   function landmarks(part, rows, ctx) {
     ctx = ctx || {};
     if (!ctx.rig) return [];
     const spec = LANDMARKS[part.name];
     if (!spec) return [];
     const partPx = partPxOf(rows, ctx.mmPerPx);
+    // Computed at most once per call, and only ever forced at all when this
+    // part's own spec has an entry PLANE_SUPERSEDED names — every other
+    // part (and every other head mark) never pays for a plane-break pass
+    // it has no use for.
+    let _planar = null;
+    const isPlanar = () => _planar || (_planar = planeBreaks(part, rows, ctx));
+    const effSpec = spec.map((L) => {
+      const demoted = PLANE_SUPERSEDED[L.id];
+      return (demoted && isPlanar().length > 0) ? Object.assign({}, L, demoted) : L;
+    });
     const out = [];
-    for (const L of visibleAt(spec, partPx)) {
+    for (const L of visibleAt(effSpec, partPx)) {
       const N = L.n || 26;
       const pts = [];
       if (L.bone) {
