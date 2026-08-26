@@ -294,7 +294,15 @@ for (const P of PARTS) {
     if (ok) rings.push({ row: r, id: P.id });
   }
   if (rings.length < 2) { empty++; continue; }
-  const sil = G.trace.traceCoverage(rings, {});
+  /* smoothZ: two parts of a BODY, unlike a hand's five separate digits, are
+     routinely built to meet with their surfaces nearly coincident right at
+     the seam — a shoulder, a waist — which is exactly where a part's own
+     traced coverage is most likely to pinch in screen space (see 05-trace's
+     own note on this). Without it the pinch's raster-scale z-noise crosses
+     the neighbour's steadier depth every couple of points and a clean
+     shoulder line stitches into a chain of chevrons; see the flicker
+     instrumentation this was diagnosed with for the numbers. */
+  const sil = G.trace.traceCoverage(rings, { smoothZ: 3 });
   if (!sil || !sil.use) { empty++; continue; }
 
   // weight each point by how much of it something else covers, exactly as the

@@ -223,6 +223,45 @@
       const [dz, own, gn] = sample(px, py);
       out.push([px, py, dz, own, gn]);
     }
+    /* The depth just sampled is a fresh nearest-covered-CELL lookup at each
+       output point's own (already-smoothed) position — unlike (x,y), which
+       passed through several rounds of neighbour-averaging above, dz never
+       does. That is invisible wherever a part's own rasterised coverage is a
+       simple blob, which is almost everywhere. It stops being invisible at a
+       hairline pinch in that coverage — a couple of cells wide, where the
+       part's own rings run close enough in screen space to nearly double
+       back on themselves (an armpit-tight fold at a limb's join, say) — a
+       raster-scale accident of z-testing quads that graze each other, not a
+       real ambiguity in the surface. Two OUTPUT points a few pixels apart
+       along the (smooth) walk can then land in cells on opposite sides of
+       that pinch, whose dz differs not by noise but by whatever real depth
+       span the fold spans — tens of times the occlusion tolerance below.
+       Tested against another part's own, much steadier depth there (two
+       parts meet exactly at such pinches by construction — a shoulder, a
+       waist), that swing crosses the visibility threshold every couple of
+       points: a border that should read as one clean edge stitches into a
+       chain of short chevrons instead, each one a real short visible (or
+       hidden) run rather than a rendering glitch, just of a depth this walk
+       should never have reported in the first place.
+       `smoothZ` is 0 (off, today's exact dz) unless a caller opts in: most
+       shapes this traces never fold on themselves, and a pass smoothing dz
+       they never needed would soften a genuinely sharp depth step — a real
+       silhouette edge seen nearly edge-on — for nothing. A caller whose part
+       CAN pinch like this, next to another part whose surface sits close
+       enough for the pinch's own z-noise to cross it, asks for this by
+       passing a positive integer: that many rounds of the same 1-2-1
+       neighbour blend used on (x,y) above, run along the closed loop so the
+       reported depth changes as gradually as the walk producing it does. */
+    if (opts.smoothZ) {
+      const NO = out.length;
+      for (let pass = 0; pass < opts.smoothZ; pass++) {
+        const src = new Array(NO);
+        for (let i = 0; i < NO; i++) src[i] = out[i][2];
+        for (let i = 0; i < NO; i++) {
+          out[i][2] = (src[(i - 1 + NO) % NO] + src[i] * 2 + src[(i + 1) % NO]) * 0.25;
+        }
+      }
+    }
     if (opts.tap) opts.tap({ final: out });
     return { use: true, outline: out, area: total };
   }
