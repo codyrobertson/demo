@@ -271,7 +271,7 @@
 
   function archProfile(archId, tendonFrac, t) {
     t = clamp01(t);
-    const tf = clamp(tendonFrac, 0.03, 0.46);
+    const tf = clamp(tendonFrac, 0.03, 0.88);   // ceiling raised with tendonFractionOf's — see its comment
     if (archId === 'convergent') {
       const fallStart = 1 - tf;
       return t <= fallStart ? 1 : lerp(1, TENDON_AREA_FRAC, sstep(fallStart, 1, t));
@@ -395,7 +395,15 @@
       const mtu = m.tendonSlackLengthMm + m.optimalFiberLengthMm * Math.cos(m.pennationAngleAtOptimalRad);
       if (mtu > 0) { sum += m.tendonSlackLengthMm / mtu; n++; }
     }
-    return n ? clamp(sum / n, 0.05, 0.42) : 0.15;
+    /* The ceiling was 0.42, and tibialis anterior convicted it. TA's own
+       measured ratio is 0.78 — its tendon genuinely IS most of its length,
+       the belly living in the upper two-thirds of the shin — and clamping
+       to 0.42 drew that belly a third further down the leg than the
+       anatomy says, ending in the cliff that read as a beak on every shin
+       profile. A ceiling that overrides measured data is the exact thing
+       this file exists to not do; what remains is a sanity bound against a
+       degenerate source value, not a style preference. */
+    return n ? clamp(sum / n, 0.05, 0.85) : 0.15;
   }
 
   // =========================================================================
