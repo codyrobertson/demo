@@ -84,19 +84,40 @@
    nothing surveys a dimple — so its size is EST, anchored to suprasternale
    height, which IS measured, and centred on the midline between the straps.
 
-   Cut the way the head's eye sockets are cut (51-head.js): the cutter's
-   centre sits mostly in FRONT of the skin, so only its posterior cap bites,
-   which leaves a shallow scoop rather than a puncture straight through the
-   manubrium. No `f` on a cut, matching the crotch and the eye sockets —
-   the hollow is a fixed landmark, not a soft-tissue form that should swell
-   or shrink with the fat solve. */
+   A CUT HAS TO SIT ON THE SKIN, NOT GUESS AT IT, AND A GUESS BUILT FROM
+   waistdepth/chestdepth alone IS TOO SHALLOW TO TRUST. Both this cut and the
+   navel below were first built the way the head's eye sockets are — cutter
+   mostly in front of the skin, only its posterior cap biting — using
+   `chestdepth * 0.30` as the stand-in for "where the skin is." That number
+   is the MEASURED, unfattened half-depth; the true skin is that plus this
+   region's soft-tissue term, which is solved per body and is NOT available
+   here — volumeField() calls every cut's sdf with f FIXED AT ZERO, on
+   purpose, so a cut stays a fixed landmark rather than one that swells with
+   the fat solve. Built at 0.30 the cutter's own centre came out around
+   70-90mm off the sternum on a 1623mm figure, against a probed true skin
+   position of 95 to 190mm across a 60-body sample — the cutter was 20 to
+   100mm shy of the skin, and radiusAlong()'s march-then-bisect (50-field.js)
+   stops at the FIRST place the field goes positive, so it read the cutter's
+   own near face as the body's outline: a puncture straight into the ribcage
+   on ordinary bodies, not a shallow scoop, and it showed up as chest girth
+   overshooting by double digits on some seeds.
+
+   Fixed by anchoring to something that already tracks the fat solve without
+   needing to read it: chest CIRCUMFERENCE, fixed per body before fitFat()
+   ever runs, rather than chest depth. Probed the same 60-body sample for
+   where the true skin sits as a fraction of it — 0.104 to 0.154, never
+   lower — and this uses 0.095, under the observed floor on purpose so a
+   body outside the sample still lands the cutter short of the skin rather
+   than past it. Short means the notch reads shallower on some builds and
+   the cutter floats clear of the skin doing nothing on a few; that failure
+   is invisible. Long means a puncture; that failure is a hole in the chest.
+   Not a symmetric trade. */
 {
   const notchH = m.suprasternaleheight - fig.rootHeight;
-  const notchZ = m.chestdepth * 0.30;             // same anterior reference the SCM heads use
-  const ax = 8, ay = 9, az = 11;                  // EST: ~2cm across, a few mm deep
-  const bite = 4;                                 // EST: how much of the cutter actually carves in
-  const C = [notchH, 0, notchZ + az - bite];
-  put('trunk', (P) => sdBlobSE(P, C, ID, ax, ay, az, 2.2), true);
+  const az = 8;                                    // EST: a few mm of actual bite
+  const nearEdge = g.chest * 0.095;                 // EST floor, under the probed 0.104-0.154
+  const C = [notchH, 0, nearEdge + az];
+  put('trunk', (P) => sdBlobSE(P, C, ID, 7, 8, az, 2.2), true);
 }
 
 /* THE TRAPEZIUS, as the slope a shoulder hangs from — and the review
@@ -315,16 +336,25 @@ for (const sgn of [1, -1]) {
 
 /* THE NAVEL: a small cut, dead front, at waistheightomphalion — which is
    the measured landmark it is named for, so there is nothing to estimate
-   about where it sits, only how big it is. Same technique as the
-   suprasternal notch: the cutter sits mostly in front of the skin and
-   only its posterior cap bites. */
+   about where it sits, only how big it is.
+
+   Same bug as the suprasternal notch above, worse here because the waist
+   carries more soft tissue than anywhere else on the trunk (TRUNK_FAT's
+   own anchor weights peak at the omphalion). Built the first time off
+   `waistDepth * 0.5`, the cutter's near edge landed 60-70mm off the navel
+   on a mean figure against a probed true skin position of 137 to 266mm —
+   short by anywhere from 70 to 200mm, and on the worst-sampled body that
+   read as chest — sorry, WAIST — girth overshooting by 250mm of ring
+   perimeter, not a dimple. Same fix, same reasoning: anchor to waist
+   CIRCUMFERENCE, fixed before the fat solve runs, and floor the ratio
+   under the probed range (0.184 to 0.227 across 10 bodies at the extremes
+   of the sample, several more in between) rather than at its centre. */
 {
   const h = m.waistheightomphalion - fig.rootHeight;
-  const z = g.waistDepth * 0.5;
-  const ax = 7, ay = 7, az = 9;
-  const bite = 3.5;
-  const C = [h, 0, z * 0.62 + az - bite];
-  put('trunk', (P) => sdBlobSE(P, C, ID, ax, ay, az, 2.2), true);
+  const az = 8;
+  const nearEdge = g.waist * 0.175;                 // EST floor, under the probed 0.184-0.227
+  const C = [h, 0, nearEdge + az];
+  put('trunk', (P) => sdBlobSE(P, C, ID, 7, 7, az, 2.2), true);
 }
 
 /* THE GLUTEAL FOLD, seen from the side. The glute's general roundness is
@@ -338,12 +368,25 @@ for (const sgn of [1, -1]) {
    marking the fold. Small and shallow for the same reason the notch and
    navel are — this is a crease, not a rim — and it sits right at the
    height 60-draw.js already draws its landmark line at, so the drawn
-   crease and the modelled one agree. */
+   crease and the modelled one agree.
+
+   The same skin-position bug as the notch and navel above cost this one
+   too, and cost it twice over: `buttockdepth`-fraction anchors again, AND
+   the two ends had the geometry backwards. Probed against buttock
+   CIRCUMFERENCE — fixed before the fat solve, same fix as above — the
+   inner end (nearer the cleft) sits at 0.071 to 0.079 of it and the outer
+   end (nearer the hip's side, where the buttock is shallower front-to-back)
+   at only 0.048 to 0.062. The first version had both ratios roughly right
+   in isolation but PUT THE DEEPER NUMBER ON THE SHALLOWER END — the outer
+   point reached further back than the inner one ever did, which is the
+   fold's two ends in the wrong order regardless of how well either was
+   anchored. Both floored under their probed ranges, same reasoning: short
+   is an invisible fold on a few bodies, long is a puncture into the pelvis. */
 for (const sgn of [1, -1]) {
   const h = m.buttockheight - fig.rootHeight;
   const yMid = sgn * m.hipbreadth * 0.24;
-  const A = [h + 2, yMid - sgn * 34, -m.buttockdepth * 0.30];
-  const B = [h - 3, yMid + sgn * 34, -m.buttockdepth * 0.58];
+  const A = [h + 2, yMid - sgn * 34, -g.hip * 0.062];   // inner, nearer the cleft: deeper
+  const B = [h - 3, yMid + sgn * 34, -g.hip * 0.040];   // outer, toward the hip: shallower
   const F = frameAlong(A, B, [1, 0, 0]);
   put('trunk', (P) => sdSegSE(P, A, B, F, 7, 5, 7, 6, 2.2, 6), true);
 }
