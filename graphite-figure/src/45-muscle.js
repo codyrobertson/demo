@@ -626,19 +626,52 @@
   //  it is identical — and is the only anchor available for a bone whose
   //  own orientation moves with the figure being posed.
   // =========================================================================
-  const FRACTION_BONES = { clavicle: 1, scapula: 1 };
-  const SEG_LEN_MOBL = { clavicle: 137.76, scapula: 36.44 }; // data/mobl-arms.json's own segmentLengthsMm
+  const FRACTION_BONES = { clavicle: 1 };
+  const SEG_LEN_MOBL = { clavicle: 137.76 }; // data/mobl-arms.json's own segmentLengthsMm
 
-  function localVectorFor(boneBase, anatOrRawPoint) {
-    // input already relative to that body's own local origin, in the
+  // The along/width/depth -> raw-(x,y,z) correspondence used for every
+  // OTHER bone (raw y = along, raw z = width, raw x = depth) is really
+  // "along = whichever raw axis this bone's own length actually runs on",
+  // which for a near-VERTICAL limb bone (humerus, femur, ...) happens to be
+  // raw Y (superior). The clavicle is not vertical — it runs mostly side to
+  // side — and checking data/mobl-arms.json's own joints[] confirms it: the
+  // clavicle's distal end (the unrotscap joint) sits at [-14.33, 20.07,
+  // 135.54] relative to the clavicle's own origin, i.e. almost entirely on
+  // raw Z (135.5mm of a 137.76mm-long bone), not raw Y. So "along" for the
+  // clavicle is read off THAT direction specifically — computed once,
+  // lazily, from the model itself rather than assumed — and the remaining
+  // (perpendicular) component is what is left for width/depth, rather than
+  // reusing the raw point's un-adjusted x/y/z, which double-counts the
+  // clavicle's own length into what should be a small transverse offset (a
+  // bug this project's own testing caught: a deltoid origin computed the
+  // old way landed 120mm above the shoulder instead of on the clavicle).
+  let _clavicleAxisRaw = null;
+  function clavicleAxisRaw(model) {
+    if (_clavicleAxisRaw) return _clavicleAxisRaw;
+    return (_clavicleAxisRaw = vnorm(jointInBody(model, 'unrotscap', 'clavicle')));
+  }
+
+  function localVectorFor(boneBase, rawPoint, model) {
+    // rawPoint already relative to that body's own local origin, in the
     // SOURCE model's own raw convention (x=anterior, y=superior, z=right —
     // data/rajagopal.json's and data/mobl-arms.json's own meta.axes)
     if (boneBase === 'pelvis') return { kind: 'local', vecR: [0, 0, 0] }; // placeholder — overwritten by fixPelvisOrigins(), which has no single fixed bone frame to resolve against (see its own header)
     if (FRACTION_BONES[boneBase]) {
       const L = SEG_LEN_MOBL[boneBase] || 100;
-      return { kind: 'fraction', along: anatOrRawPoint[1] / L, width: anatOrRawPoint[2] / L, depth: anatOrRawPoint[0] / L };
+      const axis = clavicleAxisRaw(model);
+      const alongMm = vdot(rawPoint, axis);
+      const perp = vsub(rawPoint, vmul(axis, alongMm));
+      // the perpendicular remainder's own raw x/y/z is what is left once
+      // the along-the-bone direction is removed — mapped onto width/depth
+      // the same way the vertical bones are (raw z-ish -> width, raw x-ish
+      // -> depth), which for a roughly-horizontal bone is a pragmatic
+      // carry-over rather than a re-derived, independently-checked
+      // correspondence the way restFrame()'s bones are; kept small by
+      // construction (it is a perpendicular residual, not the bone's own
+      // 137mm length), which is what actually matters for a proxy offset.
+      return { kind: 'fraction', along: alongMm / L, width: vdot(perp, [0, 0, 1]) / L, depth: vdot(perp, [1, 0, 0]) / L };
     }
-    const anat = [anatOrRawPoint[1], -anatOrRawPoint[2], anatOrRawPoint[0]]; // (superior, left, anterior)
+    const anat = [rawPoint[1], -rawPoint[2], rawPoint[0]]; // (superior, left, anterior)
     return { kind: 'local', vecR: unapply(restFrame(boneBase + '.R'), anat) };
   }
 
@@ -659,8 +692,8 @@
     const iSpreadX = halfRange(insertionPts, 0, FLOOR), iSpreadZ = halfRange(insertionPts, 2, FLOOR);
     const aspect = clamp(Math.sqrt((oSpreadZ / oSpreadX) * (iSpreadZ / iSpreadX)), 0.55, 2.6);
 
-    const originLV = localVectorFor(originBone, originCentroid);
-    const insertionLV = localVectorFor(insertionBone, insertionCentroid);
+    const originLV = localVectorFor(originBone, originCentroid, sourceModel);
+    const insertionLV = localVectorFor(insertionBone, insertionCentroid, sourceModel);
 
     return {
       name, region: 'measured', arch, primaryJoint, touches,
@@ -698,7 +731,7 @@
       const T = LOWER_TOPOLOGY[name];
       const muscles = model.muscles.filter((m) => T.match.test(m.name));
       const hipJoint = jointInBody(model, 'hip_r', 'pelvis');
-      const pts = pointsOnBody(muscles, 'pelvis').map((p) => vsub(p, hipJoint));
+      const pts = endPointsOnBody(muscles, 'pelvis', true).map((p) => vsub(p, hipJoint));
       const c = centroid(pts);
       const anat = [c[1], -c[2], c[0]]; // (superior, left, anterior), relative to the hip
       g.origin = {
@@ -712,7 +745,11 @@
   // =========================================================================
   //  ANCHOR RESOLUTION
   // =========================================================================
-  function boneId(base, side) { return base === 'pelvis' ? 'pelvis' : base + '.' + side; }
+  // Most anchoring bones are side-bearing (femur, tibia, humerus, forearm,
+  // foot, clavicle, scapula); the pelvis and every spine vertebra (T1, T8,
+  // T12, ...) are not — 10-skeleton.js declares those once, not per side —
+  // so `.R`/`.L` is only appended when GK.skel actually mirrored that id.
+  function boneId(base, side) { return GK.skel.BY_ID[base + '.' + side] ? base + '.' + side : base; }
 
   function anchorWorld(rig, side, anchor) {
     const fb = rig.bones[boneId(anchor.frameBone, side)];
@@ -833,7 +870,7 @@
     quadriceps: { girth: 'thigh', seg: 'femur' },
     hamstrings: { girth: 'thigh', seg: 'femur' },
     tricepsSurae: { girth: 'calf', seg: 'tibia' },
-    deltoid: { girth: 'shoulder', seg: 'humerus' },
+    deltoid: { girth: 'bideltoid', seg: 'humerus' }, // a breadth, not a circumference — 00-anthro.js's girths() deliberately carries no shoulder circumference (not in the fitted column set); bideltoid is the measured shoulder-width stand-in it names for exactly this
     pectoralis: { girth: 'chest', seg: 'humerus' },
     latissimus: { girth: 'chest', seg: 'humerus' },
     trapezius: { girth: 'neck', seg: 'humerus' },

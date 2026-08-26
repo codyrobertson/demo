@@ -287,8 +287,17 @@ for (const f of ['ModelParameters.any', 'ModelSegmentParameters.any', 'ModelJoin
 // ---------------------------------------------------------------------------
 function stripBlockComments(src) { return src.replace(/\/\*[\s\S]*?\*\//g, ''); }
 function stripLineComments(src) { return src.split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n'); }
-function read(file) { return fs.readFileSync(path.join(paramDir, file), 'utf8'); }
-function readLeg(file) { return fs.readFileSync(path.join(legDir, file), 'utf8'); }
+// Every .any file read here is CRLF ("\r\n") -- normalised to "\n" ONCE,
+// here, the one place this happens, same discipline as the MM constant
+// above. Load-bearing, not cosmetic: stripLineComments()'s
+// /\/\/.*$/ pattern silently fails to match a CRLF-terminated line ("."
+// excludes "\r", and "$" without /m needs true end-of-string, so a line
+// ending "...text\r" never lets the pattern reach "$") -- confirmed by
+// inspecting this script's own output during development (a commented-out
+// "//AnyUniversalJoint PatellaFemur = {...};" block in Jnt.any was being
+// read as a live SEVENTH joint) before this normalisation was added.
+function read(file) { return fs.readFileSync(path.join(paramDir, file), 'utf8').replace(/\r\n/g, '\n'); }
+function readLeg(file) { return fs.readFileSync(path.join(legDir, file), 'utf8').replace(/\r\n/g, '\n'); }
 
 // ---------------------------------------------------------------------------
 //  LITERAL-ARITHMETIC EVALUATOR -- ONLY for `number` or `number/number`.
@@ -311,26 +320,47 @@ function unwrapDesignVar(s) {
 // ---------------------------------------------------------------------------
 //  GENERIC FOLDER-SCOPED LITERAL SCANNER.
 //  Tracks brace depth to know which named folder (Pelvis/Thigh/Patella/
-//  Shank/Talus/Foot, or a nested folder within one of those, e.g.
-//  Pelvis.Muscles.<name> is NOT expected here -- see MUSCLE PARAMETERS
-//  SCANNER below for that differently-shaped file) each declaration sits
-//  in, and returns everything keyed by the TOP-LEVEL folder name only
-//  (walking exactly one level deep, which is all six segment folders need).
-//  Folder open is recognised as `<ident> = {` or `AnyFolder <ident> = {`,
-//  which matches both a fresh `AnyFolder Pelvis = {` and a same-name
-//  "reopen" `Pelvis = {` (ModelJointParameters.any and
-//  ModelSegmentParameters.any both reopen folders ModelParameters.any's own
-//  body declares) -- both forms are treated identically, which is exactly
-//  what AnyScript's own reopen semantics do (append members to the same
-//  folder regardless of which include file added the `AnyFolder` keyword).
+//  Shank/Talus/Foot) each declaration sits in. Folder open is recognised as
+//  `<ident> = {` or `AnyFolder <ident> = {`, which matches both a fresh
+//  `AnyFolder Pelvis = {` and a same-name "reopen" `Pelvis = {`.
+//
+//  A segment name is looked up ANYWHERE in the current folder-nesting
+//  stack, NOT just stack[0] -- confirmed necessary, not a stylistic
+//  choice: ModelSegmentParameters.any and ModelJointParameters.any each
+//  open "Pelvis = {"/"Thigh = {"/etc. as genuinely FILE-TOP-LEVEL folders
+//  (no wrapper), but ModelParameters.any's OWN copy of those same six
+//  folders sits ONE LEVEL DEEPER, inside that file's own
+//  "AnyFolder ModelParameters = { ... }" -- true only because this script
+//  reads each file as independent standalone text rather than actually
+//  expanding the #include directives that, in a real AnyBody build, paste
+//  the other two files' content inside that same wrapper (making all
+//  three consistent at build time). Using stack[0] unconditionally was
+//  tried first and silently produced ZERO vectors/matrices for every
+//  segment out of ModelParameters.any specifically (caught by inspecting
+//  this script's own output during development -- Thigh had 5 vectors,
+//  all contributed by the other two files, none from this one -- not
+//  assumed correct from the code alone). Segments never nest inside each
+//  other in this format, so at most one SEGMENTS name is ever on the
+//  stack at a time; which depth it sits at does not matter.
 // ---------------------------------------------------------------------------
 const SEGMENTS = ['Pelvis', 'Thigh', 'Patella', 'Shank', 'Talus', 'Foot'];
 
 function scanFolders(srcRaw, sourceFile) {
-  const src = stripBlockComments(srcRaw);
+  // Both comment forms MUST be stripped before this scanner runs, not just
+  // block comments: ModelParameters.any's Pelvis folder contains several
+  // "//    AnyVec3 IliacusMid3Node = {...};"-style commented-OUT
+  // declarations (leftover/disabled points -- see Seg.any's own header,
+  // "viapoints ... commented out for the same reason"). Left unstripped,
+  // those still look like perfectly well-formed literal declarations to
+  // every regex below and get read as if live, AND their own brace pairs
+  // desync this scanner's depth/stack bookkeeping against the real
+  // (uncommented) folder nesting -- caught here by inspecting this
+  // script's own output (Thigh ending up with zero vectors) during
+  // development, not assumed safe.
+  const src = stripLineComments(stripBlockComments(srcRaw));
   const out = {}; for (const s of SEGMENTS) out[s] = { vectors: {}, scalars: {}, strings: {}, matrices: {} };
   let depth = 0;
-  const stack = []; // names of open folders, index 0 = top-level segment name (or null if not a segment)
+  const stack = []; // names of currently-open folders, outer to inner -- see header for why a SEGMENTS name can be at any depth, not always stack[0]
   let i = 0;
   const n = src.length;
   // Pattern for one open-brace boundary token: identifier possibly preceded by AnyFolder, ending '{'
@@ -353,7 +383,7 @@ function scanFolders(srcRaw, sourceFile) {
     }
     // try literal declarations at this position, only if we are directly
     // inside a recognised top-level segment folder (stack[0])
-    const segName = stack[0];
+    const segName = stack.find((nm) => SEGMENTS.includes(nm));
     if (segName && SEGMENTS.includes(segName)) {
       const rest = src.slice(i);
       let mm;
@@ -461,7 +491,6 @@ function resolveMatrixRows(segName) {
   }
 }
 for (const s of SEGMENTS) resolveMatrixRows(s);
-if (process.env.TLEM_DEBUG) { console.error('DEBUG Thigh.matrices keys:', Object.keys(merged.Thigh.matrices)); console.error('DEBUG GastroWrapLandmarks:', JSON.stringify(merged.Thigh.matrices.GastroWrapLandmarks)); }
 
 // ---------------------------------------------------------------------------
 //  MUSCLE PHYSIOLOGICAL PARAMETERS -- ModelMuscleParameters.any's shape is
@@ -548,16 +577,20 @@ console.log('  ' + Object.keys(parMap).length + ' element-parameter (...Par) fol
 //  MUSCLE TOPOLOGY -- Mus.any. One block per fascicle element:
 //    Any(MuscleViaPoint|MuscleShortestPath|Muscle...) <ElemName> = {
 //      AnyMuscleModel &MusMdl = ..MuscleModels.<ParName>;
-//      AnyRefNode &Org = ..Seg.<Body>.<Node>;
-//      AnyRefNode &Via<k> = ..Seg.<Body>.<Node>;   (zero or more, in file order)
-//      AnyRefNode &Ins = ..Seg.<Body>.<Node>;
-//      AnySurface &srf = ..Seg.<Body>.<WrapName>.<sub>;  (zero or more)
-//    };
+//      AnyRefNode &Org = ..Seg.<Body>.<Node>;            (Pelvis-origin points
+//      AnyRefNode &Via<k> = ..Seg.<Body>.<Node>;          add an extra ".Muscles."
+//      AnyRefNode &Ins = ..Seg.<Body>.<Node>;             segment, e.g.
+//      AnySurface &srf = ..Seg.<Body>.<WrapName>.<sub>;   "..Seg.Pelvis.Muscles.Gracilis1Node" --
+//    };                                                   BODY_NODE_RE below skips any such
+//  middle segment(s), keeping the FIRST identifier as body and the LAST as
+//  node -- confirmed present by inspecting Mus.any directly (Gracilis1/2's
+//  own Org lines), not assumed absent.
 //  Commented-out lines (leading "//" before stripping) are excluded by
 //  stripping line comments first -- unlike the segment scanner above, this
 //  file's brace/semicolon shape tolerates it fine since no value here spans
 //  a "//"-containing line.
 // ---------------------------------------------------------------------------
+const BODY_NODE_RE = '\\.\\.Seg\\.(\\w+)(?:\\.\\w+)*\\.(\\w+)\\s*;';
 function scanMusTopology(srcRaw) {
   const src = stripLineComments(stripBlockComments(srcRaw));
   const elements = [];
@@ -566,9 +599,9 @@ function scanMusTopology(srcRaw) {
   while ((m = re.exec(src))) {
     const [, cls, name, body] = m;
     const musMdl = /AnyMuscleModel\s*&\s*MusMdl\s*=\s*\.\.MuscleModels\.(\w+)\s*;/.exec(body);
-    const org = /AnyRefNode\s*&\s*Org\s*=\s*\.\.Seg\.(\w+)\.(\w+)\s*;/.exec(body);
-    const ins = /AnyRefNode\s*&\s*Ins\s*=\s*\.\.Seg\.(\w+)\.(\w+)\s*;/.exec(body);
-    const vias = [...body.matchAll(/AnyRefNode\s*&\s*(Via\d+)\s*=\s*\.\.Seg\.(\w+)\.(\w+)\s*;/g)]
+    const org = new RegExp('AnyRefNode\\s*&\\s*Org\\s*=\\s*' + BODY_NODE_RE).exec(body);
+    const ins = new RegExp('AnyRefNode\\s*&\\s*Ins\\s*=\\s*' + BODY_NODE_RE).exec(body);
+    const vias = [...body.matchAll(new RegExp('AnyRefNode\\s*&\\s*(Via\\d+)\\s*=\\s*' + BODY_NODE_RE, 'g'))]
       .map((vm) => ({ label: vm[1], body: vm[2], node: vm[3] }));
     const wraps = [...body.matchAll(/AnySurface\s*&\s*\w+\s*=\s*\.\.Seg\.(\w+)\.([\w.]+)\s*;/g)]
       .map((wm) => ({ body: wm[1], ref: wm[2] }));
@@ -600,7 +633,7 @@ function scanJoints(srcRaw) {
   while ((m = re.exec(src))) {
     const [, type, name, body] = m;
     const axisM = [...body.matchAll(/Axis\d?\s*=\s*(x|y|z)\s*;/g)].map((a) => a[1]);
-    const refs = [...body.matchAll(/AnyRefNode\s*&\s*(\w+)\s*=\s*\.\.Seg\.(\w+)\.(\w+)\s*;/g)]
+    const refs = [...body.matchAll(new RegExp('AnyRefNode\\s*&\\s*(\\w+)\\s*=\\s*' + BODY_NODE_RE, 'g'))]
       .map((rm) => ({ role: rm[1], body: rm[2], node: rm[3] }));
     if (refs.length < 2) continue;
     joints.push({ name, type: 'Any' + type, axisSymbolic: axisM, connects: refs });
@@ -776,7 +809,11 @@ const out = {
     muscleModelFormulas: 'PCSA/F0 depend on StrengthScale/FiberLengthScale/StrengthIndexLeg factors defined in a whole-body PARENT model this leg submodel does not itself carry -- NOT resolved here. See muscles[].est for a clearly-labelled, assumption-stated estimate (StrengthScale=FiberLengthScale=StrengthIndexLeg=1) instead. muscles[].optimalFiberLengthMm/totalTendonLengthMm/pennationAngleDeg ARE the file\'s own literal, unscaled numbers -- not estimates.',
     wrapSurfaces: wrapSurfaces.filter((w) => !w.resolvedGeometry).length + ' of ' + wrapSurfaces.length + ' referenced wrap surfaces have geometry NOT resolved in this pass (macro-built from other muscles\' node positions rather than a single literal landmark matrix) -- see wrapSurfaces[].resolvedGeometry and this script\'s header.',
     notCovered: 'Left leg (mirror of this same data via Sign=-1*Z, not separately authored -- see header). Hip range-of-motion / joint stops (not found as literals within LegTLEM2.1 itself). Bone mesh geometry (TLEM2.1/talus.anysurf3 and STL.any reference external/proprietary mesh files, not parsed here -- out of scope, this file is muscle/segment/joint PARAMETERS only, the same scope fit-osim.js and fit-mobl-arms.js keep). MusMdlSimple_2.any (an alternate, simpler muscle-model variant over the SAME geometry+physiological parameters, with a different Lf0 formula -- noted in header, not separately extracted since it changes no data this file reports).',
-    elementCountMismatches: groupCountMismatch.length ? groupCountMismatch.map((m) => m.name + ': declared ' + m.elementCountDeclared + ', found ' + m.elementCountFound + ' in Mus.any') : 'none -- every fascicle group\'s declared MuscleElemAmount matched the number of elements actually found wired up in Mus.any',
+    elementCountMismatches: (groupCountMismatch.length
+      ? groupCountMismatch.map((m) => m.name + ': ModelMuscleParameters.any declares MuscleElemAmount=' + m.elementCountDeclared + ' but Mus.any wires up ' + m.elementCountFound + ' elements').join('; ')
+        + ' -- all three confirmed genuine (checked directly, not assumed benign): PsoasMajor/PsoasMinor are entirely absent from Mus.any because psoas originates on the LUMBAR SPINE, a body outside this LEG-only submodel\'s own six segments -- ModelMuscleParameters.any carries their physiological parameters (presumably for a whole-body assembly this leg is normally included into) but no path for them exists here to extract. PeroneusTertius is simply absent from Mus.any entirely (zero occurrences) in this model version/configuration despite having declared parameters -- a real incompleteness in the source, not a parsing gap.'
+      : 'none -- every fascicle group\'s declared MuscleElemAmount matched the number of elements actually found wired up in Mus.any'),
+    sacrumOrigin: 'Mus.any\'s six GluteusMaximusInferior<1-6> elements originate on "..Seg.Sacrum.LegAttachmentNodes.<Node>" -- Sacrum is a real, anatomically-correct additional origin body (gluteus maximus does have a sacral origin) that this leg-only submodel references but does not itself define a coordinate frame for (same "provided by the parent whole-body model" situation as Psoas, above). These six elements\' origin.body="Sacrum" is recorded in muscles[], with no coordinate resolvable from segments{} (there is no Sacrum entry).',
   },
   segments,
   joints,
@@ -803,16 +840,29 @@ console.warn('\n*** REMINDER: this output is proprietary AnyBody/AMMR-derived da
 //  VERIFICATION
 // ---------------------------------------------------------------------------
 const issues = [];
-
-if (groupCountMismatch.length) for (const m of groupCountMismatch) issues.push('muscle group ' + m.name + ': MuscleElemAmount=' + m.elementCountDeclared + ' but ' + m.elementCountFound + ' elements found in Mus.any');
+const explainedFindings = []; // real, checked discrepancies that are NOT parsing bugs -- see meta.elementCountMismatches/sacrumOrigin -- reported separately from `issues` so verification:PASS reflects "the extraction is faithful" rather than being drowned out by genuine source-data quirks
+const KNOWN_UNWIRED_GROUPS = new Set(['PsoasMajor', 'PsoasMinor', 'PeroneusTertius']);
+for (const m of groupCountMismatch) {
+  const line = 'muscle group ' + m.name + ': MuscleElemAmount=' + m.elementCountDeclared + ' but ' + m.elementCountFound + ' elements found in Mus.any';
+  (KNOWN_UNWIRED_GROUPS.has(m.name) ? explainedFindings : issues).push(line + (KNOWN_UNWIRED_GROUPS.has(m.name) ? ' (expected -- see meta.elementCountMismatches for why)' : ''));
+}
 
 // every muscle element with a parFolder should have resolved to a real group
 for (const el of musElements) {
   if (el.parFolder && !parMap[el.parFolder]) issues.push('Mus.any element ' + el.name + ' references MuscleModels.' + el.parFolder + ', not found in MusMdl3E_2.any\'s Par-folder map');
 }
 
-// every origin/insertion/via body name is one of the six known segments
-const BODY_NAMES = new Set(SEGMENTS);
+// every origin/insertion/via body name is one of the six known segments, OR
+// "Sacrum" -- confirmed real, not a parsing artefact: Mus.any's six
+// GluteusMaximusInferior<1-6> elements originate on
+// "..Seg.Sacrum.LegAttachmentNodes.<Node>", a body this LEG-only submodel
+// does not itself define (same situation as Psoas major/minor on
+// "..TrunkMuscles", see meta.notCovered) -- gluteus maximus genuinely does
+// have a sacral origin anatomically, so this is TLEM2.1's model correctly
+// reflecting that, not a bug. Sacrum-origin points are recorded in
+// muscles[].elements[].origin as-is; no coordinate for them is resolved
+// (there is no Sacrum entry in segments{}, see notCovered).
+const BODY_NAMES = new Set([...SEGMENTS, 'Sacrum']);
 for (const el of musElements) {
   for (const pt of [el.origin, el.insertion, ...el.via]) {
     if (pt && !BODY_NAMES.has(pt.body)) issues.push('Mus.any element ' + el.name + ': unrecognised body "' + pt.body + '"');
@@ -835,6 +885,10 @@ if (!(segmentLengthsMm.tibiaFunctional > 250 && segmentLengthsMm.tibiaFunctional
 console.log(issues.length === 0 ? 'verification: PASS' : ('verification: FAIL (' + issues.length + ' issue(s))'));
 for (const iss of issues.slice(0, 40)) console.log('  - ' + iss);
 if (issues.length > 40) console.log('  ... and ' + (issues.length - 40) + ' more');
+if (explainedFindings.length) {
+  console.log('\n' + explainedFindings.length + ' additional finding(s), NOT counted as failures -- genuine source-data facts checked directly against Mus.any/Seg.any, not parsing gaps (see meta.elementCountMismatches / meta.sacrumOrigin for the full explanation):');
+  for (const f of explainedFindings) console.log('  - ' + f);
+}
 
 console.log('\ncounts: ' + JSON.stringify(out.counts, null, 2).replace(/[{}"]/g, '').trim());
 console.log('\nsegment lengths (mm, THIS cadaver subject, hip/knee/ankle joint-centre-to-joint-centre):');
