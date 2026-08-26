@@ -537,6 +537,7 @@
   function muscleField(rig, P, part, f) {
     if (!GK.muscle || !GK.muscle.fieldAt) return 1e9;
     const keys = part.muscleKeys || [part.name];
+    if (!keys.length) return 1e9;   // this part's shape is measured, not modelled
     let d = 1e9;
     for (const k of keys) d = Math.min(d, GK.muscle.fieldAt(rig, P, k, f || 0));
     return d;
@@ -624,6 +625,38 @@
   //  SCOPE
   //  Which bones and which volumes each part's field is made of.
   // =========================================================================
+
+  /* WHERE THE MUSCLES SUPPLY THE SHAPE, AND WHERE THEY DOUBLE-COUNT.
+
+     This is the line the whole surface turns on, and it took a picture to
+     find it. The muscle layer makes the LEGS and ARMS and ruins the TRUNK,
+     and the reason is in the survey rather than in the modelling.
+
+     ANSUR measured the trunk's cross-section three times over — chest
+     breadth AND depth AND circumference, waist the same, hip the same. Three
+     numbers fix a section's size and its shape, and they were taken over the
+     skin, so the pectorals, the lats and the abdominal wall are ALREADY IN
+     them. The measured volumes therefore carry the trunk's true form, and a
+     modelled muscle laid on top of that is not adding anatomy, it is adding
+     a second copy of tissue the tape already went round. Drawn, that is
+     exactly what it looked like: the trunk alone came out a lumpy blob with
+     knobs down both flanks, where the same trunk with the muscle layer
+     switched off is a clean torso with a neck, sloping shoulders, a waist
+     and hips.
+
+     A limb has no such luck. ANSUR measured thigh CIRCUMFERENCE and nothing
+     about its shape, so a leg built from bone plus a solved thickness is a
+     tube of the right girth and no form — two straight tapers with no knee
+     and no calf, which is what it drew. With the muscles in, the same leg
+     has a thigh swell, a narrowing at the knee, a calf belly and an ankle.
+
+     So: where the survey fixes the section, use the section. Where it only
+     fixes the perimeter, the muscles must supply the rest. The trunk's own
+     muscles are still built and still queryable — they are what the interior
+     modelling lines will be drawn from, a pectoral border and a linea alba
+     being marks rather than bulk — they simply do not get a vote on where
+     the skin is. */
+  const NO_MUSCLE_BULK = [];
 
   const KEEP = {
     trunk: (id) => /^(pelvis|[LTC]\d+|clavicle\.[LR]|scapula\.[LR])$/.test(id),
@@ -810,11 +843,11 @@
   function parts(rig) {
     const out = [];
     out.push({
-      name: 'trunk', chain: spineChain(rig), keep: KEEP.trunk, muscleKeys: ['trunk'],
+      name: 'trunk', chain: spineChain(rig), keep: KEEP.trunk, muscleKeys: NO_MUSCLE_BULK,
       s0: -0.42, s1: 1.10, ns: 52, na: 30,
     });
     out.push({
-      name: 'head', bone: 'skull', keep: KEEP.head, muscleKeys: ['head'],
+      name: 'head', bone: 'skull', keep: KEEP.head, muscleKeys: NO_MUSCLE_BULK,
       s0: -1.60, s1: 1.50, ns: 22, na: 24,
     });
     /* A LIMB IS ONE PART. Drawn as two — an upper and a lower — each closes
@@ -1039,7 +1072,7 @@
   GK.field = {
     smin, sdCapsule, sdSegSE, sdBlobSE, nOffset,
     boneField, bonesFor, boneRadius, muscleField, volumeField, volumesFor, buildVolumes,
-    fatAt, alongTable, TRUNK_FAT, SOFT_EST, BONE_R, CORE, KEEP, stationAtHeight,
+    fatAt, alongTable, TRUNK_FAT, SOFT_EST, BONE_R, CORE, KEEP, NO_MUSCLE_BULK, stationAtHeight,
     radiusAlong, axisAt, ringAt, trimRange, spineChain, parts, fitFat, SITES,
   };
 })(window.GK = window.GK || {});

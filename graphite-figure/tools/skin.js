@@ -24,6 +24,10 @@ const out = a[3] || '/tmp/skin.png';
 const S = parseInt(a[4] || '900');
 const POSE = process.env.POSE ? JSON.parse(process.env.POSE) : {};
 const ONLY = process.env.ONLY || null;
+// NOMUSCLE=1 draws the same figure with the muscle layer switched off, which
+// is the only way to answer "is this layer helping?" with a picture rather
+// than with an opinion.
+if (process.env.NOMUSCLE) delete G.muscle;
 
 const fig = G.figure.buildFigure(seed);
 const rig = G.skel.solve(fig, POSE);

@@ -860,6 +860,69 @@
    *  every other limb bone's (10-skeleton.js: "the foot leaves the ankle
    *  forwards, not downwards"), so triceps surae's insertion end carries no
    *  width/depth spread of its own (see attachVolumes()/stationsFor()). */
+  /**
+   * Make every station's cross-section frame actually perpendicular to that
+   * station's own axis.
+   *
+   * WHY THIS IS NOT A TIDINESS. width and depth come from an anchor BONE's
+   * frame, on the documented assumption that frame[1]/frame[2] read as
+   * lateral and anterior for every bone anchored against. That holds for
+   * every bone in this skeleton but one: the scapula is a 55mm strut running
+   * medially and slightly down from the acromion to the glenohumeral centre,
+   * not a long bone standing up, so ITS frame[1] points very nearly along
+   * the deltoid's own length. Measured on the deltoid's own stations, the
+   * width axis and the segment axis came out at a dot product of -0.99 —
+   * parallel, where they must be perpendicular.
+   *
+   * A cross-section frame lying along the belly instead of across it does
+   * not make the belly slightly wrong. It transposes it: displacement along
+   * the muscle gets divided by the cross-section's small semi-axis and
+   * displacement across it by the long one, so the solid is a disc lying
+   * flat along the arm rather than a section cut across it. The field then
+   * reports "inside" out to 453mm from the midline — a shoulder is 217 —
+   * and the drawing grew a horizontal plank out of each shoulder, wider than
+   * the figure and with a squared-off end. Same family as the clavicle
+   * long-axis bug already fixed above, and found the same way: by measuring
+   * the frame rather than trusting the comment that describes it.
+   *
+   * The axis is the trustworthy part — it is the difference of two station
+   * centres and cannot be misread. So keep it, project the anchor's width
+   * onto the plane across it, and rebuild depth as the third leg. Where the
+   * anchor's width is SO nearly parallel to the axis that the residual is
+   * meaningless, fall back to world lateral and then world anterior, which
+   * are perpendicular to almost any belly's axis and are at worst a roll
+   * about an axis that is still correct.
+   */
+  function orthonormalise(stations) {
+    if (stations.length < 2) return;
+    for (let i = 0; i < stations.length; i++) {
+      const st = stations[i];
+      const prev = stations[Math.max(0, i - 1)], next = stations[Math.min(stations.length - 1, i + 1)];
+      const ax = vnorm(vsub(next.center, prev.center));
+      if (vlen(ax) < 1e-9) continue;
+      let w = vsub(st.width, vmul(ax, vdot(st.width, ax)));
+      if (vlen(w) < 0.2) {
+        // The anchor's width was useless here, but its DEPTH still carries
+        // the belly's anatomical roll, and roll is not free to choose: the
+        // section is elliptical, so turning it a quarter-turn points the
+        // long semi-axis where the short one belongs. Reaching straight for
+        // a world axis instead cost a 576mm spike out of one thigh and not
+        // the other, because the two sides fell back differently.
+        w = vcross(st.depth, ax);
+        if (vlen(w) < 0.2) {
+          for (const guess of [[0, 1, 0], [0, 0, 1], [1, 0, 0]]) {
+            w = vsub(guess, vmul(ax, vdot(guess, ax)));
+            if (vlen(w) > 0.2) break;
+          }
+        }
+      }
+      w = vnorm(w);
+      st.axis = ax;
+      st.width = w;
+      st.depth = vnorm(vcross(ax, w));
+    }
+  }
+
   function anchorAxes(rig, side, anchor) {
     const fb = rig.bones[boneId(anchor.frameBone, side)];
     const s = side === 'R' ? 1 : -1;
@@ -1261,6 +1324,7 @@
 
       stations.push({ t, center: C, width: vnorm(vlerp(oAxes.width, iAxes.width, t)), depth: depthDir, a, b, area });
     }
+    orthonormalise(stations);
     return { name: group.name, side, arch: group.arch, A, B, stretch, radiusScale, meanArea, peakArea: peak, lengthMm: Lmm, bp3d: group.bp3d, stations };
   }
 
@@ -1319,6 +1383,7 @@
     const cache = rig._muscleFieldCache || (rig._muscleFieldCache = {});
     let d = 1e9, any = false;
     for (const name in groups) {
+      if (process.env.MUSCLE_EXCLUDE && process.env.MUSCLE_EXCLUDE.split(',').indexOf(name) >= 0) continue; // TEMP diagnostic, remove before done
       const g = groups[name];
       if (g.touches.indexOf(base) < 0) continue;
       for (const s of (side ? [side] : ['L', 'R'])) {
