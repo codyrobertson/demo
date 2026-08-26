@@ -150,10 +150,12 @@
    multiplied by MM=1000 exactly once, at read time, same discipline as
    every other tools/fit-*.js in this project. Confirmed empirically, not
    from documentation: Thigh.HipJoint - Thigh.KneeJoint (both literal, both
-   in the Thigh segment's own frame) has norm 0.3629 in the file's raw
-   units; as METRES that is 362.9mm, a plausible adult functional femur
-   (hip-centre-to-knee-centre) length -- as centimetres (3.6m) or
-   millimetres (0.36mm) it is not. Angles (Pennationangle) are authored in
+   in the Thigh segment's own frame) has norm 0.36801 in the file's raw
+   units (this script's own segmentLengthsMm.femurFunctional, computed and
+   printed at the bottom of this file, not a separate hand calculation);
+   as METRES that is 368.01mm, a plausible adult functional femur
+   (hip-centre-to-knee-centre) length -- as centimetres (3.7m) or
+   millimetres (0.37mm) it is not. Angles (Pennationangle) are authored in
    DEGREES in the source (see the field's own `///< ... (degres)` comment)
    and are reported here in degrees, unlike every OpenSim-derived file in
    this project which stores radians -- called out explicitly in this
@@ -242,7 +244,7 @@
 
    ==========================================================================
    VERIFIED, NOT ASSUMED: HOW THIS HEADER'S CLAIMS WERE ACTUALLY CHECKED.
-   Every numeric claim above (the 0.3629m hip-knee distance, the Foot axis
+   Every numeric claim above (the 0.36801m hip-knee distance, the Foot axis
    signs, the Sign=+1/-1 source lines, the PCSAfactor formula) was read
    directly out of the files named above during the same session that wrote
    this script, via plain grep/sed against a `git clone --depth 1

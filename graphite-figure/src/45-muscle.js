@@ -675,11 +675,36 @@
     return { kind: 'local', vecR: unapply(restFrame(boneBase + '.R'), anat) };
   }
 
+  // restFrame()/unapply() derives vecR from the SOURCE model's own
+  // reference specimen (Rajagopal's own subject for femur/tibia/foot,
+  // MoBL-ARMS's own subject for humerus/forearm) — a rotation only, never
+  // scaled by any figure's own bone length, so vecR is still in THAT
+  // reference specimen's OWN millimetres. Reapplying it unscaled to a
+  // figure with a shorter or longer bone either buries the anchor inside
+  // the bone or pushes it past the next joint entirely — this project's own
+  // testing caught it as a bimodal failure (about half of sampled bodies)
+  // in tools/girthcheck.js, wherever a bone happened to sit far enough from
+  // the reference length. So every 'local'-kind vector is rescaled here, at
+  // query time, by THIS figure's own resolved bone length over the source
+  // model's reference length for that same bone — the same ratio
+  // GK.osim.scaleFactors() computes for Rajagopal-sourced points, done
+  // directly here because MoBL-ARMS-sourced ones (humerus, forearm) have no
+  // equivalent helper of their own.
+  const SOURCE_REF_LEN_MM = {
+    femur: 408.05, tibia: 396.47,       // data/rajagopal.json's own segmentLengthsMm
+    humerus: 290.72, forearm: 243.95,   // data/mobl-arms.json's own segmentLengthsMm
+  };
+
   function localMmClosureFor(lv, boneBase) {
     if (lv.kind === 'fraction') {
       return (rig, side) => { const b = rig.bones[boneBase + '.' + side]; const L = b ? b.len : 0; return [lv.along * L, lv.width * L, lv.depth * L]; };
     }
-    return () => lv.vecR;
+    const ref = SOURCE_REF_LEN_MM[boneBase];
+    return (rig, side) => {
+      const b = rig.bones[(boneBase === 'pelvis' ? 'pelvis' : boneBase + '.' + side)];
+      const k = (ref && b && b.len) ? b.len / ref : 1;
+      return vmul(lv.vecR, k);
+    };
   }
 
   function buildGroupFromClusters(name, arch, primaryJoint, touches,
