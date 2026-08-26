@@ -35,18 +35,30 @@
    sum into which group). That volume is scaled onto the actual figure being
    built by src/00-anthro.js's own measured girths, not guessed:
        V_target = V_ref * (L_target / L_ref) * (girth_target / girth_ref)^2
-   L is this group's own origin-to-insertion length (this figure's, and the
-   reference mesh's own bounding-box long axis); girth is the ANSUR
-   circumference of whichever limb segment the group sits on/acts on. Cross-
-   section area then falls out as A = V / L (see stationsFor() below) — no
+   L is a SKELETAL reference length (SOURCE_REF_LEN_MM: Rajagopal's or
+   MoBL-ARMS's own femur/tibia/humerus/forearm), not the reference mesh's
+   own bounding box — that box reaches further than this file's own
+   simplified anchors do (a real rectus femoris' box runs past the hip;
+   this file's own quadriceps starts at the femur, see LOWER_TOPOLOGY's own
+   comment on why), and comparing this figure's Lmm against a box built for
+   the longer span silently shrank every group — caught by this project's
+   own musclefit run, see localMmClosureFor()'s comment on the fix. Girth is
+   the ANSUR circumference of whichever limb segment the group sits
+   on/acts on (GIRTH_SITE below). Cross-section area then falls out as
+   A = V / L (see stationsFor() below, where this figure's own Lmm cancels
+   back out of that division — area does not shrink just because a pose
+   happens to shorten the sweep; that is bulge()'s job, applied after) — no
    free "how big should this be" scale constant survives this file at all.
    The one thing bodyparts3d's own header admits is approximate is the
    volume itself (a closed-mesh assumption that is not always exactly true);
-   this file does not pretend otherwise.
+   this file does not pretend otherwise, and tools/musclefit.js's own
+   report says plainly where the result still falls short and why (mostly:
+   twelve named groups is not a limb's complete musculature — the adductor
+   compartment at the thigh above all).
 
    ARCHITECTURE. A fusiform belly, a multipennate cap and a broad convergent
    sheet do not distribute the same volume the same way along a sweep, so
-   each group is tagged (ARCH_PROFILE below): fusiform (biceps brachii, the
+   each group is tagged (ARCH below): fusiform (biceps brachii, the
    forearm mass), bipennate (quadriceps), multipennate (deltoid, triceps
    brachii, triceps surae), convergent (pectoralis, latissimus, trapezius,
    gluteal — broad origin narrowing to a point), strap (the abdominal mass,
@@ -1117,7 +1129,26 @@
     const girthRef = site ? girthRefEstimate(site.girth, site.seg) : null;
     let meanArea;
     if (group.bp3d && site && girthRef) {
-      const Lref = Math.max(20, group.bp3d.lengthRefMm);
+      // Lref is the SKELETAL reference length (REF_SEGMENT_MM), not the
+      // bodyparts3d mesh's own bounding-box extent (group.bp3d.lengthRefMm,
+      // still carried for the "not wider than the real box" sanity check
+      // elsewhere). The two are not the same span: a real rectus femoris'
+      // bounding box reaches past the hip, while this file's own
+      // quadriceps anchor deliberately starts at the femur (see
+      // LOWER_TOPOLOGY's own comment on why) — comparing Lmm (measured on
+      // THAT shorter convention) against a bbox built for the longer one
+      // silently shrank the whole lower body by roughly the difference,
+      // which is exactly what this project's own musclefit run caught. The
+      // skeletal reference keeps both sides of the ratio on the same
+      // convention: how this file's own OWN anchors span the SAME named
+      // bone, on the reference specimen versus on the target figure. It
+      // also means Lmm itself cancels out of the area below (V/L undoes
+      // the L the volume was just scaled BY) — length is not free to drop
+      // from this formula, it is simply not double-counted in it, which is
+      // the correct behaviour: AREA should not shrink just because THIS
+      // pose's bulge happens to shorten the sweep; that is bulge()'s job
+      // (radiusScale, applied after this block), not volume-scaling's.
+      const Lref = Math.max(20, SOURCE_REF_LEN_MM[site.seg] || group.bp3d.lengthRefMm);
       const girthTarget = rig.figure.girth[site.girth];
       const volumeMm3 = group.bp3d.volMm3 * (Lmm / Lref) * Math.pow(girthTarget / girthRef, 2);
       meanArea = volumeMm3 / Lmm;
