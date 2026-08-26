@@ -64,6 +64,39 @@ const RING = PARTS.map((P) => {
 });
 
 // ---------------------------------------------------------------------------
+//  HANDS
+//  Solved by the other project and planted on the forearms' distal frames.
+//  There is no adaptor and no change of basis: both projects put +X along
+//  the bone running proximal to distal, so a forearm's distal frame already
+//  IS what solve(A, pose, mount) wants.
+// ---------------------------------------------------------------------------
+const HANDS = [];
+if (!ONLY) {
+  // Grow the hand to fit THIS body rather than the population: build one,
+  // measure its middle ray, and rebuild at the size that makes that ray the
+  // hand length this stature was sampled with. Measuring rather than
+  // assuming a constant keeps it right if the hand project's baseline moves.
+  const probe = G.anatomy.buildAnatomy(seed ^ 0x11, {});
+  const ray = probe.bones[2].lengths.reduce((x, y) => x + y, 0);
+  for (const side of ['L', 'R']) {
+    const mount = G.skel.wristMount(rig, side);
+    if (!mount) continue;
+    const HA = G.anatomy.buildAnatomy(seed ^ (side === 'L' ? 0x11 : 0x22), {
+      chirality: side === 'L' ? 'left' : 'right',
+      size: probe.size * fig.m.handlength / ray,
+    });
+    const pose = G.pose.preset(HA, 'rest');
+    HANDS.push({
+      side, anatomy: HA, pose, mount,
+      // Contacts off, so the pose the renderer draws is the pose solved
+      // here — otherwise the framing pass below measures a hand the plate
+      // does not draw.
+      rig: G.rig.solve(HA, pose, { origin: mount.origin, frame: mount.frame }),
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
 //  VIEW — measure the real surface rather than the bones, or the drawing gets
 //  clipped exactly where the body is widest
 // ---------------------------------------------------------------------------
@@ -78,6 +111,20 @@ for (const P of PARTS) {
       const p = view.px(q);
       x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]);
       y0 = Math.min(y0, p[1]); y1 = Math.max(y1, p[1]);
+    }
+  }
+}
+for (const H of HANDS) {
+  for (const dg of H.rig.digits) {
+    for (const sg of dg.segs) {
+      if (!sg.rendered) continue;
+      for (const q of [sg.A, sg.B]) {
+        const p = view.px(q);
+        // a fingertip's pulp sits outside its own segment endpoint, and a
+        // drawing clipped at the fingertips is the classic way to find that out
+        x0 = Math.min(x0, p[0] - 12); x1 = Math.max(x1, p[0] + 12);
+        y0 = Math.min(y0, p[1] - 12); y1 = Math.max(y1, p[1] + 12);
+      }
     }
   }
 }
@@ -121,6 +168,38 @@ for (const P of PARTS) {
     prev = ring;
   }
 }
+
+// Every solid has to be in the field before ANY outline is tested against
+// it, so the hands are BUILT here and PAINTED later: build writes depth,
+// draw makes marks. Done the other way round, the body's outline would run
+// straight through the hand in front of it.
+const fitPin = { scale: view.scale, cx: view.cx, cy: view.cy };
+// how many pixels of plate this body's hand actually gets
+const handPx = fig.m.handlength * view.scale;
+const fine = handPx >= 190;
+const HAND_STATE = HANDS.map((H, i) => ({
+  seed, anatomy: H.anatomy, pose: H.pose, contacts: false,
+  mount: { origin: H.mount.origin, frame: H.mount.frame },
+  view: { az, el, roll: 0 }, fit: fitPin,
+  df, idBase: 1000 + i * 100, graphite: null,
+  style: { grade: 3, tone: 1, wobble: 1, ghost: 0, search: 0 },
+  // At full-figure scale a hand is eighty pixels across. Everything the
+  // hand project knows how to draw INSIDE its own outline — prints, ridges,
+  // creases, folds, nails, tendons — is finer than that, and drawn anyway
+  // it is not detail but a grey smudge where a hand should be. So the
+  // interior is spent only when there are pixels to spend it in, measured
+  // against the hand's own size on this plate rather than against the
+  // plate's size, which is what makes the rule hold at any framing.
+  detail: { print: 0, ridge: 0, lattice: 0, hair: 0, vein: 0 },
+  layers: fine ? { print: false, ridge: false, hair: false, vein: false, hatch: false, model: false }
+    : {
+      print: false, ridge: false, hair: false, vein: false, hatch: false, model: false,
+      crease: false, fold: false, nail: false, palmcrease: false, tendon: false, bone: false,
+    },
+  quality: 1,
+}));
+const HAND_R = HAND_STATE.map(() => new RE.Renderer(S, S));
+HAND_STATE.forEach((st, i) => { st.built = HAND_R[i].build(st); });
 
 // ---------------------------------------------------------------------------
 //  SILHOUETTES — the border of what each part covers, not a construction
@@ -169,11 +248,17 @@ for (const P of PARTS) {
   }
 }
 
+// ...and now the hands, into the same sheet and against the field that
+// already holds the body.
+HAND_STATE.forEach((st, i) => { st.graphite = g; HAND_R[i].draw(st); });
+
 const px = g.resolve({ paper: [244, 241, 232], ink: [26, 25, 23], k: 1.55, gamma: 1 });
 writePNG(out, px, S, S);
 
 console.log('seed ' + seed + '  stature ' + fig.stature.toFixed(0) + 'mm  ' +
-  PARTS.length + ' parts, ' + drawn + ' runs' + (empty ? ', ' + empty + ' traced to nothing' : ''));
+  PARTS.length + ' parts, ' + drawn + ' runs' + (empty ? ', ' + empty + ' traced to nothing' : '') +
+  (HANDS.length ? ', ' + HANDS.length + ' hands at ' + handPx.toFixed(0) + 'px' +
+    (fine ? '' : ' (outline only)') : ''));
 console.log('muscle layer: ' + (G.muscle ? 'loaded' : 'ABSENT — the soft layer is standing in for it'));
 console.log('soft tissue each region needed, to reach its measured girth:');
 for (const r of fit.report) {

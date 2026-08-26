@@ -352,9 +352,17 @@
   }
 
   /** stable part identities: one per rendered segment, one for the palm */
-  function buildIds(rig) {
-    const ids = { palm: 0, digit: [] };
-    let next = 1;
+  /**
+   * `base` offsets every identity, which is what lets a hand share a depth
+   * field with something that is not a hand. Identity is the whole mechanism
+   * that stops a part occluding its own silhouette, so two rigs writing into
+   * one field must not collide — a figure's thigh and a hand's palm both
+   * numbered 0 would each bury the other's outline.
+   */
+  function buildIds(rig, base) {
+    base = base || 0;
+    const ids = { palm: base, digit: [] };
+    let next = base + 1;
     for (let d = 0; d < 5; d++) {
       const row = [];
       for (const sg of rig.digits[d].segs) {
@@ -363,7 +371,7 @@
       }
       ids.digit.push(row);
     }
-    rig.palm.pid = 0;
+    rig.palm.pid = ids.palm;
     if (rig.ball) ids.ball = next++;
     ids.count = next;
     return ids;
@@ -546,10 +554,18 @@
     }
 
     build(state) {
-      const A = this.anatomyFor(state.seed);
+      // A caller that has already built an anatomy — because it needs a
+      // particular chirality, or a hand grown to a particular body's
+      // measured hand length — hands it in rather than having one drawn
+      // from the seed.
+      const A = state.anatomy || this.anatomyFor(state.seed);
       const pose = state.contacts === false ? state.pose
         : this.settle(A, state.pose, (state.quality || 0) >= 1 ? 20 : 10);
-      const rig = RG.solve(A, pose);
+      // A mount plants this hand on another skeleton's wrist. solve() has
+      // taken one since the figure project needed it; passing it through
+      // here is what lets the full renderer draw a mounted hand rather than
+      // only a free-standing one.
+      const rig = RG.solve(A, pose, state.mount || null);
       // Something the hand is holding rides on the rig, so everything that
       // walks the scene - the framing, the depth field, the contours - meets
       // it the same way it meets the hand.
@@ -622,8 +638,12 @@
 
     _build2(A, pose, rig, view, state) {
       // ---- depth field ----------------------------------------------------
-      const ids = buildIds(rig);
-      const df = new DepthField(this.w, this.h, (state.quality || 0) >= 1 ? 1 : 2);
+      const ids = buildIds(rig, state.idBase || 0);
+      // A caller that is drawing a whole body passes its own field in, so the
+      // body occludes the hand and the hand occludes the body. Note it must
+      // already hold the body when the hand's contours are tested, which is
+      // why build() and draw() are separable below.
+      const df = state.df || new DepthField(this.w, this.h, (state.quality || 0) >= 1 ? 1 : 2);
       rasterise(rig, view, df, undefined, ids);
 
       // ---- feature curves -------------------------------------------------
@@ -651,15 +671,24 @@
       return { A, rig, view, df, ids, curves, layers: L };
     }
 
+    /**
+     * `state.built` skips the build and paints a scene that was built
+     * earlier — which is the only way to interleave two rigs correctly: every
+     * solid has to be in the depth field before ANY silhouette is tested
+     * against it, so a caller builds both, then paints both.
+     * `state.graphite` paints into a sheet that already has marks on it.
+     */
     draw(state) {
       const t0 = Date.now();
-      const built = this.build(state);
+      const built = state.built || this.build(state);
       const { rig, view, df, ids, curves, layers } = built;
       const A = built.A;
       const stl = state.style || {};
       const q = state.quality === undefined ? 1 : state.quality;
       const ss = q >= 2 ? 2 : 1;
-      if (!this.g || this.g.w !== this.w || this.g.h !== this.h || this.g.ss !== ss || this.g.seed !== state.seed) {
+      if (state.graphite) {
+        this.g = state.graphite;
+      } else if (!this.g || this.g.w !== this.w || this.g.h !== this.h || this.g.ss !== ss || this.g.seed !== state.seed) {
         this.g = new PEN.Graphite(this.w, this.h, ss, state.seed);
       } else {
         this.g.clear();
@@ -873,6 +902,15 @@
       // A rail that leaps across the picture is not one line: a digit turning
       // through the view hands its silhouette from one flank to the other.
       const jumpD = Math.max(12, this.w * 0.030);
+      /** how many pixels across a projected construction actually is */
+      const ringSpanPx = (pts) => {
+        let a = 1e9, b = -1e9, c = 1e9, e = -1e9;
+        for (const p of pts) {
+          if (p[0] < a) a = p[0]; if (p[0] > b) b = p[0];
+          if (p[1] < c) c = p[1]; if (p[1] > e) e = p[1];
+        }
+        return Math.max(b - a, e - c);
+      };
       const fw = RG.firstWeb(rig, view);
       // Where the web meets the thumb, the thumb's boundary is not free: it
       // runs into tissue that belongs to both. The union outline closes
@@ -932,6 +970,13 @@
         // drawn, and still only over the arc where the surface grazes.
         const rings = RG.knuckleRings(rig, view, d);
         for (let ri = 0; ri < rings.length; ri++) {
+          // A construction smaller than the mark that draws it is not detail.
+          // A pencil line here is about a pixel wide and wobbles by about
+          // another, so a knuckle ring eight pixels across arrives as a
+          // blob — and five blobs per digit is what a hand looks like when
+          // it is drawn inside a whole figure's plate rather than filling
+          // its own. Measure the ring's own screen span and let it go.
+          if (ringSpanPx(rings[ri]) < 8) continue;
           emit(rings[ri], F.st(F.S.contour, { tone: 0.95, phase: d * 37 + 40 + ri }),
             { noSearch: true, noGhost: true, selfTest: true, maxJump: jumpD, src: 'knuckle' });
         }
