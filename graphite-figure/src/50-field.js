@@ -150,13 +150,35 @@
    * three already-normalised coordinates. One place, because the segment and
    * the blob differ only in where their axial coordinate comes from.
    */
+  // sqrt(a²+b²) rather than Math.hypot throughout this file and the muscle
+  // module: hypot's overflow-safe rescaling costs ~4x, and every coordinate
+  // here is a normalised ratio or a millimetre — nowhere near overflow.
+  //
+  // The gradient (see WHY THE GRADIENT below) shares its powers with the
+  // radius instead of calling Math.pow three more times: with s = uⁿ + vⁿ
+  // already in hand, e^(1-n) is e/s and u^(n-1) is uⁿ/u. The u = 0 limit of
+  // that quotient is 0, which is right for every exponent above 1 — and both
+  // callers pass |coordinates| and author exponents of 2 and up, which
+  // nOffset only ever pulls DOWN toward 2, never below what was written.
   function seDist(u, v, w, ay, az, aw, n) {
-    const e = n === 2 ? Math.hypot(u, v)
-      : Math.pow(Math.pow(u, n) + Math.pow(v, n), 1 / n);
-    const q = Math.hypot(e, w);
+    let e, k, pu, pv;
+    if (n === 2) {
+      e = Math.sqrt(u * u + v * v);
+    } else {
+      const un = Math.pow(u, n), vn = Math.pow(v, n), s = un + vn;
+      e = Math.pow(s, 1 / n);
+      pu = u > 1e-12 ? un / u : 0;
+      pv = v > 1e-12 ? vn / v : 0;
+      k = s > 1e-12 ? e / s : 0;
+    }
+    const q = Math.sqrt(e * e + w * w);
     if (q < 1e-6) return -Math.min(ay, az, aw);
-    const ge = gradSE(u, v, e, ay, az, n) * (e / q);
-    return (q - 1) / Math.hypot(ge, w / (q * aw));
+    let ge;
+    if (e < 1e-6) ge = e / (Math.min(ay, az) * q);
+    else if (n === 2) { const gu = u / ay, gv = v / az; ge = Math.sqrt(gu * gu + gv * gv) / q; }
+    else { const gu = pu / ay, gv = pv / az; ge = k * Math.sqrt(gu * gu + gv * gv) * (e / q); }
+    const gw = w / (q * aw);
+    return (q - 1) / Math.sqrt(ge * ge + gw * gw);
   }
 
   /* WHY THE GRADIENT. An implicit surface scaled anisotropically does not
@@ -169,13 +191,8 @@
 
      For an implicit F, the distance to F = 0 is F / |grad F| to first order,
      and that is exact enough here because the root-finder only ever evaluates
-     near the surface. This is |grad| for the superellipse. */
-  function gradSE(u, v, e, ay, az, n) {
-    if (e < 1e-6) return 1 / Math.min(ay, az);
-    if (n === 2) return Math.hypot(u / ay, v / az) / e;
-    const k = Math.pow(e, 1 - n);
-    return k * Math.hypot(Math.pow(u, n - 1) / ay, Math.pow(v, n - 1) / az);
-  }
+     near the surface. The |grad| itself is computed inside seDist above,
+     from the same powers as the radius. */
 
   /**
    * A superellipsoid: a superelliptical cross-section that also closes off
@@ -685,14 +702,23 @@
    * the humerus and forearm parts into one arm silently dropped every arm
    * muscle, until this took a list.
    */
-  function muscleField(rig, P, part, f) {
+  /* `skipAbove` is an exactness threshold, not a heuristic: the polynomial
+     smin() is EXACTLY min() once its arguments differ by more than its blend
+     width, so a caller about to smin() this result against a value it already
+     holds can pass that value plus the blend width, and any lower bound at or
+     beyond it proves the full field cannot matter. The bound below is the
+     same station-sphere arithmetic as the guard — which had to be computed
+     every call anyway — moved in front of the expensive part. */
+  function muscleField(rig, P, part, f, skipAbove) {
     if (!GK.muscle || !GK.muscle.fieldAt) return 1e9;
     const keys = part.muscleKeys || [part.name];
     if (!keys.length) return 1e9;   // this part's shape is measured, not modelled
+    const lb = part._mlb || (part._mlb = muscleBound(rig, keys));
+    const bound = lb.length ? boundOf(lb, P, f || 0) : -1e9;
+    if (skipAbove !== undefined && bound >= skipAbove) return bound;
     let d = 1e9;
     for (const k of keys) d = Math.min(d, GK.muscle.fieldAt(rig, P, k, f || 0));
-    const lb = part._mlb || (part._mlb = muscleBound(rig, keys));
-    return lb.length ? Math.max(d, boundOf(lb, P, f || 0)) : d;
+    return Math.max(d, bound);
   }
 
   /* A LOWER BOUND ON A MUSCLE'S OWN DISTANCE, ENFORCED.
@@ -730,7 +756,9 @@
           let st;
           try { st = GK.muscle._internal.stationsFor(rig, side, g); } catch (e) { continue; }
           if (!st || !st.stations) continue;
-          for (const q of st.stations) out.push({ c: q.center, r: Math.max(q.a, q.b) });
+          for (const q of st.stations) {
+            out.push({ x: q.center[0], y: q.center[1], z: q.center[2], r: Math.max(q.a, q.b) });
+          }
         }
       }
     }
@@ -738,8 +766,11 @@
   }
   function boundOf(lb, P, f) {
     let d = 1e9;
+    const px = P[0], py = P[1], pz = P[2];
     for (let i = 0; i < lb.length; i++) {
-      const t = vlen(vsub(P, lb[i].c)) - lb[i].r - f;
+      const b = lb[i];
+      const dx = px - b.x, dy = py - b.y, dz = pz - b.z;
+      const t = Math.sqrt(dx * dx + dy * dy + dz * dz) - b.r - f;
       if (t < d) d = t;
     }
     return d;
@@ -930,7 +961,7 @@
       // ON each solid, wrapped before they are unioned — which is also the
       // right order, since subcutaneous tissue bridges fattened forms
       const solid = smin(boneField(rig, P, bones, fat), volumeField(vols, P, fat), fascia);
-      return smin(solid, muscleField(rig, P, part, fat), fascia);
+      return smin(solid, muscleField(rig, P, part, fat, solid + fascia), fascia);
     };
     /* THE FIRST CROSSING, NOT ANY CROSSING.
        Skin is the first surface you meet walking out from a bone. That
@@ -974,8 +1005,12 @@
       r += Math.max(1.5, Math.min(-v * 0.75, stepCap));
     }
     if (hi < 0) return hi0;    // solid all the way out; nothing to find
-    // 14 halvings of a bracket a few millimetres wide is well under a micron
-    for (let i = 0; i < 14; i++) {
+    /* Halve until the bracket is two hundredths of a millimetre — an order
+       under anything downstream can see (a pixel is ~2mm, a girth sums 28 of
+       these). The bracket entering here is usually the march's 1.5mm floor
+       step, so this is ~7 halvings; the fixed 14 it replaces spent half the
+       render buying microns. */
+    for (let i = 0; i < 14 && hi - lo > 0.02; i++) {
       const mid = (lo + hi) * 0.5;
       if (f(mid) < 0) lo = mid; else hi = mid;
     }
@@ -1291,18 +1326,43 @@
       return L;
     };
 
-    // Each site is one monotone 1-D problem: thicker soft tissue, longer
-    // perimeter. Bisection, and no interaction between sites to worry about.
+    /* Each site is one monotone 1-D problem: thicker soft tissue, longer
+       perimeter — and NEAR-LINEAR, since a convex ring's perimeter grows at
+       about 2π per unit of thickness. Every evaluation here is a full
+       28-ray measure, so the solver's iteration count is most of what this
+       whole function costs. Regula falsi rides the linearity to the root in
+       three or four measures where blind halving of [0,140] took sixteen;
+       the Illinois halving of a stale endpoint keeps the guarantee when the
+       cut cuts in and the curve is not linear after all. The bracket is held
+       throughout, so this can only land tighter than the halvings did. */
     const solve = (st, set) => {
       const want = fig.girth[st.girth];
+      /* A null measure is a station with NO ring at this thickness — at zero
+         soft tissue the buttock station can sit below everything solid, so
+         the bare trunk simply is not there yet. That is a sign without a
+         magnitude: the thickness is too small, and no residual can be put on
+         it. -Infinity says exactly that — the secant through it is NaN, the
+         guard below turns NaN into a plain halving, and the solver walks in
+         by bisection until the form exists and has a girth to regress on. A
+         large finite sentinel here was the first version, and it aimed every
+         secant a hairsbreadth from the far endpoint: three seeds in two
+         hundred solved the hip to the 140mm region and reported it 67% over. */
+      const at = (t) => { set(t); const g = measure(st); return g === null ? -Infinity : g - want; };
       let lo = 0, hi = 140;
-      const at = (t) => { set(t); const g = measure(st); return g === null ? -1e9 : g - want; };
-      if (at(hi) < 0) { set(hi); return { t: hi, got: measure(st), want, capped: true }; }
-      for (let i = 0; i < 16; i++) {
-        const mid = (lo + hi) * 0.5;
-        if (at(mid) < 0) lo = mid; else hi = mid;
+      let flo = at(lo), fhi;
+      if (flo >= 0) { set(0); return { t: 0, got: measure(st), want }; }
+      fhi = at(hi);
+      if (fhi < 0) { set(hi); return { t: hi, got: measure(st), want, capped: true }; }
+      let side = 0;
+      for (let i = 0; i < 16 && hi - lo > 0.01; i++) {
+        let t = (lo * fhi - hi * flo) / (fhi - flo);
+        if (!isFinite(t) || t <= lo || t >= hi) t = (lo + hi) * 0.5;
+        const ft = at(t);
+        if (ft < 0) { lo = t; flo = ft; if (side < 0) fhi *= 0.5; side = -1; }
+        else { hi = t; fhi = ft; if (side > 0) flo *= 0.5; side = 1; }
+        if (Math.abs(ft) < 0.05) break;
       }
-      const t = (lo + hi) * 0.5;
+      const t = isFinite(flo) && -flo <= fhi ? lo : hi;   // the endpoint whose girth is nearer
       set(t);
       return { t, got: measure(st), want };
     };

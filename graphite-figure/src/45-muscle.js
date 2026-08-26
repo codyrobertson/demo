@@ -239,19 +239,33 @@
    *  axial cap. Same gradient-corrected construction as src/50-field.js's
    *  sdSegSE with n fixed at 2 (an ellipse, never a superellipse — the
    *  header's whole point is the section is measured, not a guessed
-   *  exponent). */
-  function sdSegE(P, A, B, u, v, w, a0, b0, a1, b1) {
-    const ab = vsub(B, A), ap = vsub(P, A);
-    const t = clamp01(vdot(ap, ab) / Math.max(1e-9, vdot(ab, ab)));
-    const c = vmad(A, ab, t);
-    const d = vsub(P, c);
-    const ay = Math.max(1, lerp(a0, a1, t)), az = Math.max(1, lerp(b0, b1, t)), aw = Math.min(ay, az);
-    const uu = vdot(d, u) / ay, vv = vdot(d, v) / az, ww = vdot(d, w) / aw;
-    const e = Math.hypot(uu, vv);
-    const q = Math.hypot(e, ww);
-    if (q < 1e-6) return -Math.min(ay, az, aw);
-    const ge = (e < 1e-6 ? 1 / Math.min(ay, az) : Math.hypot(uu / ay, vv / az) / e) * (e / q);
-    return (q - 1) / Math.hypot(ge, ww / (q * aw));
+   *  exponent).
+   *
+   *  Scalar in and out, over a precomputed segment record (see segsFor).
+   *  This is the single hottest function in a render — every ray's every
+   *  field evaluation walks every belly segment of its part — so the axes
+   *  and the segment vector are built once per rig rather than re-derived
+   *  per call, and no vector is allocated here at all. sqrt(a²+b²) rather
+   *  than Math.hypot for the same reason: the ~4x cost of hypot's overflow
+   *  guard buys nothing at millimetre scale. */
+  function sdSegC(px, py, pz, S, f) {
+    const apx = px - S.ax, apy = py - S.ay, apz = pz - S.az;
+    const t = clamp01((apx * S.bx + apy * S.by + apz * S.bz) / S.ab2);
+    const dx = apx - S.bx * t, dy = apy - S.by * t, dz = apz - S.bz * t;
+    const ay = Math.max(1, S.a0 + (S.a1 - S.a0) * t + f);
+    const az = Math.max(1, S.b0 + (S.b1 - S.b0) * t + f);
+    const aw = Math.min(ay, az);
+    const uu = (dx * S.ux + dy * S.uy + dz * S.uz) / ay;
+    const vv = (dx * S.vx + dy * S.vy + dz * S.vz) / az;
+    const ww = (dx * S.wx + dy * S.wy + dz * S.wz) / aw;
+    const e2 = uu * uu + vv * vv;
+    const q = Math.sqrt(e2 + ww * ww);
+    if (q < 1e-6) return -aw;
+    let ge;
+    if (e2 < 1e-12) ge = Math.sqrt(e2) / (aw * q);
+    else { const gu = uu / ay, gv = vv / az; ge = Math.sqrt(gu * gu + gv * gv) / q; }
+    const gw = ww / (q * aw);
+    return (q - 1) / Math.sqrt(ge * ge + gw * gw);
   }
 
   // =========================================================================
@@ -1501,9 +1515,9 @@
 
     const oAxes = anchorAxes(rig, side, group.origin);
     const iAxes = anchorAxes(rig, side, group.insertion);
-    // A width/depth AXIS, not a signed vector: sdSegE reads it only through
-    // vdot(...) inside a hypot() (see uu/vv there), so flipping either one's
-    // sign changes nothing about the ellipse it describes. Lerping between
+    // A width/depth AXIS, not a signed vector: sdSegC reads it only through
+    // a dot product that is then squared (see uu/vv there), so flipping
+    // either one's sign changes nothing about the ellipse it describes. Lerping between
     // two independently-built bone frames is not sign-free, though —
     // vlerp(oAxes.width, iAxes.width, t) passes through the zero vector at
     // whatever t the two nearly cancel, and vnorm of a near-zero vector is
@@ -1638,15 +1652,25 @@
   // =========================================================================
   const FASCIA_K = 8; // mm — how readily two groups sharing a part blend into one form; small, so distinct bellies still show a groove
 
-  function fieldAt(rig, P, part, f) {
-    f = f || 0;
+  /* The flat list of belly segments one part key sees, resolved ONCE per
+     rig. What sdSegC needs per segment — the blended width and depth axes,
+     the unit segment vector, the squared length — was being rebuilt from
+     the stations on every field evaluation, which is three normalisations
+     and their allocations per segment per ray step, none of which change
+     between evaluations. The list keeps the exact group -> side -> segment
+     order of the loop it replaces, because the smin fold below is not
+     associative and the surface it accumulates should not move for a
+     caching change. Cached beside stationsFor's own entries, so it
+     invalidates with them or not at all. */
+  function segsFor(rig, part) {
+    const cache = rig._muscleFieldCache || (rig._muscleFieldCache = {});
+    const ck = '#segs:' + part;
+    if (cache[ck] !== undefined) return cache[ck];
     let groups;
-    try { groups = availableGroups(); } catch (e) { return 1e9; }
+    try { groups = availableGroups(); } catch (e) { return (cache[ck] = null); }
     const base = part.replace(/\.[LR]$/, '');
     const side = /\.[LR]$/.test(part) ? part.slice(-1) : null;
-
-    const cache = rig._muscleFieldCache || (rig._muscleFieldCache = {});
-    let d = 1e9, any = false;
+    const segs = [];
     for (const name in groups) {
       const g = groups[name];
       if (g.touches.indexOf(base) < 0) continue;
@@ -1655,17 +1679,35 @@
         let st = cache[key];
         if (st === undefined) { st = stationsFor(rig, s, g); cache[key] = st; }
         if (!st) continue;
-        any = true;
         for (let i = 0; i < st.stations.length - 1; i++) {
           const s0 = st.stations[i], s1 = st.stations[i + 1];
-          const w = vnorm(vadd(s0.width, s1.width));
-          const dep = vnorm(vadd(s0.depth, s1.depth));
-          const ax = vnorm(vsub(s1.center, s0.center));
-          d = smin(d, sdSegE(P, s0.center, s1.center, w, dep, ax, s0.a + f, s0.b + f, s1.a + f, s1.b + f), 3);
+          const A = s0.center, B = s1.center;
+          const u = vnorm(vadd(s0.width, s1.width));
+          const v = vnorm(vadd(s0.depth, s1.depth));
+          const w = vnorm(vsub(B, A));
+          const bx = B[0] - A[0], by = B[1] - A[1], bz = B[2] - A[2];
+          segs.push({
+            ax: A[0], ay: A[1], az: A[2], bx, by, bz,
+            ab2: Math.max(1e-9, bx * bx + by * by + bz * bz),
+            ux: u[0], uy: u[1], uz: u[2],
+            vx: v[0], vy: v[1], vz: v[2],
+            wx: w[0], wy: w[1], wz: w[2],
+            a0: s0.a, b0: s0.b, a1: s1.a, b1: s1.b,
+          });
         }
       }
     }
-    return any ? d : 1e9;
+    return (cache[ck] = segs.length ? segs : null);
+  }
+
+  function fieldAt(rig, P, part, f) {
+    f = f || 0;
+    const segs = segsFor(rig, part);
+    if (!segs) return 1e9;
+    const px = P[0], py = P[1], pz = P[2];
+    let d = 1e9;
+    for (let i = 0; i < segs.length; i++) d = smin(d, sdSegC(px, py, pz, segs[i], f), 3);
+    return d;
   }
 
   GK.muscle = {
