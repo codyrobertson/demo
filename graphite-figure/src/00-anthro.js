@@ -191,12 +191,32 @@
     s.neck = m.cervicaleheight;                       // absolute height, split below
     s.spineC7toTroch = m.cervicaleheight - m.trochanterionheight;
     s.skull = m.stature - m.cervicaleheight;
-    // EST: the sacral base is not palpated in ANSUR. Taken at the iliac
-    // crest height, which puts L5-S1 within about a centimetre on an adult.
-    s.sacrumHeight = m.iliocristaleheight;
-    s.lumbar = (m.tenthribheight - m.iliocristaleheight);
-    s.thoracic = (m.cervicaleheight - m.tenthribheight);
-    s.lumbarSeg = s.lumbar / 5;
+    /* WHICH VERTEBRA EACH LANDMARK IS AT. Getting this wrong once produced a
+     * figure that was a slab, and it is worth writing down why.
+     *
+     * The first pass read tenth-rib height as T10 and iliac-crest height as
+     * the sacral base, and called the gap between them the lumbar spine. On a
+     * 1623mm body that gap is 63mm — five vertebrae in 63mm, 12mm each, a
+     * third of what a lumbar vertebra is. The whole trunk concertina'd into
+     * the bottom fifth of itself.
+     *
+     * Neither landmark is where it sounds like it is. ANSUR's tenth-rib
+     * height is the LOWEST POINT of the tenth rib on the flank, and the rib
+     * angles down and forward from its vertebra, so it hangs to about L2-L3.
+     * The iliac crest is the top of the ilium, at about L4. So the gap is two
+     * lumbar segments, not five.
+     *
+     * Read that way the numbers come out right and say so: 31.5mm per lumbar
+     * segment and 26.3mm per thoracic, against real vertebral body-plus-disc
+     * heights of roughly 30mm and 25mm. That agreement is the check —
+     * tools/checkfit.js asserts it rather than trusting this comment.
+     */
+    s.lumbarSeg = (m.tenthribheight - m.iliocristaleheight) / 2;
+    // the crest sits at about L4, so the sacral base is a segment and a half
+    // below it. EST, and the only estimate in this block.
+    s.sacrumHeight = m.iliocristaleheight - 1.5 * s.lumbarSeg;
+    s.lumbar = 5 * s.lumbarSeg;
+    s.thoracic = m.cervicaleheight - (s.sacrumHeight + s.lumbar);
     s.thoracicSeg = s.thoracic / 12;
     // EST: cervicale is C7's spinous process; the atlas sits roughly at the
     // level of the tragion, so the cervical column is taken between them.
@@ -215,8 +235,11 @@
       thigh: m.thighcircumference, lowerThigh: m.lowerthighcircumference,
       calf: m.calfcircumference, ankle: m.anklecircumference,
       biceps: m.bicepscircumferenceflexed, forearm: m.forearmcircumferenceflexed,
-      wrist: m.wristcircumference, shoulder: m.shouldercircumference,
-      head: m.headcircumference,
+      wrist: m.wristcircumference, head: m.headcircumference,
+      // shoulder circumference is deliberately absent: it is not in the
+      // fitted column set, and a girth that silently reads undefined is
+      // worse than one that is not offered. bideltoid breadth covers the
+      // shoulder's width for a loft.
       chestBreadth: m.chestbreadth, chestDepth: m.chestdepth,
       waistBreadth: m.waistbreadth, waistDepth: m.waistdepth,
       hipBreadth: m.hipbreadth, bideltoid: m.bideltoidbreadth,
