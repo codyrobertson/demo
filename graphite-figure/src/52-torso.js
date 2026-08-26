@@ -231,7 +231,7 @@ for (const side of ['L', 'R']) {
   const Mi = [Med[0] - 40, medY * 1.06, Med[2] - 4];
   const Ai = [Acr[0] - 48, Acr[1] * 0.92, Acr[2] - 8];
   const Fi = frameAlong(Mi, Ai, [1, 0, 0]);
-  const ti = m.interscyeii * 0.075;
+  const ti = m.interscyeii * 0.056;
   put('trunk', (P, f) => sdSegSE(P, Mi, Ai, Fi,
     ti * 0.85, ti * 0.55, ti * 1.0, ti * 0.5, 2.2, ti * 0.4, f));
 }
@@ -261,7 +261,7 @@ for (const sgn of [1, -1]) {
     const B = vmad(vmad(s1.b.A, fr1[1], sgn * s1.lat), fr1[2], -s1.post);
     const F = frameAlong(A, B, [1, 0, 0]);
     const cap = i === 0 ? 8 : i === STA.length - 2 ? 8 : undefined;
-    put('trunk', (P, f) => sdSegSE(P, A, B, F, 15, 11, 15, 11, 2.4, cap, f));
+    put('trunk', (P, f) => sdSegSE(P, A, B, F, 13, 9, 13, 9, 2.4, cap, f));
   }
 }
 

@@ -103,12 +103,30 @@
        they don't, on every seed, rather than being a claim about the
        numbers below that nobody re-derives.
 
-       browH doubles as the widest point of the vault AND the height
-       fitFat() samples for head circumference (SITES has head at s=0.16,
-       and s is a fraction of tragion-to-vertex on the skull bone, so
-       0.16 * up is exactly this height) — one fewer place for the two to
-       silently disagree. */
-    const browH = up * 0.16;
+       browH is NOT put at 0.16 * up, tempting as that is — SITES has
+       head circumference sampled at exactly s=0.16 of tragion-to-vertex
+       (50-field.js, read-only here), and putting the brow there too
+       looked like one fewer place for two numbers to silently disagree.
+       It is the opposite: the ear's canon span runs from browH down to
+       noseBaseH, so browH is also the ear's own top, and sdSegSE's
+       t = project(P, A, B) means a horizontal ring exactly AT that
+       height cuts through the ear near its full cross-section rather
+       than its tapered tip — the tilt means the ear is still close to
+       full width at points that project to t=1, not just beyond it.
+       With the two heights equal, fitFat measured the ear's girth
+       instead of the skull's at every seed alike (not a one-off
+       coincidence — the two numbers are both fixed fractions of up, so
+       either they always collide or never do) and solved for far too
+       little soft tissue: 5 of 6 seeds failed girthcheck against 1
+       before this file was touched. Keeping the two heights apart by
+       more than the ear's own cap radius (cy*0.10, about a centimetre)
+       is the right idea and 0.10 * up (6-9mm of headroom) was not
+       enough of it in practice — 2 of 6 seeds still failed, because the
+       ear's axis is TILTED, so points off that axis project to t=1 from
+       farther away than a straight capsule's would. 0.05 * up (11-13mm
+       of headroom across the three test seeds) is what girthcheck
+       actually wants. */
+    const browH = up * 0.08;
     const eyeH = (up - dn) * 0.5;                    // canon: mid vertex-to-chin
     const noseBaseH = (browH - dn) * 0.5;            // canon: halfway brow-to-chin
     const mouthH = -dn + (noseBaseH + dn) / 3;        // canon: a third up from chin

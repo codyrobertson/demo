@@ -221,32 +221,30 @@ for (const side of ['L', 'R']) {
   const ti = rig.bones['tibia.' + side], f = rig.bones['foot.' + side];
   if (!ti || !f) continue;
   const post = vmul(ti.frame[2], -1);
-  const medLeg = vmul(ti.frame[1], ti.sign);
   const tibiaLen = fig.len.tibia || ti.len;
   const tendonLen = tibiaLen * 0.36;                  // EST
-  const w0 = m.bimalleolarbreadth * 0.115;            // the myotendinous junction
-  const w1 = m.bimalleolarbreadth * 0.075;            // the tendon's own narrowest point
-  const w2 = m.bimalleolarbreadth * 0.145;            // its footprint on the calcaneus
+  const w0 = m.bimalleolarbreadth * 0.145;            // the myotendinous junction
+  const w1 = m.bimalleolarbreadth * 0.105;            // the tendon's own narrowest point
+  const w2 = m.bimalleolarbreadth * 0.170;            // its footprint on the calcaneus
 
-  const topPt = vmad(vmad(ti.B, ti.frame[0], -tendonLen), post, w0 * 0.5);
-  const narrowPt = vmad(ti.B, post, w1 * 1.2);
+  const topPt = vmad(vmad(ti.B, ti.frame[0], -tendonLen), post, w0 * 0.45);
+  const narrowPt = vmad(ti.B, post, w1 * 1.05);
   put('leg.' + side, (P, ff) => sdSegSE(P, topPt, narrowPt, ti.frame,
-    w0, w0 * 0.85, w1, w1 * 0.85, 2.2, undefined, ff));
+    w0, w0 * 0.80, w1, w1 * 0.80, 2.3, undefined, ff));
 
   const heelIns = vmad(vmad(f.A, f.frame[0], -0.19 * f.len), UP, -m.lateralmalleolusheight * 0.20);
   put('foot.' + side, (P, ff) => sdSegSE(P, narrowPt, heelIns, ti.frame,
-    w1, w1 * 0.85, w2, w2 * 0.95, 2.2, undefined, ff));
+    w1, w1 * 0.80, w2, w2 * 0.90, 2.3, undefined, ff));
 
-  /* The hollows either side: shallow cuts flanking the cord, on the leg
-     part only. The foot's own share of the tendon is short and already
-     close to the heel's own rounding, and a cut there risked notching the
-     heel pad instead of grooving the tendon — kept to where the tendon
-     stands clearest of everything around it. */
-  const hw = w1 * 1.30;
-  for (const s2 of [1, -1]) {
-    const hc = vmad(vmad(narrowPt, medLeg, s2 * w1 * 1.55), post, -w1 * 0.25);
-    put('leg.' + side, (P) => sdBlobSE(P, hc, ti.frame, w1 * 0.95, hw * 0.60, hw, 2.2), true);
-  }
+  /* THE HOLLOWS EITHER SIDE, TRIED AND DROPPED. A pair of shallow cuts
+     flanking the cord read fine on the leg part alone, but the leg and
+     foot are two independently-traced silhouettes meeting at this exact
+     seam (see this file's header — parts do not share a field), and the
+     cuts were enough to pull the leg's own edge away from the foot's at
+     the join: the two outlines crossed instead of meeting, and what
+     should have read as a tendon read as a stray notch. The raised cord
+     survives without them; the grooves do not, and are reported rather
+     than forced. */
 }
 
 // ---- the knee -----------------------------------------------------------
