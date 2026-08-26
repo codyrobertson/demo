@@ -23,6 +23,9 @@
      normals()     surface normals from the sampled rings, no extra field work
      bandAt()      the shadow band at one ring, terminator to silhouette
      modelling()   the shadow band strokes, walked along a form
+     planeBreaks() ridge/valley lines where a surface changes direction
+                   sharply enough to be a facet edge, not a curve — pure
+                   geometry over normals(), no per-part table
      landmarks()   the creases, folds and bone-derived lines of the head,
                    neck, shoulders and trunk, filtered to the scale they are
                    actually being drawn at
@@ -55,7 +58,7 @@
 (function (GK) {
   const M = GK.math;
   const FIELD = GK.field;
-  const { clamp01, lerp, vadd, vsub, vmul, vdot, vnorm, vcross, vlen } = M;
+  const { clamp01, clamp, lerp, vadd, vsub, vmul, vdot, vnorm, vcross, vlen, DEG } = M;
 
   /**
    * One lamp, mostly defined off the view.
@@ -286,6 +289,473 @@
         const tone = depth * core * (0.10 + 0.90 * edge * edge) * (0.35 + 0.65 * ends);
         if (tone < 0.05) { flush(); continue; }
         run.push([q.P[0], q.P[1], q.P[2], tone]);
+      }
+      flush();
+    }
+    return out;
+  }
+
+  // =========================================================================
+  //  PLANE BREAKS
+  //  A ridge/valley detector over a part's own sampled rings — the places a
+  //  surface changes direction sharply enough to be a facet edge rather than
+  //  a curve still turning. Built for the head's planar (Asaro-style)
+  //  reconstruction, where a brow ridge, a cheekbone step and a jaw plane
+  //  are real dihedral angles rather than shading cues — but there is
+  //  nothing head-specific in the code below: it is pure geometry over
+  //  normals(), no per-part table, so it finds whatever is actually sharp
+  //  on whatever part it is handed. Which is also why it finds the heel and
+  //  instep edges on a foot (53-limbs.js's ST-table segments, unioned by a
+  //  hard min with no smoothing between them) and the iliac crest on the
+  //  trunk (50-field.js's pelvis block, two tapers meeting at the
+  //  trochanter with different slopes) even before the head goes planar —
+  //  both were how this was tested and tuned; see this feature's report.
+  //
+  //  THE TEST IS ON THE NORMAL, NOT ON THE SURFACE ITSELF. Two neighbouring
+  //  samples can sit close together in space and still be two different
+  //  planes; closeness in position says nothing about whether the light
+  //  would turn a corner crossing between them. So this walks normals(),
+  //  the same field bandAt() and modelling() already use, and asks a purely
+  //  angular question: how much the facing direction changes from one
+  //  angular sample to the next, around a ring.
+  // =========================================================================
+
+  // How sharp a ring has to bend, sample to sample, to count as a break AT
+  // ALL — necessary but, on its own, nowhere near sufficient; see
+  // RING_REL_MULT just below for why, and read the two together.
+  //
+  // EST, from the task's own 18-25 degree working range. Tried alone, at
+  // the low end of that range (20°), against the foot it looked right —
+  // the heel/instep chained clean and continuous — but the SAME 20° on the
+  // trunk drew a break down almost the entire silhouette, both flanks,
+  // chest to hip. That is not sixteen anatomical corners; it is one
+  // ordinary fact about an ellipse rendered at finite angular resolution.
+  // The trunk's cross-section is wider than it is deep, so — exactly as an
+  // ellipse's curvature is highest at the ends of its LONG axis, not its
+  // short one — the flanks (beta near 0 and PI) genuinely bend faster,
+  // sample to sample, than the front or back do, with nothing sharp
+  // happening there at all. Measured directly (this feature's report):
+  // trunk rings at na=30 carry a MEDIAN edge-to-edge bend of 9-20° almost
+  // everywhere, so a single absolute threshold anywhere near that range
+  // cannot separate a real facet edge from the ordinary tighter curvature
+  // of a wide, shallow torso — one number cannot do the job of two. The
+  // threshold stays at the low end of the task's range for the reason
+  // above (nothing here should lose the faint end of a real chain before
+  // downstream gates run) — RING_REL_MULT is what actually keeps this from
+  // firing on every rounded flank in the body, and does the discriminating
+  // this constant alone cannot.
+  const BREAK_ANGLE = 20 * DEG;
+  // A candidate edge also has to clear this multiple of its OWN ring's
+  // median edge-bend — the local-contrast test BREAK_ANGLE alone cannot
+  // be, because "sharp" only means something relative to how curved the
+  // surrounding surface already is. A flank's ordinary bend is elevated
+  // but roughly UNIFORM across a wide arc of the ring (an ellipse's
+  // curvature changes smoothly with angle); a real facet edge is a spike
+  // that stands out against its own ring's typical bend WHEREVER that
+  // typical bend happens to sit, which the median captures without caring
+  // whether the part is round, boxy, or already sharp on its own account.
+  // Calibrated against the trunk's own numbers (see report): rings with
+  // nothing but ordinary flank curvature measured 1.5-2.5x their own
+  // median at the tightest point sampled; the trochanter/crotch region and
+  // the sharpest thoracic-to-pelvic band both cleared 2.8x, several rows
+  // running well past 4-6x. 2.6 sits in the gap — it cost the milder end of
+  // the pelvis taper (a couple of rows right beside the crotch cut that
+  // read closer to 2.0-2.4x) but held every clearly sharp region, and nothing
+  // downstream can recover a candidate this gate never lets through, so the
+  // margin is kept on the side that risks a slightly shorter chain over the
+  // side that redraws a whole flank.
+  const RING_REL_MULT = 2.6;
+  // The dihedral a break needs before it earns the darkest tone this
+  // detector will assign (buildRun's tone ceiling, 0.80). EST against the
+  // sharpest thing verifiably on the page before any planar head existed —
+  // the foot's sole meeting the floor clamp, a genuine Math.max() against a
+  // half-space (53-limbs.js) rather than a union of two tapers — which
+  // measured 55-65° at the stations it survives LOD on. Left a little above
+  // that so the floor-clamp corner reads as firm rather than maximal, and
+  // revisited once the planar head supplied something sharper to check it
+  // against (see report).
+  const BREAK_SHARP = 58 * DEG;
+  // How far a break's angular position may drift from one station to the
+  // next and still be counted as the SAME break. Set from the sampling
+  // itself rather than guessed: a part's rings carry 20 to 52 angular
+  // samples around a full turn (53-limbs.js's foot at the sparse end,
+  // 51-head.js's head at the dense one — see field.parts()), which is
+  // 18°-7° apart sample to sample. A real facet edge walks a few degrees a
+  // station as the form turns under it, not a few tens, so several angular
+  // samples of slack is enough to chain a genuine line through ordinary
+  // sample-to-sample wobble while still refusing to leap onto an unrelated
+  // crease a few rings later — checked by watching the chain COUNT on the
+  // foot and trunk render tests: too tight (under 15°) and one continuous
+  // edge fragmented into three or four short ones; at 26° it did not, and
+  // widening further started merging the heel edge with the unrelated
+  // ankle-waist seam a few stations above it.
+  const BREAK_STEP = 26 * DEG;
+  // Shortest run worth keeping, in stations. Two is one segment, which is a
+  // single noisy ring wearing a chain of one link; three is the same floor
+  // bandAt() uses for its own band width and landmarks() uses for a built
+  // mark's point count (`pts.length > 3`).
+  const BREAK_MIN_LEN = 3;
+  // |dot(normal, eye)| below this and a break point is the silhouette's own
+  // edge, which the outline already draws — compare bandAt's HZ (0.10,
+  // "just past the horizon", the point a shaded band stops being drawable
+  // at all). This is more than double HZ on purpose: a plane-break LINE
+  // sitting even a little short of dead-on to the silhouette still reads as
+  // a second, ghost outline a few pixels in from the real one, which is a
+  // worse mark than the sawtooth this whole feature exists to avoid, so it
+  // is given more margin than a shading band needs. ~75° off the view
+  // direction; the task's own EST.
+  const BREAK_SIL = 0.25;
+
+  /** linear interpolation of one ring's own samples — a position or a unit
+   *  normal alike — at a fractional angular position. Same kf convention
+   *  onSurface() and nearestOnRows() use everywhere else in this file (beta
+   *  0..2*PI maps to sample 0..NA), so a beta found here lands in exactly
+   *  the space a landmark's own beta does, and the two can be compared or
+   *  mixed without a further conversion. */
+  function lerpRing(row, beta) {
+    const NA = row.length;
+    const kf = (((beta / (Math.PI * 2)) % 1) + 1) % 1 * NA;
+    const k = Math.floor(kf) % NA, k2 = (k + 1) % NA, fr = kf - Math.floor(kf);
+    return M.vlerp(row[k], row[k2], fr);
+  }
+
+  /** circular distance between two angles, in [0, PI] */
+  function betaDist(a, b) {
+    let d = Math.abs(a - b) % (Math.PI * 2);
+    if (d > Math.PI) d = Math.PI * 2 - d;
+    return d;
+  }
+
+  /** signed shortest angular step from a to b, in (-PI, PI] — the direction
+   *  and distance betaDist() only gives the distance for */
+  function betaDelta(a, b) {
+    let d = (b - a) % (Math.PI * 2);
+    if (d > Math.PI) d -= Math.PI * 2;
+    if (d < -Math.PI) d += Math.PI * 2;
+    return d;
+  }
+
+  /**
+   * One ring's break candidates: fractional angular positions where the
+   * normal bends more than BREAK_ANGLE crossing from one angular sample to
+   * the next, refined the way bandAt() refines a band's own ends — linear
+   * interpolation of the bending quantity between the last sample outside
+   * threshold and the first inside it, not whichever integer sample the
+   * test happened to flip on. THIS is the sawtooth fix the section header
+   * promises: an early version of this function reported the break at
+   * whichever raw sample first crossed the test, and chained down a form
+   * that is indistinguishable from the integer-index bug bandAt's own
+   * history describes — confirmed the same way, by rendering it: walked
+   * down the foot's instep, it stair-stepped once a station, one sample
+   * wide, exactly the old modelling() sawtooth.
+   *
+   * edge[k] describes the span FROM sample k TO sample k+1, so a value
+   * belongs at k+0.5 in the sample grid ringAt() actually indexes — every
+   * position below is built on that half-sample offset, not on k itself.
+   *
+   * A candidate ALSO has to clear RING_REL_MULT times this ring's own
+   * median edge — see that constant's own comment for why an absolute
+   * threshold alone draws a break down an ordinary rounded flank. The
+   * median is of the whole ring's edge[] as computed, no candidate region
+   * excluded first: with a real facet edge ever only a handful of samples
+   * wide out of twenty-plus, it cannot move the MIDDLE-ranked value enough
+   * to hide itself from a test built on that value.
+   *
+   * Returns [{beta, peak}] — peak in radians, one entry per separate
+   * over-threshold run found around the ring (a jaw can show two corners
+   * on the one station), ordered by angular position.
+   */
+  function ringBreaks(row, nrmRow) {
+    if (!row || !nrmRow) return [];
+    const NA = nrmRow.length;
+    if (NA < 8) return [];
+    const edge = new Float64Array(NA);
+    for (let k = 0; k < NA; k++) {
+      edge[k] = Math.acos(clamp(vdot(nrmRow[k], nrmRow[(k + 1) % NA]), -1, 1));
+    }
+    const median = edge.slice().sort()[Math.floor(NA / 2)];
+    const relFloor = RING_REL_MULT * median;
+    const above = new Array(NA);
+    let anyAbove = false, allAbove = true;
+    for (let k = 0; k < NA; k++) {
+      above[k] = edge[k] > BREAK_ANGLE && edge[k] > relFloor;
+      if (above[k]) anyAbove = true; else allAbove = false;
+    }
+    // A ring with nothing over threshold has no break; one with EVERY edge
+    // over it is not a break either, it is a degenerate ring — a cap
+    // station, or one too close to a part's own pole for its angular
+    // spacing to mean anything. A real facet edge is local to an arc of the
+    // ring, never the whole circumference.
+    if (!anyAbove || allAbove) return [];
+
+    // A false->true boundary is guaranteed to exist (both anyAbove and
+    // !allAbove hold), so a single linear scan from it visits every sample
+    // exactly once with no run split across the k=NA-1/0 seam.
+    let start = 0;
+    for (let k = 0; k < NA; k++) {
+      if (above[k] && !above[(k - 1 + NA) % NA]) { start = k; break; }
+    }
+    const val = (k) => edge[((k % NA) + NA) % NA];
+    // fractional crossing of val() through BREAK_ANGLE between an `outside`
+    // sample (below threshold) and an `inside` one (above), by linear
+    // interpolation — the same discipline as bandAt's own crossing().
+    const crossing = (outside, inside) => {
+      const vo = val(outside) - BREAK_ANGLE, vi = val(inside) - BREAK_ANGLE;
+      return outside + (vo / (vo - vi)) * (inside - outside);
+    };
+    const out = [];
+    let k = 0;
+    while (k < NA) {
+      const idx = (start + k) % NA;
+      if (!above[idx]) { k++; continue; }
+      const k0 = start + k;
+      while (k < NA && above[(start + k) % NA]) k++;
+      const k1 = start + k - 1;
+      // A run wider than a quarter ring is the same degenerate case as
+      // "every edge over threshold", just local to one arc instead of the
+      // whole ring — seen near a part's own capped end, never on an actual
+      // facet edge, which is a handful of samples wide.
+      if (k1 - k0 + 1 > NA / 4) continue;
+      const k0f = crossing(k0 - 1, k0), k1f = crossing(k1 + 1, k1);
+      let peak = 0;
+      for (let j = k0; j <= k1; j++) peak = Math.max(peak, val(j));
+      const kf = (k0f + k1f) * 0.5 + 0.5;   // edge-index run centre -> sample-grid position
+      out.push({ beta: (kf / NA) * Math.PI * 2, peak });
+    }
+    return out;
+  }
+
+  /**
+   * Chain per-ring candidates into continuous lines down a part, station by
+   * station. Same continuity discipline the rest of this file uses —
+   * fractional position, not an integer sample — carried into the LINKING
+   * step this time rather than one ring's own refinement: a chain is
+   * extended by whichever candidate on the NEXT station is nearest in
+   * angle to where it last was, and only if that distance is inside
+   * BREAK_STEP; a station with nothing close enough — including nothing at
+   * all — ends the chain there rather than reaching over the gap, which is
+   * literally what the task calls for and also what keeps this from
+   * stitching two unrelated creases into one line just because they pass
+   * near each other a few stations apart.
+   *
+   * Several chains grow at once — a jaw's two corners, both cheekbones — so
+   * the matching at each station is a small greedy nearest-first
+   * assignment: every candidate (active chain, ring candidate) pairing
+   * within range is sorted by distance and claimed in that order, so two
+   * chains converging toward the same seam cannot both claim the one ring
+   * sample nearest it.
+   */
+  function chainBreaks(cands, NS) {
+    let active = [];
+    const chains = [];
+    for (let i = 0; i < NS; i++) {
+      const list = cands[i] || [];
+      const pairs = [];
+      for (let a = 0; a < active.length; a++) {
+        for (let c = 0; c < list.length; c++) {
+          const d = betaDist(active[a].lastBeta, list[c].beta);
+          if (d <= BREAK_STEP) pairs.push([d, a, c]);
+        }
+      }
+      pairs.sort((p, q) => p[0] - q[0]);
+      const usedA = new Set(), usedC = new Set();
+      for (const [, a, c] of pairs) {
+        if (usedA.has(a) || usedC.has(c)) continue;
+        usedA.add(a); usedC.add(c);
+        active[a].pts.push({ i, beta: list[c].beta, peak: list[c].peak });
+        active[a].lastBeta = list[c].beta;
+      }
+      const stillActive = [];
+      for (let a = 0; a < active.length; a++) {
+        if (usedA.has(a)) stillActive.push(active[a]);
+        else chains.push(active[a]);   // no match this station: finalise it here
+      }
+      active = stillActive;
+      for (let c = 0; c < list.length; c++) {
+        if (!usedC.has(c)) active.push({ pts: [{ i, beta: list[c].beta, peak: list[c].peak }], lastBeta: list[c].beta });
+      }
+    }
+    for (const a of active) chains.push(a);
+    return chains.filter((ch) => ch.pts.length >= BREAK_MIN_LEN);
+  }
+
+  // Screen-space gap a run is kept comfortably under, in page pixels. Not
+  // this feature's own number: it exists because skin.js's shared stroke
+  // path — the one thing every mark from an outline to a landmark to this
+  // is fed through — resamples nothing before calling RE.runs(pts, 0.05, 2,
+  // 30), and that 30 is a GAP-BREAK threshold, not a resolution: two
+  // consecutive points more than 30px apart on the page end the run there,
+  // exactly like a station with no depth-field visibility does. A hand-
+  // authored mark never meets that wall because landmarks() walks its own
+  // spline at N=10-26 samples across a span of a few tens of millimetres by
+  // construction; a plane break has exactly one candidate per RING STATION,
+  // and a part's own stations can be real distance apart — a foot's 14
+  // stations span its whole ~250mm length, close to 20mm each — which at
+  // ordinary render scale is already past this margin, so a chain built
+  // one point per station renders as a scatter of orphaned single points
+  // and nothing else. Confirmed by rendering: every one of this feature's
+  // early foot/trunk test images passed the diagnostic overlay (world
+  // points landing exactly on the modelled geometry, chained smoothly) and
+  // then drew NOTHING through the actual stroke path, at any tone up to 4x
+  // amplified, until this margin — and the densify() below it feeds — was
+  // added. Set well under 30 rather than at it, because the margin also
+  // has to absorb a straight-line WORLD chord standing in for a curved
+  // path between two stations, which is a slight underestimate of how far
+  // a truly round form's own surface runs between them.
+  const RUN_PX = 12;
+  // mm-spacing densify() falls back to when ctx.mmPerPx was never measured
+  // (see planeBreaks()'s own doc comment on why that stays legal) — dense
+  // enough that RUN_PX would not be crossed even at a tight close-up
+  // (mmPerPx well under 1), since there is no scale left to reason from
+  // once the caller has opted out of one.
+  const RUN_MM_FALLBACK = 8;
+
+  /**
+   * One chained run of per-STATION break candidates, turned into a dense
+   * enough polyline of {P, peak} — world point plus the local sharpness —
+   * to survive RE.runs()'s own RUN_PX gap-break once projected (see RUN_PX
+   * above for why one point per station is not that on its own). Walks
+   * each station-to-station span through onSurface() at as many fractional
+   * stations as the span's own WORLD length needs to stay under RUN_PX once
+   * scaled by mmPerPx, interpolating beta by the shortest way round
+   * (betaDelta) and peak linearly, capped at 24 sub-steps — already finer
+   * than any hand-authored mark in LANDMARKS bothers with.
+   */
+  function densify(run, rows, mmPerPx) {
+    const NS = rows.length - 1;
+    const maxMm = mmPerPx ? RUN_PX * mmPerPx : RUN_MM_FALLBACK;
+    const out = [];
+    for (let k = 0; k < run.length; k++) {
+      const a = run[k];
+      const Pa = onSurface(rows, a.i / NS, a.beta);
+      if (Pa) out.push({ P: Pa, peak: a.peak });
+      if (k === run.length - 1) break;
+      const b = run[k + 1];
+      const Pb = onSurface(rows, b.i / NS, b.beta);
+      if (!Pa || !Pb) continue;
+      const d = M.vdist(Pa, Pb);
+      const steps = Math.min(24, Math.max(1, Math.ceil(d / maxMm)));
+      const db = betaDelta(a.beta, b.beta);
+      for (let s = 1; s < steps; s++) {
+        const t = s / steps;
+        const P = onSurface(rows, (a.i + (b.i - a.i) * t) / NS, a.beta + db * t);
+        if (P) out.push({ P, peak: lerp(a.peak, b.peak, t) });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * One chained run of break points, built into the {pts, id} shape
+   * landmarks() uses: a world point plus a tone at every sample, faded at
+   * both ends by Math.sin(u*PI) floored at a quarter — the exact formula
+   * every LANDMARKS mark below is faded by — so a plane break sits in the
+   * same visual family as a hand-authored crease instead of announcing
+   * itself as a different kind of mark. Tone itself scales with the break's
+   * own sharpness (peak, in radians) between BREAK_ANGLE (the floor a
+   * candidate had to clear to exist at all, tone 0.35) and BREAK_SHARP
+   * (tone 0.80) — a firmer line for a harder corner. Densified first (see
+   * densify()) so the fade itself lands smoothly across many points rather
+   * than in three or four coarse steps.
+   */
+  function buildRun(run, id, rows, mmPerPx) {
+    const dense = densify(run, rows, mmPerPx);
+    const n = dense.length;
+    const pts = new Array(n);
+    for (let j = 0; j < n; j++) {
+      const u = n > 1 ? j / (n - 1) : 0.5;
+      const fade = Math.sin(clamp01(u) * Math.PI);
+      const tone = lerp(0.35, 0.80, clamp01((dense[j].peak - BREAK_ANGLE) / (BREAK_SHARP - BREAK_ANGLE)));
+      const P = dense[j].P;
+      pts[j] = [P[0], P[1], P[2], tone * (0.25 + 0.75 * fade)];
+    }
+    return { pts, id };
+  }
+
+  /**
+   * planeBreaks(part, rows, ctx) -> [{pts, id}]
+   *
+   * See the section header above for what this finds and why it needs no
+   * per-part table — it is run the same way over every part, head, foot or
+   * trunk alike, and simply returns nothing where a part has no real
+   * facet edge for it to find.
+   *
+   * @param part  the field's own part object — only part.name is read here
+   *              (for the id string), but the full object is taken rather
+   *              than just the name so this matches landmarks()'s own
+   *              signature and a caller can pass the same variable to both.
+   * @param rows  that part's sampled rings.
+   * @param ctx   { eye, mmPerPx } — both optional, both degrade safely
+   *              absent, the same way landmarks()'s ctx.mmPerPx does:
+   *                eye      the view direction (view.e — points from the
+   *                         scene toward the camera) a break's own normal
+   *                         is tested against, to drop the stretch of it
+   *                         that lies on the silhouette rather than on a
+   *                         real interior edge. Omit it and no silhouette
+   *                         test runs at all — nothing is dropped for it —
+   *                         rather than every point failing a comparison
+   *                         against undefined.
+   *                mmPerPx  millimetres per pixel of the plate, the same
+   *                         LOD floor landmarks() reads via partPxOf().
+   *                         Omit it (or pass 0) to disable the filter, as
+   *                         partPxOf() itself documents.
+   */
+  function planeBreaks(part, rows, ctx) {
+    ctx = ctx || {};
+    const NS = rows.length;
+    if (NS < 3) return [];
+    const nrm = normals(rows);
+    const eye = ctx.eye;
+    const partPx = partPxOf(rows, ctx.mmPerPx);
+
+    const cands = new Array(NS);
+    for (let i = 0; i < NS; i++) cands[i] = ringBreaks(rows[i], nrm[i]);
+
+    const chains = chainBreaks(cands, NS);
+    if (!chains.length) return [];
+
+    const out = [];
+    let idx = 0;
+    for (const ch of chains) {
+      // Classified by the RAW chain's own reach, before any silhouette
+      // clipping shortens what actually gets drawn — a major ridge caught
+      // edge-on for half its own length is still a major ridge, not a
+      // small one that happens to be long. minPx ~90 for a chain spanning
+      // a third or more of the part's own station range (a temporal line,
+      // the foot's full instep run), rising toward ~220 for one barely
+      // three stations long (a single corner) — the "majors read small,
+      // fine ones need scale" split landmarks() already states for its own
+      // hand-authored marks (see visibleAt's own comment), turned into a
+      // formula because nothing here is hand-tuned enough to give each
+      // detected chain its own minPx by eye. The span fractions are EST,
+      // picked against the foot and trunk test renders: the foot's
+      // heel-behind-the-ankle run covers about a third of the foot's own
+      // 14 stations and wants to read at ordinary foot scale; a single jaw
+      // or cheekbone corner on a 44-station head covers under a tenth and
+      // should not.
+      const spanFrac = (ch.pts[ch.pts.length - 1].i - ch.pts[0].i) / Math.max(1, NS - 1);
+      const minPx = lerp(220, 90, clamp01((spanFrac - 0.08) / (0.35 - 0.08)));
+      if (partPx < minPx) continue;
+
+      // Split on whatever the raw chain does not survive — a missing ring,
+      // or (with `eye` given) a stretch lying on the silhouette — the same
+      // flush()-on-gap idiom modelling() uses: a gap in what is drawable
+      // ends the run, it does not bridge across it as a straight segment.
+      let run = [];
+      const flush = () => {
+        if (run.length >= BREAK_MIN_LEN) {
+          out.push(buildRun(run, 'planeBreak.' + part.name + '.' + (idx++), rows, ctx.mmPerPx));
+        }
+        run = [];
+      };
+      for (const pt of ch.pts) {
+        const row = rows[pt.i];
+        if (!row) { flush(); continue; }
+        if (eye) {
+          const N = vnorm(lerpRing(nrm[pt.i], pt.beta));
+          if (Math.abs(vdot(N, eye)) < BREAK_SIL) { flush(); continue; }
+        }
+        run.push({ i: pt.i, beta: pt.beta, peak: pt.peak });
       }
       flush();
     }
@@ -992,7 +1462,7 @@
   }
 
   GK.draw = {
-    lamp, normals, bandAt, modelling, landmarks, onSurface, LANDMARKS, HZ,
+    lamp, normals, bandAt, modelling, planeBreaks, landmarks, onSurface, LANDMARKS, HZ,
     resolveStation, nativeFrac, nearestOnRows, projectBone,
     partExtentMm, partPxOf, visibleAt,
   };
