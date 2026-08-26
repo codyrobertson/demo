@@ -1138,7 +1138,16 @@
     const out = [];
     out.push({
       name: 'trunk', chain: spineChain(rig), keep: KEEP.trunk, muscleKeys: NO_MUSCLE_BULK,
-      s0: -0.42, s1: 1.10, ns: 52, na: 30,
+      /* na 52, up from 30. The acromial tip is a narrow feature in ANGLE as
+         seen from the spine axis, and on the body with the smallest measured
+         biacromial breadth the 12-degree grid straddled it completely: the
+         two neighbouring rays read 157mm and 64mm across a true 204mm peak,
+         so the drawn shoulder — and the critic reading the same rings — came
+         out 12% under a surface whose continuous geometry was measured at
+         1.035 of its own band's centre, 9.9 population standard deviations
+         below every other body's grid-capture. Seven-degree steps sample the
+         peak instead of the gap either side of it. */
+      s0: -0.42, s1: 1.10, ns: 52, na: 52,
     });
     out.push({
       name: 'head', bone: 'skull', keep: KEEP.head, muscleKeys: NO_MUSCLE_BULK,

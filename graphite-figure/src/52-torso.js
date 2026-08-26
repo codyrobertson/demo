@@ -280,27 +280,24 @@ const deltGap = Math.max(0, (m.bideltoidbreadth - m.biacromialbreadth) * 0.5);
    any ratio past 1.05 (ceiling is 1.12) or adding a new failure to
    "shoulders / drawn head W" beyond the set 1.15 already had.
 
-   SEED 3 DOES NOT CLEAR AT ANY DELT_KW, AND THAT IS NOT THIS DIAL'S FAULT.
-   Swept 0.90 through 3.0: seed 3's ratio sits at 0.909 and does not move
-   until DELT_KW passes roughly 2 — because seed 3's trunk is not
-   shoulder-limited at all. Probed directly (station-by-station, the same
-   way the coat-hanger cliff above was found): this body's widest trunk
-   point sits in the PELVIS, at 179mm of half-width against a measured
-   hipbreadth/2 of 183mm — the model is drawing this body's hip correctly,
-   not overbuilding it. Its own ANSUR hipbreadth is already 93% of its own
-   bideltoidbreadth (316.8mm biacromial, 393.8mm bideltoid, but 366.2mm
-   hipbreadth) — a genuinely wide-hipped, narrow-shouldered individual, not
-   a modelling error. The shoulder itself is fixed: at any DELT_KW past
-   about 1.1 its OWN peak (measured at acromion height alone) tracks the
-   gap correctly and keeps climbing, it is simply climbing toward a target
-   the hip already reached first. Forcing the deltoid cap out far enough to
-   out-reach the hip needs DELT_KW above ~2 — twice the measured tissue gap
-   — which blows every other seed's ratio well past 1.12 (seed 8 alone
-   reaches 1.3+). The pelvis capsule that wins this contest is 50-field.js's
-   (THE MEASURED VOLUMES), not this file's, and shrinking it to chase one
-   seed's ratio here would under-draw its own measured hip on every body,
-   which is a worse bug than the one being fixed. Left failing on purpose;
-   see 52-torso.js's own gate notes for the numbers. */
+   SEED 3'S FAILURE WAS NEVER THIS DIAL'S, AND ITS FIRST EXPLANATION HERE
+   WAS WRONG TWICE — kept as a record because both wrong answers were
+   plausible enough to ship. First blamed: the hip ("this body's widest
+   trunk point is its correctly-drawn pelvis") — true numbers, stale
+   conclusion, because the proportions critic then began measuring
+   shoulders at shoulder level and the ratio DROPPED to 0.878: the hip had
+   been propping the reading up, not holding it back. Then blamed: the
+   drawn acromion — refuted to ten significant figures, since aimTo makes
+   the clavicle's far end EQUAL half of measured biacromial breadth by
+   construction, every seed. The real cause was the trunk part's ANGULAR
+   SAMPLING: this body has the smallest biacromial of its cohort, its
+   acromial tip is the narrowest feature in angle as seen from the spine,
+   and the then-12-degree ring grid straddled a true 204mm peak with rays
+   reading 157mm and 64mm either side. Sampled finely, this seed's ratio
+   is 1.035 and the whole population clusters 1.031-1.038 — meaning the
+   1.20 below is well-tuned for the CONTINUOUS geometry, and needed no
+   change when the grid was refined (50-field.js, the trunk's na). A dial
+   should not be turned to compensate a sampler. */
 const DELT_KW = 1.20;
 for (const side of ['L', 'R']) {
   const sgn = side === 'L' ? 1 : -1;
