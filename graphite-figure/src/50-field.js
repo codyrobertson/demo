@@ -659,15 +659,40 @@
       const solid = smin(boneField(rig, P, bones, fat), volumeField(vols, P, fat), fascia);
       return smin(solid, muscleField(rig, P, part, fat), fascia);
     };
-    let lo = 0.5, hi = Math.max(80, rig.figure.stature * 0.32);
-    if (f(hi) < 0) return hi;
-    // no crossing on this ray: the station is past the end of the solid.
-    // Zero rather than a half-millimetre, so a ring that has left the body
-    // is distinguishable from one that is merely thin.
-    if (f(lo) > 0) return 0;
-    // 18 halvings of a 500mm bracket is a fifth of a micron; the surface is
-    // not defined to anything like that, and the extra eight were pure cost
-    for (let i = 0; i < 18; i++) {
+    /* THE FIRST CROSSING, NOT ANY CROSSING.
+       Skin is the first surface you meet walking out from a bone. That
+       sounds like a distinction without a difference, and it is — right up
+       until the field contains something detached out along the ray, at
+       which point plain bisection between the axis and the far bound will
+       happily return the OUTSIDE of that thing.
+
+       It did. The trunk's field includes the muscles that touch the trunk,
+       the deltoid among them, and a deltoid sits out at the shoulder. Once
+       the soft layer grew thick enough for the smooth union to bridge the
+       gap, the chest ring stopped being the chest and jumped to the far side
+       of the shoulder: on one figure the chest circumference went 748mm,
+       827mm, then 2401mm as the soft layer went 0, 10, 40 — non-monotone, so
+       the solver above, which assumes more tissue means more girth, landed
+       anywhere at all. It reported one body 152% out and looked exactly like
+       a muscle that needed tuning.
+
+       So march out from the axis while inside, and only bisect once the sign
+       has actually flipped. The march is sphere-tracing: the field is close
+       enough to a distance that stepping by most of its own magnitude is
+       both safe and fast, and the 0.75 keeps it honest where it is not. */
+    const hi0 = Math.max(80, rig.figure.stature * 0.32);
+    let lo = 0.5;
+    if (f(lo) > 0) return 0;   // the station is past the end of the solid
+    let hi = -1;
+    for (let r = lo, i = 0; r < hi0 && i < 64; i++) {
+      const v = f(r);
+      if (v > 0) { hi = r; break; }
+      lo = r;
+      r += Math.max(1.5, -v * 0.75);
+    }
+    if (hi < 0) return hi0;    // solid all the way out; nothing to find
+    // 14 halvings of a bracket a few millimetres wide is well under a micron
+    for (let i = 0; i < 14; i++) {
       const mid = (lo + hi) * 0.5;
       if (f(mid) < 0) lo = mid; else hi = mid;
     }
