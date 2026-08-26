@@ -262,8 +262,7 @@ console.log('seed ' + seed + '  stature ' + fig.stature.toFixed(0) + 'mm  ' +
 console.log('muscle layer: ' + (G.muscle ? 'loaded' : 'ABSENT — the soft layer is standing in for it'));
 console.log('soft tissue each region needed, to reach its measured girth:');
 for (const r of fit.report) {
-  const w = (r.where ? r.where.replace('height', '').replace('circumference', '') : r.region);
-  console.log('  ' + w.padEnd(20) + r.t.toFixed(1).padStart(6) + 'mm   girth ' +
+  console.log('  ' + (r.region + ' @ ' + r.girth).padEnd(24) + r.t.toFixed(1).padStart(6) + 'mm   girth ' +
     r.got.toFixed(0).padStart(5) + ' vs ' + r.want.toFixed(0).padStart(5) +
     (r.capped ? '   NOT REACHED' : ''));
 }

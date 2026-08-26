@@ -101,12 +101,15 @@
    * shape is — but the root-finder only needs the sign and smin() only needs
    * the scale to be sane near the surface, and both of those it has.
    */
-  function sdSegSE(P, A, B, fr, a0, b0, a1, b1, n, cap) {
+  function sdSegSE(P, A, B, fr, a0, b0, a1, b1, n, cap, f) {
+    f = f || 0;
     const ab = vsub(B, A), ap = vsub(P, A);
     const t = clamp01(vdot(ap, ab) / Math.max(1e-9, vdot(ab, ab)));
     const c = vmad(A, ab, t);
     const d = vsub(P, c);
-    const ay = lerp(a0, a1, t), az = lerp(b0, b1, t);
+    const cy = lerp(a0, a1, t), cz = lerp(b0, b1, t);
+    const ay = cy + f, az = cz + f;
+    n = nOffset(n, Math.min(cy, cz), f);
     // The axial term is not optional, and leaving it out is not a small
     // error: with only the two transverse axes measured, a "capsule" is an
     // infinite elliptical CYLINDER. The thoracic segments then ran the full
@@ -155,10 +158,37 @@
    * blob rather than a length of something, so it is the one part that wants
    * this rather than a capsule.
    */
-  function sdBlobSE(P, C, fr, ax, ay, az, n) {
+  function sdBlobSE(P, C, fr, ax, ay, az, n, f) {
+    f = f || 0;
+    n = nOffset(n, Math.min(ax, ay, az), f);
+    ax += f; ay += f; az += f;
     const d = vsub(P, C);
     return seDist(Math.abs(vdot(d, fr[1])) / ay, Math.abs(vdot(d, fr[2])) / az,
       Math.abs(vdot(d, fr[0])) / ax, ay, az, ax, n);
+  }
+
+  /**
+   * What a superellipse's exponent becomes when the form is wrapped in `f`
+   * millimetres of something.
+   *
+   * Growing the semi-axes and leaving the exponent alone is not an offset,
+   * it is a scaling, and the difference shows: a pelvis solved to n = 3.2
+   * against its measured buttock circumference is a rounded rectangle, and
+   * grown by the 54mm of soft tissue the buttock needs it stays a rounded
+   * rectangle — the hips came out with hard vertical flanks and square
+   * corners. Offsetting a convex form ROUNDS it. Every corner picks up `f`
+   * of radius, and in the limit any bounded convex shape offset far enough
+   * is a circle.
+   *
+   * The exact offset of a superellipse is not a superellipse and has no
+   * useful closed form, so this is the cheapest thing with both limits
+   * right: unchanged at f = 0, tending to an ellipse once f passes the
+   * form's own smaller semi-axis. EST in the sense that the RATE between
+   * those two ends is a guess; the two ends themselves are not.
+   */
+  function nOffset(n, semi, f) {
+    if (!f || n <= 2) return n;
+    return 2 + (n - 2) * semi / (semi + f);
   }
 
   // =========================================================================
@@ -194,18 +224,36 @@
    * show through on a living body at any body fat, and they show because the
    * tissue over them is a couple of millimetres, not because they are bigger.
    */
-  function boneField(rig, P, keep, f) {
-    f = f || 0;
-    let d = 1e9;
+  /**
+   * Which bones a part's field is made of, resolved ONCE.
+   *
+   * This used to be a predicate called per bone per field evaluation, which
+   * meant a regular expression matched against forty bone names inside the
+   * innermost loop of a root-finder — several million times per figure. The
+   * scope of a part is a fact about the skeleton, not about the point being
+   * sampled, so it is answered once and carried.
+   */
+  function bonesFor(rig, keep) {
+    const out = [];
     for (const id of rig.order) {
       const b = rig.bones[id];
       if (!b.len) continue;
       if (SHAPED[id.replace(/\.[LR]$/, '')]) continue;
       if (keep && !keep(id)) continue;
-      const r = boneRadius(rig.figure, id);
+      out.push({ A: b.A, B: b.B, r: boneRadius(rig.figure, id) });
+    }
+    return out;
+  }
+
+  function boneField(rig, P, bones, f) {
+    f = f || 0;
+    let d = 1e9;
+    for (let i = 0; i < bones.length; i++) {
+      const b = bones[i];
       // a capsule IS a true distance field, so here the thickness could
       // equally be subtracted; it is added for the same reason everywhere
-      d = Math.min(d, sdCapsule(P, b.A, b.B, r + f, r * 0.92 + f));
+      const t = sdCapsule(P, b.A, b.B, b.r + f, b.r * 0.92 + f);
+      if (t < d) d = t;
     }
     return d;
   }
@@ -293,7 +341,7 @@
         const o0 = kd * w0[1] - vertR, o1 = kd * w1[1] - vertR;
         const A = vmad(b0.A, fr[2], o0), B = vmad(b1.A, b1.frame[2], o1);
         put('trunk', (P, f) => sdSegSE(P, A, B, fr,
-          kb * w0[0] + f, kd * w0[1] + f, kb * w1[0] + f, kd * w1[1] + f, n));
+          kb * w0[0], kd * w0[1], kb * w1[0], kd * w1[1], n, undefined, f));
       }
     }
 
@@ -311,37 +359,51 @@
         const A = vmad(b0.A, fr[2], kd * w0[1] - vertR);
         const B = vmad(b1.A, b1.frame[2], kd * w1[1] - vertR);
         put('trunk', (P, f) => sdSegSE(P, A, B, fr,
-          kb * w0[0] + f, kd * w0[1] + f, kb * w1[0] + f, kd * w1[1] + f, n));
+          kb * w0[0], kd * w0[1], kb * w1[0], kd * w1[1], n, undefined, f));
       }
     }
 
     // ---- the pelvic block ------------------------------------------------
-    // The pelvis bone has no length by construction — the root IS the sacral
-    // base — so its form cannot come from a capsule along it. It comes from
-    // hip breadth, buttock depth and buttock circumference, spanning crest to
-    // crotch, which are four measured numbers.
+    /* The pelvis bone has no length by construction — the root IS the sacral
+       base — so its form cannot come from a capsule along it. It comes from
+       measurements, and ANSUR happens to have measured this region twice, at
+       two different heights: BICRISTAL breadth across the iliac crests, and
+       HIP breadth at the trochanters below them. Those are not the same
+       number — 290mm against 349mm on this figure — and which one goes where
+       decides the whole shape of the hips.
+
+       The first version used hip breadth at the crest and tapered DOWNWARD
+       from it, which is the taper upside down: it made the widest point of
+       the pelvis its top edge, and the hips came out as a rectangle hanging
+       off the waist. The widest point of a pelvis is the trochanters. So the
+       block is two segments — narrowing up from the trochanters to the
+       crests, narrowing down from the trochanters into the thighs — and both
+       ends of the upper one are measured. */
     {
       const p = rig.bones.pelvis;
       if (p) {
-        const kb = CORE.pelvis * g.hipBreadth * 0.5;
-        const kd = CORE.pelvis * m.buttockdepth * 0.5;
-        const n = exponentFor(kb, kd, CORE.pelvis * g.hip);
-        const top = fig.landmarks.iliacCrest[0] - fig.rootHeight;
-        const bot = m.crotchheight - fig.rootHeight;
+        const kTro = CORE.pelvis * g.hipBreadth * 0.5;
+        const kCre = CORE.pelvis * m.bicristalbreadth * 0.5;
+        const dTro = CORE.pelvis * m.buttockdepth * 0.5;
+        // the crest section is shallower than the buttock's: it is the waist's
+        // depth, which is measured, rather than a fraction of the buttock's
+        const dCre = CORE.pelvis * g.waistDepth * 0.5;
+        const n = exponentFor(kTro, dTro, CORE.pelvis * g.hip);
         const fr = p.frame;
-        const off = kd - vertR;
-        const A = vmad(vmad(p.A, fr[0], bot), fr[2], off);
-        const B = vmad(vmad(p.A, fr[0], top), fr[2], off);
-        // narrower at the crotch than at the crest: an iliac crest is the
-        // widest part of a pelvis and the ischia are not
-        // A short cap, explicitly, and one that does NOT take the soft
-        // layer. The natural rounding for a solid this wide is 78mm, which
-        // would hang the pelvis that far below the crotch — between the
-        // legs, where there is nothing — and inflating it with the 54mm of
-        // soft tissue the buttock needs would hang it 130mm down, which is
-        // most of the way to the knee.
-        put('trunk', (P, f) => sdSegSE(P, A, B, fr,
-          kb * 0.82 + f, kd * 0.94 + f, kb + f, kd + f, n, 26));
+        const at = (mm, off) => vmad(vmad(p.A, fr[0], mm - fig.rootHeight), fr[2], off);
+        const A = at(m.crotchheight, dTro * 0.90 - vertR);
+        const T = at(m.trochanterionheight, dTro - vertR);
+        const C = at(fig.landmarks.iliacCrest[0], dCre - vertR);
+        // A short cap, explicitly, and one that does NOT take the soft layer.
+        // The natural rounding for a solid this wide is 78mm, which would
+        // hang the pelvis that far below the crotch — between the legs, where
+        // there is nothing — and inflating it with the 58mm of soft tissue
+        // the buttock needs would hang it 136mm down, most of the way to the
+        // knee.
+        put('trunk', (P, f) => sdSegSE(P, A, T, fr,
+          kTro * 0.86, dTro * 0.90, kTro, dTro, n, 26, f));
+        put('trunk', (P, f) => sdSegSE(P, T, C, fr,
+          kTro, dTro, kCre, dCre, n, undefined, f));
       }
     }
 
@@ -358,7 +420,7 @@
           // the neck thickens into the shoulders at its base
           const k0 = j >= 6 ? 1.14 : 1.0;
           put('trunk', (P, f) => sdSegSE(P, A, B, fr,
-            e[0] * k0 + f, e[1] * k0 + f, e[0] + f, e[1] + f, 2.2));
+            e[0] * k0, e[1] * k0, e[0], e[1], 2.2, undefined, f));
         }
       }
     }
@@ -382,7 +444,7 @@
         const fr = s.frame;
         // and back: the face is forward of the ear, the occiput further back
         const C = vmad(vmad(s.A, fr[0], up), fr[2], az * 0.10);
-        put('head', (P, f) => sdBlobSE(P, C, fr, ax + f, ay + f, az + f, n));
+        put('head', (P, f) => sdBlobSE(P, C, fr, ax, ay, az, n, f));
       }
     }
 
@@ -406,8 +468,8 @@
       const floor = -rig.figure.rootHeight;
       put('foot.' + side, (P, f) => {
         const d = smin(
-          sdSegSE(P, heel, ball, fr, hb + f, ankleH * 0.92 + f, bb + f, ankleH * 0.62 + f, 2.3),
-          sdSegSE(P, ball, toe, fr, bb + f, ankleH * 0.62 + f, bb * 0.74 + f, ankleH * 0.30 + f, 2.6),
+          sdSegSE(P, heel, ball, fr, hb, ankleH * 0.92, bb, ankleH * 0.62, 2.3, undefined, f),
+          sdSegSE(P, ball, toe, fr, bb, ankleH * 0.62, bb * 0.74, ankleH * 0.30, 2.6, undefined, f),
           10);
         // a sole is flat, and a rounded one makes a figure look like it is
         // standing on tiptoe
@@ -433,11 +495,19 @@
    * truthful statement — subcutaneous tissue is a thickness on a form, not an
    * offset on a number.
    */
-  function volumeField(rig, P, part, f) {
-    const V = rig.volumes || (rig.volumes = buildVolumes(rig));
+  function volumeField(vols, P, f) {
     let d = 1e9;
-    for (const v of V) if (v.at === part) d = Math.min(d, v.sdf(P, f || 0));
+    for (let i = 0; i < vols.length; i++) {
+      const t = vols[i].sdf(P, f || 0);
+      if (t < d) d = t;
+    }
     return d;
+  }
+
+  /** the volumes belonging to one part, resolved once for the same reason */
+  function volumesFor(rig, name) {
+    const V = rig.volumes || (rig.volumes = buildVolumes(rig));
+    return V.filter((v) => v.at === name);
   }
 
   // =========================================================================
@@ -450,9 +520,26 @@
    * bigger bone. A figure drawn without this layer is a figure with no
    * deltoid, no calf and no glute, and it should look like it.
    */
+  /**
+   * Delegated to GK.muscle when it is present; until then the field has
+   * skeleton and fat only, and says so rather than quietly substituting a
+   * bigger bone. A figure drawn without this layer is a figure with no
+   * deltoid, no calf and no glute, and it should look like it.
+   *
+   * `keys` rather than the part's own name, because the two modules do not
+   * have to agree on how a body is cut into drawable pieces and should not
+   * be made to. A drawing wants an arm to be one form; a muscle atlas is
+   * organised by the bone each group acts on. So the part carries the list
+   * of regions it spans and asks for each — which also meant that merging
+   * the humerus and forearm parts into one arm silently dropped every arm
+   * muscle, until this took a list.
+   */
   function muscleField(rig, P, part, f) {
     if (!GK.muscle || !GK.muscle.fieldAt) return 1e9;
-    return GK.muscle.fieldAt(rig, P, part, f || 0);
+    const keys = part.muscleKeys || [part.name];
+    let d = 1e9;
+    for (const k of keys) d = Math.min(d, GK.muscle.fieldAt(rig, P, k, f || 0));
+    return d;
   }
 
   // =========================================================================
@@ -492,22 +579,45 @@
     ['suprasternaleheight', 0.46], ['cervicaleheight', 0.38], ['stature', 0.26],
   ];
 
-  function fatAt(fig, part, h) {
+  /**
+   * Piecewise-linear through [key, mm] anchors, holding flat beyond the ends.
+   * The table MUST be sorted ascending by key — see the note in fitFat about
+   * what happens when it is not, which is nothing, silently.
+   */
+  function alongTable(T, x) {
+    if (!T || !T.length) return 0;
+    if (x === undefined || x <= T[0][0]) return T[0][1];
+    for (let i = 0; i < T.length - 1; i++) {
+      if (x <= T[i + 1][0]) {
+        const w = T[i + 1][0] - T[i][0];
+        // two landmarks can land on the same millimetre; take the upper
+        if (w < 1e-6) return T[i + 1][1];
+        return lerp(T[i][1], T[i + 1][1], (x - T[i][0]) / w);
+      }
+    }
+    return T[T.length - 1][1];
+  }
+
+  /* A LIMB IS NOT A CYLINDER, AND ANSUR SAYS SO TWICE.
+     The first version solved one thickness per region, so a thigh had the
+     same soft tissue at the knee as at the groin and came out a tube — no
+     knee, no ankle, no wrist, and two thighs whose outlines ran parallel all
+     the way down. But the survey measured each limb at BOTH ends: thigh and
+     lower thigh, calf and ankle, forearm and wrist. Two anchors per limb is
+     a measured taper, and it costs nothing but reading the second column.
+
+     The humerus is the exception, and is marked as such: there is no elbow
+     circumference in this survey, so its distal anchor is not measured. It
+     is tied to the forearm's proximal thickness instead, on the grounds that
+     skin is continuous across an elbow. That is a constraint, not a
+     measurement, and it is the only one here. */
+  function fatAt(fig, part, h, s) {
     const base = part.replace(/\.[LR]$/, '');
     const soft = fig.soft || (fig.soft = {});
-    if (base === 'trunk') {
-      const T = soft.trunk;
-      if (!T) return 0;
-      if (h === undefined || h <= T[0][0]) return T[0][1];
-      for (let i = 0; i < T.length - 1; i++) {
-        if (h <= T[i + 1][0]) {
-          return lerp(T[i][1], T[i + 1][1], (h - T[i][0]) / (T[i + 1][0] - T[i][0]));
-        }
-      }
-      return T[T.length - 1][1];
-    }
+    if (base === 'trunk') return alongTable(soft.trunk, h);
     const v = soft[base];
-    return v === undefined ? (SOFT_EST[base] || 0) : v;
+    if (v === undefined) return SOFT_EST[base] || 0;
+    return Array.isArray(v) ? alongTable(v, s) : v;
   }
 
   // =========================================================================
@@ -538,15 +648,16 @@
   function radiusAlong(rig, part, C, dir, opts) {
     opts = opts || {};
     const fascia = opts.fascia === undefined ? 14 : opts.fascia;
-    const fat = opts.fat === undefined ? fatAt(rig.figure, part.name, opts.h) : opts.fat;
-    const keep = part.keep;
+    const fat = opts.fat === undefined ? fatAt(rig.figure, part.name, opts.h, opts.s) : opts.fat;
+    const bones = part._bones || (part._bones = bonesFor(rig, part.keep));
+    const vols = part._vols || (part._vols = volumesFor(rig, part.name));
     const f = (r) => {
       const P = vmad(C, dir, r);
       // fascia is the smoothness of the union; the soft layer is a thickness
       // ON each solid, wrapped before they are unioned — which is also the
       // right order, since subcutaneous tissue bridges fattened forms
-      const solid = smin(boneField(rig, P, keep, fat), volumeField(rig, P, part.name, fat), fascia);
-      return smin(solid, muscleField(rig, P, part.name, fat), fascia);
+      const solid = smin(boneField(rig, P, bones, fat), volumeField(vols, P, fat), fascia);
+      return smin(solid, muscleField(rig, P, part, fat), fascia);
     };
     let lo = 0.5, hi = Math.max(80, rig.figure.stature * 0.32);
     if (f(hi) < 0) return hi;
@@ -554,7 +665,9 @@
     // Zero rather than a half-millimetre, so a ring that has left the body
     // is distinguishable from one that is merely thin.
     if (f(lo) > 0) return 0;
-    for (let i = 0; i < 26; i++) {
+    // 18 halvings of a 500mm bracket is a fifth of a micron; the surface is
+    // not defined to anything like that, and the extra eight were pure cost
+    for (let i = 0; i < 18; i++) {
       const mid = (lo + hi) * 0.5;
       if (f(mid) < 0) lo = mid; else hi = mid;
     }
@@ -568,19 +681,37 @@
    * each separately draws a stack of discs — every ring becomes its own
    * closed silhouette and the seams between them are all visible.
    */
+  /**
+   * The points a chain part sweeps between, and the frame at each.
+   *
+   * The subtlety is the last one. A chain of bones gives its stations from
+   * the bones' ORIGINS, so a chain of n bones has n stations and stops at
+   * the last bone's start — which for the spine barely showed (the top of
+   * C1 is a millimetre of neck) and for a leg would have thrown the entire
+   * tibia away. So the far end of the last bone is a node too.
+   */
+  function chainNodes(rig, ids) {
+    const out = [];
+    for (const id of ids) {
+      const b = rig.bones[id];
+      if (b) out.push({ P: b.A, fr: b.frame });
+    }
+    const last = rig.bones[ids[ids.length - 1]];
+    if (last) out.push({ P: last.B, fr: last.frame });
+    return out;
+  }
+
   function axisAt(rig, part, s) {
     if (part.chain) {
-      const ids = part.chain;
-      const f = s * (ids.length - 1);
+      const nd = part.nodes || (part.nodes = chainNodes(rig, part.chain));
+      const f = s * (nd.length - 1);
       // NOT clamped, and that is the point. The spine starts at L5, but a
       // body does not: the buttocks hang 160mm below the sacral base, and a
       // trunk whose stations stop where its bones stop is a trunk that ends
       // at the waist. Below zero the first segment is extrapolated downward,
       // which is where the pelvic block already is.
-      const i = Math.min(ids.length - 2, Math.max(0, Math.floor(f))), t = f - i;
-      const b0 = rig.bones[ids[i]], b1 = rig.bones[ids[i + 1]];
-      if (!b0 || !b1) return null;
-      return { C: M.vlerp(b0.A, b1.A, t), fr: t < 0.5 ? b0.frame : b1.frame };
+      const i = Math.min(nd.length - 2, Math.max(0, Math.floor(f))), t = f - i;
+      return { C: M.vlerp(nd[i].P, nd[i + 1].P, t), fr: t < 0.5 ? nd[i].fr : nd[i + 1].fr };
     }
     const b = rig.bones[part.bone];
     if (!b) return null;
@@ -591,7 +722,7 @@
   function ringAt(rig, part, s, na, opts) {
     const ax = axisAt(rig, part, s);
     if (!ax) return null;
-    const o = Object.assign({ h: ax.C[0] }, opts || {});
+    const o = Object.assign({ h: ax.C[0], s }, opts || {});
     const out = [];
     let wide = 0;
     for (let k = 0; k < na; k++) {
@@ -654,20 +785,38 @@
   function parts(rig) {
     const out = [];
     out.push({
-      name: 'trunk', chain: spineChain(rig), keep: KEEP.trunk,
+      name: 'trunk', chain: spineChain(rig), keep: KEEP.trunk, muscleKeys: ['trunk'],
       s0: -0.42, s1: 1.10, ns: 52, na: 30,
     });
     out.push({
-      name: 'head', bone: 'skull', keep: KEEP.head,
+      name: 'head', bone: 'skull', keep: KEEP.head, muscleKeys: ['head'],
       s0: -1.60, s1: 1.50, ns: 22, na: 24,
     });
+    /* A LIMB IS ONE PART. Drawn as two — an upper and a lower — each closes
+       its own silhouette, and where they meet both end caps are exposed: the
+       thigh's distal rim is three millimetres wider than the calf's proximal
+       one, so a hard line got ruled straight across every knee and every
+       elbow. Nothing is wrong with either radius; the seam is an artefact of
+       cutting a form in half and asking each half to have an outline.
+
+       As one chain part the joint is an interior station: no cap, no seam,
+       one continuous soft-tissue profile from hip to ankle, and one
+       silhouette — which is also what an arm is, to a pencil. */
     for (const side of ['L', 'R']) {
       const S = '.' + side;
-      out.push({ name: 'humerus' + S, bone: 'humerus' + S, keep: limbKeep(['humerus' + S, 'scapula' + S]), s0: 0, s1: 1, ns: 14, na: 22 });
-      out.push({ name: 'forearm' + S, bone: 'forearm' + S, keep: limbKeep(['forearm' + S]), s0: 0, s1: 1, ns: 14, na: 22 });
-      out.push({ name: 'femur' + S, bone: 'femur' + S, keep: limbKeep(['femur' + S]), s0: 0, s1: 1, ns: 16, na: 24 });
-      out.push({ name: 'tibia' + S, bone: 'tibia' + S, keep: limbKeep(['tibia' + S]), s0: 0, s1: 1, ns: 16, na: 24 });
-      out.push({ name: 'foot' + S, bone: 'foot' + S, keep: limbKeep([]), s0: -0.50, s1: 1.00, ns: 14, na: 20 });
+      out.push({
+        name: 'arm' + S, chain: ['humerus' + S, 'forearm' + S],
+        keep: limbKeep(['humerus' + S, 'forearm' + S, 'scapula' + S]),
+        muscleKeys: ['humerus' + S, 'forearm' + S],
+        s0: 0, s1: 1, ns: 30, na: 22,
+      });
+      out.push({
+        name: 'leg' + S, chain: ['femur' + S, 'tibia' + S],
+        keep: limbKeep(['femur' + S, 'tibia' + S]),
+        muscleKeys: ['femur' + S, 'tibia' + S],
+        s0: 0, s1: 1, ns: 34, na: 24,
+      });
+      out.push({ name: 'foot' + S, bone: 'foot' + S, keep: limbKeep([]), muscleKeys: ['foot' + S], s0: -0.50, s1: 1.00, ns: 14, na: 20 });
     }
     for (const p of out) {
       p.ring = (s, na) => ringAt(rig, p, s, na === undefined ? p.na : na);
@@ -695,11 +844,20 @@
      model against it means sampling the model at that same height. The
      stations here were guessed once, and the chest girth was being checked
      at T3 — up in the shoulders, 140mm above where ANSUR put the tape. */
+  /* Stations are where the survey put the tape, as fractions along the bone:
+     thigh circumference at the gluteal furrow, lower thigh just above the
+     knee, calf at its maximum, ankle at its minimum above the malleoli,
+     forearm at its maximum, wrist at the stylion. EST in the sense that the
+     fraction is read off the definition rather than given as a number; the
+     circumference at it is measured. */
   const SITES = [
-    { region: 'femur', part: 'femur.L', s: 0.35, girth: 'thigh' },
-    { region: 'tibia', part: 'tibia.L', s: 0.28, girth: 'calf' },
-    { region: 'humerus', part: 'humerus.L', s: 0.45, girth: 'biceps' },
-    { region: 'forearm', part: 'forearm.L', s: 0.22, girth: 'forearm' },
+    { region: 'leg', part: 'leg.L', bone: 'femur.L', s: 0.10, girth: 'thigh' },
+    { region: 'leg', part: 'leg.L', bone: 'femur.L', s: 0.88, girth: 'lowerThigh' },
+    { region: 'leg', part: 'leg.L', bone: 'tibia.L', s: 0.25, girth: 'calf' },
+    { region: 'leg', part: 'leg.L', bone: 'tibia.L', s: 0.92, girth: 'ankle' },
+    { region: 'arm', part: 'arm.L', bone: 'humerus.L', s: 0.45, girth: 'biceps' },
+    { region: 'arm', part: 'arm.L', bone: 'forearm.L', s: 0.20, girth: 'forearm' },
+    { region: 'arm', part: 'arm.L', bone: 'forearm.L', s: 0.96, girth: 'wrist' },
     { region: 'head', part: 'head', s: 0.16, girth: 'head' },
     { region: 'trunk', part: 'trunk', at: 'chestheight', girth: 'chest' },
     { region: 'trunk', part: 'trunk', at: 'waistheightomphalion', girth: 'waist' },
@@ -713,15 +871,29 @@
    * one the first segment extrapolates exactly as axisAt does.
    */
   function stationAtHeight(rig, part, mm) {
-    const ids = part.chain;
+    const nd = part.nodes || (part.nodes = chainNodes(rig, part.chain));
     const h = mm - rig.figure.rootHeight;
-    const y = ids.map((id) => rig.bones[id].A[0]);
-    const n = ids.length - 1;
+    const y = nd.map((q) => q.P[0]);
+    const n = nd.length - 1;
     if (h <= y[0]) return (h - y[0]) / Math.max(1e-6, y[1] - y[0]) / n;
     for (let i = 0; i < n; i++) {
       if (h <= y[i + 1]) return (i + (h - y[i]) / Math.max(1e-6, y[i + 1] - y[i])) / n;
     }
     return 1;
+  }
+
+  /**
+   * A chain station from a station along ONE of the chain's bones. Bone i
+   * runs from node i to node i+1, so this is just where that bone sits in
+   * the sequence — which is what lets a measurement taken "a tenth of the
+   * way down the femur" address a part that is the whole leg.
+   */
+  function stationOf(rig, part, boneId, sLocal) {
+    if (!part.chain) return sLocal;
+    const nd = part.nodes || (part.nodes = chainNodes(rig, part.chain));
+    const i = part.chain.indexOf(boneId);
+    if (i < 0) return sLocal;
+    return (i + clamp01(sLocal)) / (nd.length - 1);
   }
 
   /**
@@ -739,18 +911,47 @@
     const fig = rig.figure;
     sites = sites || SITES;
     fig.soft = {};
-    // an initial trunk profile of zeros, so fatAt() has something to read
-    // while the trunk anchors are being solved one at a time
-    const anchors = TRUNK_FAT.map(([k, w]) => [fig.m[k] - fig.rootHeight, 0, w, k]);
-    fig.soft.trunk = anchors;
-    const P = {};
-    for (const p of parts(rig)) P[p.name] = p;
+    // Anchor tables, empty-valued, so fatAt() has something to read while
+    // they are being solved one at a time. Each site sits exactly ON its own
+    // anchor, and a piecewise-linear table's value at an anchor is that
+    // anchor — so the sites do not interact and can be solved independently
+    // in any order, which is the whole reason for this shape.
+    /* SORTED BY HEIGHT, AND IT IS NOT A TIDINESS. TRUNK_FAT is written in the
+       order those landmarks sit on a mean body — crotch, buttock, crest,
+       omphalion, tenth rib, chest — and on a mean body they do. On an
+       INDIVIDUAL body they do not always: the iliac crest and the omphalion
+       are two millimetres apart on average and either can be the higher, and
+       the sample is drawn per figure. Out of order, alongTable() walks past
+       the waist anchor and returns an interpolation of its neighbours, so
+       solving that anchor changes nothing at all — the bisection ran to its
+       140mm ceiling and the waist stayed at its unsoftened 794mm against a
+       measured 932. It failed on two seeds in four and passed on the rest,
+       which is exactly the shape of bug that ships. */
+    const trunkAnchors = TRUNK_FAT.map(([k, w]) => [fig.m[k] - fig.rootHeight, 0, w, k])
+      .sort((a2, b2) => a2[0] - b2[0]);
+    fig.soft.trunk = trunkAnchors;
+    const limb = {};
+    const P0 = {};
+    for (const p of parts(rig)) P0[p.name] = p;
+    for (const st of sites) {
+      if (st.region === 'trunk' || st.at !== undefined) continue;
+      const key = st.bone === undefined ? st.s : stationOf(rig, P0[st.part], st.bone, st.s);
+      (limb[st.region] || (limb[st.region] = [])).push([key, 0, st]);
+    }
+    for (const r in limb) { limb[r].sort((a2, b2) => a2[0] - b2[0]); fig.soft[r] = limb[r]; }
 
+    const P = P0;
+
+    const stationFor = (st) => {
+      const p = P[st.part];
+      if (st.at !== undefined) return stationAtHeight(rig, p, fig.m[st.at]);
+      return st.bone === undefined ? st.s : stationOf(rig, p, st.bone, st.s);
+    };
     const measure = (st) => {
       const p = P[st.part];
       if (!p) return null;
-      const s = st.at === undefined ? st.s : stationAtHeight(rig, p, fig.m[st.at]);
-      const R = ringAt(rig, p, s, 36);
+      const s = stationFor(st);
+      const R = ringAt(rig, p, s, 28);
       if (!R) return null;
       let L = 0;
       for (let i = 0; i < R.length; i++) L += vlen(vsub(R[(i + 1) % R.length], R[i]));
@@ -758,14 +959,13 @@
     };
 
     // Each site is one monotone 1-D problem: thicker soft tissue, longer
-    // perimeter. Bisection, and no interaction between regions to worry
-    // about — which is exactly what solving them separately buys.
+    // perimeter. Bisection, and no interaction between sites to worry about.
     const solve = (st, set) => {
       const want = fig.girth[st.girth];
       let lo = 0, hi = 140;
       const at = (t) => { set(t); const g = measure(st); return g === null ? -1e9 : g - want; };
       if (at(hi) < 0) { set(hi); return { t: hi, got: measure(st), want, capped: true }; }
-      for (let i = 0; i < 24; i++) {
+      for (let i = 0; i < 16; i++) {
         const mid = (lo + hi) * 0.5;
         if (at(mid) < 0) lo = mid; else hi = mid;
       }
@@ -778,35 +978,43 @@
     for (const st of sites) {
       let r;
       if (st.region === 'trunk') {
-        const i = anchors.findIndex((a) => a[3] === st.at);
-        r = solve(st, (t) => { anchors[i][1] = t; });
-        r.where = st.at;
+        const i = trunkAnchors.findIndex((a2) => a2[3] === st.at);
+        r = solve(st, (t) => { trunkAnchors[i][1] = t; });
       } else {
-        r = solve(st, (t) => { fig.soft[st.region] = t; });
+        const tab = fig.soft[st.region];
+        const i = tab.findIndex((a2) => a2[2] === st);
+        r = solve(st, (t) => { tab[i][1] = t; });
       }
       r.region = st.region; r.girth = st.girth;
       report.push(r);
     }
+
+    /* No elbow circumference exists in this survey, and with the arm as one
+       part none is needed: the profile runs continuously from the biceps
+       station to the forearm's, and the elbow gets whatever lies between
+       them. That is an interpolation across an unmeasured region rather than
+       a constraint invented to bridge two separately-solved parts, which is
+       what the split version had to do. */
 
     /* The trunk anchors that no tape reaches. Their estimated SHAPE is kept
        and its scale is taken from the nearest solved anchor, so the profile
        between the hip, the waist and the chest is measured and the profile
        beyond them is the estimate carried consistently rather than a second
        independent guess. */
-    const solved = anchors.filter((a) => a[1] > 0);
-    for (const a of anchors) {
-      if (a[1] > 0) continue;
+    const solved = trunkAnchors.filter((a2) => a2[1] > 0);
+    for (const a2 of trunkAnchors) {
+      if (a2[1] > 0) continue;
       let best = solved[0];
-      for (const c of solved) if (Math.abs(c[0] - a[0]) < Math.abs(best[0] - a[0])) best = c;
-      a[1] = best ? a[2] * (best[1] / best[2]) : 0;
+      for (const c of solved) if (Math.abs(c[0] - a2[0]) < Math.abs(best[0] - a2[0])) best = c;
+      a2[1] = best ? a2[2] * (best[1] / best[2]) : 0;
     }
-    return { soft: fig.soft, report, anchors };
+    return { soft: fig.soft, report, anchors: trunkAnchors };
   }
 
   GK.field = {
-    smin, sdCapsule, sdSegSE, sdBlobSE,
-    boneField, boneRadius, muscleField, volumeField, buildVolumes,
-    fatAt, TRUNK_FAT, SOFT_EST, BONE_R, CORE, KEEP, stationAtHeight,
+    smin, sdCapsule, sdSegSE, sdBlobSE, nOffset,
+    boneField, bonesFor, boneRadius, muscleField, volumeField, volumesFor, buildVolumes,
+    fatAt, alongTable, TRUNK_FAT, SOFT_EST, BONE_R, CORE, KEEP, stationAtHeight,
     radiusAlong, axisAt, ringAt, trimRange, spineChain, parts, fitFat, SITES,
   };
 })(window.GK = window.GK || {});
