@@ -79,6 +79,14 @@
     return lerp(b, a, h) - k * h * (1 - h);
   }
 
+  /**
+   * Smooth maximum, which is smin's reflection and is how a solid gets a
+   * piece taken OUT of it. Subtraction is max(d, -cut); making it smooth is
+   * what stops the join being a razor edge, in the same way and for the same
+   * reason the union is smooth.
+   */
+  function smax(a, b, k) { return -smin(-a, -b, k); }
+
   /** signed distance to a capsule: the primitive every bone is made of */
   function sdCapsule(P, A, B, ra, rb) {
     const ab = vsub(B, A), ap = vsub(P, A);
@@ -407,7 +415,7 @@
     const fig = rig.figure, g = fig.girth, m = fig.m;
     const V = [];
     const vertR = fig.stature * 0.017;
-    const put = (at, sdf) => V.push({ at, sdf });
+    const put = (at, sdf, cut) => V.push({ at, sdf, cut: !!cut });
     // every closure below takes (P, f): f is how much soft tissue is wrapped
     // around that solid, applied to its semi-axes rather than subtracted
     // from its field. See volumeField() for why that distinction matters.
@@ -495,6 +503,32 @@
           kTro * 0.86, dTro * 0.90, kTro, dTro, n, 26, f));
         put('trunk', (P, f) => sdSegSE(P, T, C, fr,
           kTro, dTro, kCre, dCre, n, undefined, f));
+
+        /* THE CROTCH, which is a hole rather than a shape.
+           Everything above builds the pelvis as one solid spanning the full
+           hip breadth, and below the crotch that is simply wrong: there is no
+           body on the midline down there, there are two thighs with a gap
+           between them. Left filled, the trunk hung 26mm BELOW crotch height
+           across its whole width, so the place where the legs should diverge
+           was solid trunk and the figure had no groin at all — the two thighs
+           ran up into a skirt.
+
+           So it is carved. Crotch height is measured, and it is the top of
+           the cut. Laterally the cut stops just inside the hip joint centres,
+           because past those it would be eating buttock. In depth it is
+           deliberately larger than the pelvis is deep, since the gap between
+           two legs runs clean through from front to back — a round cut would
+           leave a wall of tissue in front of it and another behind.
+
+           The visible consequence is that the trunk's rings now collapse at
+           crotch height instead of below it, so the trunk's own outline ends
+           there and the legs take over, which is what a crotch looks like. */
+        const cutW = Math.abs(fig.at.hip[1]) * 0.94;
+        const cutCap = cutW * 0.8;
+        const cutTop = at(m.crotchheight - cutCap, dTro * 0.86 - vertR);
+        const cutBot = vmad(cutTop, fr[0], -(m.crotchheight - fig.rootHeight + 400));
+        put('trunk', (P) => sdSegSE(P, cutTop, cutBot, fr,
+          cutW, dTro * 1.9, cutW, dTro * 1.9, 2, cutCap), true);
       }
     }
 
@@ -586,19 +620,32 @@
    * truthful statement — subcutaneous tissue is a thickness on a form, not an
    * offset on a number.
    */
+  // how softly a carved edge is rounded off. Small: a crotch is a crease,
+  // not a fillet, and a body has few of these.
+  const CUT_K = 9;
+
   function volumeField(vols, P, f) {
+    const S = vols.solid, C = vols.cut;
     let d = 1e9;
-    for (let i = 0; i < vols.length; i++) {
-      const t = vols[i].sdf(P, f || 0);
+    for (let i = 0; i < S.length; i++) {
+      const t = S[i].sdf(P, f || 0);
       if (t < d) d = t;
     }
+    // A cut is applied to the part's WHOLE volume field, never to one solid
+    // of it, and that is not a detail: the pelvis is two stacked segments and
+    // the upper one's own end cap reaches 78mm below its lower end — past the
+    // crotch and straight through anything the lower one had carved.
+    for (let i = 0; i < C.length; i++) d = smax(d, -C[i].sdf(P, 0), CUT_K);
     return d;
   }
 
   /** the volumes belonging to one part, resolved once for the same reason */
   function volumesFor(rig, name) {
     const V = rig.volumes || (rig.volumes = buildVolumes(rig));
-    return V.filter((v) => v.at === name);
+    return {
+      solid: V.filter((v) => v.at === name && !v.cut),
+      cut: V.filter((v) => v.at === name && v.cut),
+    };
   }
 
   // =========================================================================
@@ -1235,7 +1282,7 @@
   }
 
   GK.field = {
-    smin, sdCapsule, sdSegSE, sdBlobSE, nOffset,
+    smin, smax, sdCapsule, sdSegSE, sdBlobSE, nOffset,
     boneField, bonesFor, boneRadius, boneShape, sdBoneShaft, BONE_FLARE, BONE_ENDS, BONE_BARE, EPI_SOFT,
     muscleField, muscleBound, volumeField, volumesFor, buildVolumes,
     useMuscleBulk, fatAt, alongTable, TRUNK_FAT, SOFT_EST, BONE_R, CORE, KEEP, NO_MUSCLE_BULK, stationAtHeight,

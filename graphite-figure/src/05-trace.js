@@ -123,6 +123,111 @@
   }
 
   /**
+   * A filled mask to a drawable outline: walk its border, filter the
+   * staircase out, push it back to where the form's edge actually is, and
+   * resample by arclength.
+   *
+   * Split out of traceCoverage because a mask does not have to come from
+   * rings. The depth field is already a mask — it holds, per pixel, which
+   * part the viewer can see — so the visible outline of anything in it can be
+   * had without rebuilding that thing's geometry at all. That is how a hand
+   * too small to draw finger by finger gets drawn as one form.
+   *
+   * `m` carries {w, h, cov} and the mapping back to pixels {cell, x0, y0,
+   * pad}; {dep, own, gn} are sampled onto the result where present.
+   */
+  function traceMask(m, opts) {
+    opts = opts || {};
+    const W = m.w, H = m.h, cell = m.cell, PAD = m.pad || 0;
+    const x0 = m.x0, y0 = m.y0, defOwn = m.defaultOwn === undefined ? 0 : m.defaultOwn;
+    const gx = (px) => (px - x0) / cell + PAD, gy = (py) => (py - y0) / cell + PAD;
+    const border = traceBorder(m);
+    if (!border) return { use: false };
+    // Back to pixels, then filtered: a walk over cells is a staircase, and a
+    // staircase drawn with a pencil is a burr on every step.
+    let pts = border.map(([bx, by]) => [(bx - PAD + 0.5) * cell + x0, (by - PAD + 0.5) * cell + y0]);
+    // A tap for tools that want to see the construction rather than its
+    // result: the coverage mask, and the staircase before it is filtered.
+    // Off the hot path entirely - nothing here runs unless one is passed.
+    if (opts.tap) opts.tap({ cell, x0, y0, pad: PAD, w: W, h: H, cov: m.cov, own: m.own, raw: pts.map(q => q.slice()) });
+    const N = pts.length;
+    for (let pass = 0; pass < (opts.smooth === undefined ? 4 : opts.smooth); pass++) {
+      const src = pts;
+      pts = new Array(N);
+      for (let i = 0; i < N; i++) {
+        const a = src[(i - 1 + N) % N], b = src[i], c = src[(i + 1) % N];
+        pts[i] = [(a[0] + b[0] * 2 + c[0]) * 0.25, (a[1] + b[1] * 2 + c[1]) * 0.25];
+      }
+    }
+    // Resample by arclength: the walk clusters points on the diagonals.
+    const cum = [0];
+    for (let i = 1; i <= N; i++) {
+      const a = pts[i - 1], b = pts[i % N];
+      cum.push(cum[i - 1] + Math.hypot(b[0] - a[0], b[1] - a[1]));
+    }
+    const total = cum[N];
+    if (!(total > 1)) return { use: false };
+    // one point every few pixels: fine enough that a chord never shows on
+    // the tightest curvature the form presents, coarse enough that the
+    // depth test isn't run hundreds of times per form for nothing.
+    const NP = Math.max(64, Math.min(opts.n || 400, Math.round(total / 4)));
+    // Two things pull the walk inside the form it is tracing: it runs on cell
+    // centres, half a cell in, and every smoothing pass shortens a convex
+    // curve a little more. Both are known, so push the whole loop back out
+    // along its own normal rather than leaving the drawing a hair narrow.
+    {
+      let area = 0;
+      for (let i = 0; i < N; i++) {
+        const a = pts[i], b = pts[(i + 1) % N];
+        area += a[0] * b[1] - b[0] * a[1];
+      }
+      const sgn = area > 0 ? 1 : -1;
+      const off = cell * 1.15;
+      const src = pts;
+      pts = new Array(N);
+      for (let i = 0; i < N; i++) {
+        const a = src[(i - 1 + N) % N], b = src[i], c = src[(i + 1) % N];
+        const tx = c[0] - a[0], ty = c[1] - a[1];
+        const L = Math.hypot(tx, ty);
+        if (L < 1e-9) { pts[i] = b; continue; }
+        pts[i] = [b[0] + (ty / L) * off * sgn, b[1] - (tx / L) * off * sgn];
+      }
+    }
+    const out = [];
+    let j = 0;
+    const sample = (px, py) => {
+      const cx2 = Math.round(gx(px)), cy2 = Math.round(gy(py));
+      for (let rad = 0; rad < 4; rad++) {
+        for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) {
+          if (rad > 0 && Math.abs(dx) !== rad && Math.abs(dy) !== rad) continue;
+          const xx = cx2 + dx, yy = cy2 + dy;
+          if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+          const i = yy * W + xx;
+          // own and gn are optional: a mask that came from a depth field
+          // carries depth and nothing else, and has no per-ring identity or
+          // grazing term to offer
+          if (m.cov[i]) {
+            return [m.dep ? m.dep[i] : 0, m.own ? m.own[i] : defOwn, m.gn ? m.gn[i] : 1];
+          }
+        }
+      }
+      return [0, defOwn, 1];
+    };
+    for (let i = 0; i <= NP; i++) {
+      const want = (i / NP) * total;
+      while (j < N && cum[j + 1] < want) j++;
+      const a = pts[j % N], b = pts[(j + 1) % N];
+      const seg = Math.max(1e-9, cum[j + 1] - cum[j]);
+      const t = Math.max(0, Math.min(1, (want - cum[j]) / seg));
+      const px = lerp(a[0], b[0], t), py = lerp(a[1], b[1], t);
+      const [dz, own, gn] = sample(px, py);
+      out.push([px, py, dz, own, gn]);
+    }
+    if (opts.tap) opts.tap({ final: out });
+    return { use: true, outline: out, area: total };
+  }
+
+  /**
    * The outline of a form, as the border of everything its cross-sections
    * cover.
    *
@@ -197,86 +302,10 @@
         if (t[i - W] && t[i + W]) m.cov[i] = 1;
       }
     }
-    const border = traceBorder(m);
-    if (!border) return { use: false };
-    // Back to pixels, then filtered: a walk over cells is a staircase, and a
-    // staircase drawn with a pencil is a burr on every step.
-    let pts = border.map(([bx, by]) => [(bx - PAD + 0.5) * cell + x0, (by - PAD + 0.5) * cell + y0]);
-    // A tap for tools that want to see the construction rather than its
-    // result: the coverage mask, and the staircase before it is filtered.
-    // Off the hot path entirely - nothing here runs unless one is passed.
-    if (opts.tap) opts.tap({ cell, x0, y0, pad: PAD, w: W, h: H, cov: m.cov, own: m.own, raw: pts.map(q => q.slice()) });
-    const N = pts.length;
-    for (let pass = 0; pass < (opts.smooth === undefined ? 4 : opts.smooth); pass++) {
-      const src = pts;
-      pts = new Array(N);
-      for (let i = 0; i < N; i++) {
-        const a = src[(i - 1 + N) % N], b = src[i], c = src[(i + 1) % N];
-        pts[i] = [(a[0] + b[0] * 2 + c[0]) * 0.25, (a[1] + b[1] * 2 + c[1]) * 0.25];
-      }
-    }
-    // Resample by arclength: the walk clusters points on the diagonals.
-    const cum = [0];
-    for (let i = 1; i <= N; i++) {
-      const a = pts[i - 1], b = pts[i % N];
-      cum.push(cum[i - 1] + Math.hypot(b[0] - a[0], b[1] - a[1]));
-    }
-    const total = cum[N];
-    if (!(total > 1)) return { use: false };
-    // one point every few pixels: fine enough that a chord never shows on
-    // the tightest curvature the form presents, coarse enough that the
-    // depth test isn't run hundreds of times per form for nothing.
-    const NP = Math.max(64, Math.min(opts.n || 400, Math.round(total / 4)));
-    // Two things pull the walk inside the form it is tracing: it runs on cell
-    // centres, half a cell in, and every smoothing pass shortens a convex
-    // curve a little more. Both are known, so push the whole loop back out
-    // along its own normal rather than leaving the drawing a hair narrow.
-    {
-      let area = 0;
-      for (let i = 0; i < N; i++) {
-        const a = pts[i], b = pts[(i + 1) % N];
-        area += a[0] * b[1] - b[0] * a[1];
-      }
-      const sgn = area > 0 ? 1 : -1;
-      const off = cell * 1.15;
-      const src = pts;
-      pts = new Array(N);
-      for (let i = 0; i < N; i++) {
-        const a = src[(i - 1 + N) % N], b = src[i], c = src[(i + 1) % N];
-        const tx = c[0] - a[0], ty = c[1] - a[1];
-        const L = Math.hypot(tx, ty);
-        if (L < 1e-9) { pts[i] = b; continue; }
-        pts[i] = [b[0] + (ty / L) * off * sgn, b[1] - (tx / L) * off * sgn];
-      }
-    }
-    const out = [];
-    let j = 0;
-    const sample = (px, py) => {
-      const cx2 = Math.round(gx(px)), cy2 = Math.round(gy(py));
-      for (let rad = 0; rad < 4; rad++) {
-        for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) {
-          if (rad > 0 && Math.abs(dx) !== rad && Math.abs(dy) !== rad) continue;
-          const xx = cx2 + dx, yy = cy2 + dy;
-          if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
-          const i = yy * W + xx;
-          if (m.cov[i]) return [m.dep[i], m.own[i], m.gn[i]];
-        }
-      }
-      return [0, rings[0].id, 1];
-    };
-    for (let i = 0; i <= NP; i++) {
-      const want = (i / NP) * total;
-      while (j < N && cum[j + 1] < want) j++;
-      const a = pts[j % N], b = pts[(j + 1) % N];
-      const seg = Math.max(1e-9, cum[j + 1] - cum[j]);
-      const t = Math.max(0, Math.min(1, (want - cum[j]) / seg));
-      const px = lerp(a[0], b[0], t), py = lerp(a[1], b[1], t);
-      const [dz, own, gn] = sample(px, py);
-      out.push([px, py, dz, own, gn]);
-    }
-    if (opts.tap) opts.tap({ final: out });
-    return { use: true, outline: out, area: total };
+    m.cell = cell; m.x0 = x0; m.y0 = y0; m.pad = PAD; m.defaultOwn = rings[0].id;
+    return traceMask(m, opts);
   }
 
-  GK.trace = { traceCoverage, fillTri, traceBorder };
+
+  GK.trace = { traceCoverage, traceMask, fillTri, traceBorder };
 })(window.GK = window.GK || {});

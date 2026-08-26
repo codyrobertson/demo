@@ -22,7 +22,24 @@ const az = parseFloat(a[1] || '180') * DEG;
 const el = parseFloat(a[2] || '0') * DEG;
 const out = a[3] || '/tmp/skin.png';
 const S = parseInt(a[4] || '900');
-const POSE = process.env.POSE ? JSON.parse(process.env.POSE) : {};
+/* A STANCE, NOT ANATOMICAL ZERO.
+   Every joint at zero puts the legs exactly vertical, and with a measured
+   581mm thigh circumference and hip centres 82mm apart that means the two
+   thighs interpenetrate by about 22mm — which is not a modelling error, it is
+   what a body with those two measurements does. But it leaves them perfectly
+   coplanar, so neither occludes the other, neither one's silhouette survives
+   inside the other, and the pair draws as a single column with no groin in it
+   however well the crotch itself is carved.
+
+   A standing person does not stand like that. The feet are a hand's breadth
+   apart, which is three degrees of hip abduction, and at that the legs part,
+   converge toward the knees and separate again at the feet — and the crotch
+   reads. This is a default for the DRAWING and not a change to the skeleton:
+   the rest pose is still every angle at zero, which is what checkfit.js
+   measures the chain against. Any POSE= key overrides it, `{"hipAbd":0}`
+   included. */
+const STANCE = { hipAbd: 0.05 };
+const POSE = Object.assign({}, STANCE, process.env.POSE ? JSON.parse(process.env.POSE) : {});
 const ONLY = process.env.ONLY || null;
 // NOMUSCLE=1 draws the same figure with the muscle layer switched off, which
 // is the only way to answer "is this layer helping?" with a picture rather
@@ -166,6 +183,8 @@ for (const P of PARTS) {
 // it, so the hands are BUILT here and PAINTED later: build writes depth,
 // draw makes marks. Done the other way round, the body's outline would run
 // straight through the hand in front of it.
+// how many identities each hand reserves in the shared depth field
+const HAND_ID_SPAN = 100;
 const fitPin = { scale: view.scale, cx: view.cx, cy: view.cy };
 // how many pixels of plate this body's hand actually gets
 const handPx = fig.m.handlength * view.scale;
@@ -174,7 +193,7 @@ const HAND_STATE = HANDS.map((H, i) => ({
   seed, anatomy: H.anatomy, pose: H.pose, contacts: false,
   mount: { origin: H.mount.origin, frame: H.mount.frame },
   view: { az, el, roll: 0 }, fit: fitPin,
-  df, idBase: 1000 + i * 100, graphite: null,
+  df, idBase: 1000 + i * HAND_ID_SPAN, graphite: null,
   style: { grade: 3, tone: 1, wobble: 1, ghost: 0, search: 0 },
   // At full-figure scale a hand is eighty pixels across. Everything the
   // hand project knows how to draw INSIDE its own outline — prints, ridges,
@@ -241,9 +260,84 @@ for (const P of PARTS) {
   }
 }
 
-// ...and now the hands, into the same sheet and against the field that
-// already holds the body.
-HAND_STATE.forEach((st, i) => { st.graphite = g; HAND_R[i].draw(st); });
+/* ...and now the hands.
+
+   A hand gets about ninety pixels in a full-figure plate, and its own
+   renderer draws it as five closed digit outlines plus a palm, each tested
+   against the others. At that size a finger is seven pixels across and the
+   occlusion tolerances — which are correct, being set by the depth field's
+   own rasterisation error — are comparable to a whole finger's width, so the
+   digits bury one another and what survives is a handful of disconnected
+   arcs. A cloud of scribble where a hand should be.
+
+   Turning the interior detail off was necessary and not sufficient: the
+   problem is not what is drawn INSIDE the outline, it is that five outlines
+   is the wrong number of outlines at this size. At ninety pixels a hand is
+   one form, and a person drawing one would draw one shape.
+
+   Which is already computed. The depth field holds, per pixel, which part
+   the viewer can see — so the hand's visible coverage is sitting in it, at
+   exactly the plate's own resolution, with occlusion by the body already
+   resolved. Walking the border of that is the same construction the whole
+   project uses for every other silhouette, applied to a mask that came from
+   somewhere else. No geometry is rebuilt and nothing new is approximated. */
+function coverageOutline(idLo) {
+  const W = df.w, H = df.h, D = df.div, idHi = idLo + HAND_ID_SPAN;
+  let bx0 = 1e9, by0 = 1e9, bx1 = -1e9, by1 = -1e9;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const id = df.i0[y * W + x];
+      if (id < idLo || id >= idHi) continue;
+      if (x < bx0) bx0 = x; if (x > bx1) bx1 = x;
+      if (y < by0) by0 = y; if (y > by1) by1 = y;
+    }
+  }
+  if (bx1 < bx0) return null;
+  const PAD = 2, w = (bx1 - bx0 + 1) + PAD * 2, h = (by1 - by0 + 1) + PAD * 2;
+  const cov = new Uint8Array(w * h), dep = new Float32Array(w * h);
+  for (let y = by0; y <= by1; y++) {
+    for (let x = bx0; x <= bx1; x++) {
+      const i = y * W + x, id = df.i0[i];
+      if (id < idLo || id >= idHi) continue;
+      const j = (y - by0 + PAD) * w + (x - bx0 + PAD);
+      cov[j] = 1; dep[j] = df.z0[i];
+    }
+  }
+  return G.trace.traceMask({
+    w, h, cov, dep, cell: D, x0: bx0 * D, y0: by0 * D, pad: PAD, defaultOwn: idLo,
+  }, { smooth: 3 });
+}
+
+if (fine) {
+  HAND_STATE.forEach((st, i) => { st.graphite = g; HAND_R[i].draw(st); });
+} else {
+  for (const st of HAND_STATE) {
+    const sil = coverageOutline(st.idBase);
+    if (!sil || !sil.use) continue;
+    /* Part of that border is not the hand's edge at all — it is where the
+       thigh in front of it cuts across, and the thigh has already drawn that
+       line itself. So each point is asked what is at it now that the outline
+       has been pushed outward: if the answer is a nearer part of the body,
+       the hand does not have an edge there and the point is dropped. */
+    const pts = sil.outline.map((q) => {
+      const cx = Math.round(q[0] / df.div), cy = Math.round(q[1] / df.div);
+      let v = 1;
+      if (cx >= 0 && cy >= 0 && cx < df.w && cy < df.h) {
+        const i = cy * df.w + cx, id = df.i0[i];
+        if (id >= 0 && (id < st.idBase || id >= st.idBase + HAND_ID_SPAN) &&
+            df.z0[i] > q[2] + eps) v = 0;
+      }
+      return [q[0], q[1], v];
+    });
+    for (const run of RE.runs(pts, 0.06, 2, 40)) {
+      g.stroke(run.pts, {
+        grade, tone: 1.0, weight: 1.05, passes: 1, taper: 0.5,
+        wobble: 1, jitter: 0.5, phase: st.idBase * 0.37, vis: run.vis,
+      });
+      drawn++;
+    }
+  }
+}
 
 const px = g.resolve({ paper: [244, 241, 232], ink: [26, 25, 23], k: 1.55, gamma: 1 });
 writePNG(out, px, S, S);
