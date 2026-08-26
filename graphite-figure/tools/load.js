@@ -36,6 +36,7 @@ const FIGURE = [
   '00-osim',          // Rajagopal, for cross-checking joint centres
   '00-mobl-arms',     // Holzbaur upper extremity: muscle paths and wrapping
   '00-bodyparts3d',   // measured anatomy: per-structure volume and extent
+  '00-staple-tlem2',  // TLEM2 bone geometry, via msk-STAPLE (CC BY-NC)
   '05-trace',         // traced silhouettes
   '10-skeleton',      // bones, frames, the two-pass solve
   '30-limits',        // joint limits and their couplings
@@ -53,6 +54,7 @@ const DATA = [
   ['osim', 'rajagopal.json'],
   ['mobl', 'mobl-arms.json'],
   ['bp3d', 'bodyparts3d.json'],
+  ['stapleTlem2', 'staple-tlem2.json'],
 ];
 
 function tryRequire(p, name) {
