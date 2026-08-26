@@ -73,11 +73,27 @@
   //  lateral and anteroposterior placement is where the estimates live.
   // =========================================================================
 
-  // Bell et al. (1990) locate the hip joint centre from the inter-ASIS
-  // distance. EST: ANSUR measures bicristale (iliac crest) breadth rather
-  // than inter-ASIS, and the two are not the same landmark, so the ratio
-  // below carries that substitution as well as the regression itself.
-  const HJC_FROM_BICRISTALE = 0.34;
+  /**
+   * Hip joint centre spacing, as a fraction of bicristale breadth.
+   *
+   * This is the one number here that ANSUR genuinely cannot supply: a
+   * trochanterion can be palpated, a hip joint centre cannot, and the survey
+   * has no landmark inside the pelvis. It began as a Bell-style regression at
+   * 0.34, carrying a known substitution — Bell's is written for the inter-ASIS
+   * distance and ANSUR measures the iliac crests, which are not the same
+   * landmark.
+   *
+   * Calibrated instead against the Rajagopal musculoskeletal model, whose
+   * pelvis width IS a hip-centre-to-hip-centre distance measured by imaging:
+   * against leg length, 0.34 came out 19.6% wide, and 0.284 lands on it. Two
+   * independent routes then agree — Bell's own coefficient against inter-ASIS
+   * is 0.28, and this is 0.284 against bicristale.
+   *
+   * tools/crosscheck.js is the comparison, and states its own limit: a single
+   * imaged subject settles a large disagreement about a number no tape can
+   * reach, and settles nothing about a few percent.
+   */
+  const HJC_FROM_BICRISTALE = 0.284;
   // DERIVED, not estimated — see tools/fit-arm.js, which fits these from the
   // survey itself across all 6,068 subjects. Span pins the horizontal and the
   // resting wrist height pins the vertical, and neither is a measurement the
@@ -207,5 +223,5 @@
     };
   }
 
-  GK.anthro = { useModel, sampleBody, landmarks, segments, girths, GH_INBOARD, GH_DROP, JOINT_CENTRE_K, get model() { return MODEL; } };
+  GK.anthro = { useModel, sampleBody, landmarks, segments, girths, GH_INBOARD, GH_DROP, JOINT_CENTRE_K, HJC_FROM_BICRISTALE, get model() { return MODEL; } };
 })(window.GK = window.GK || {});
