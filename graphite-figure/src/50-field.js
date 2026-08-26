@@ -272,6 +272,20 @@
     femur: [false, true], tibia: [true, true],
     humerus: [false, true], forearm: [true, true],
   };
+  /* HOW ROUND A BONE'S DISTAL END IS — [lateral, anterior] scales on the
+     flare. A distal tibia is not a cylinder: the malleoli make it wide
+     side-to-side and comparatively flat front-to-back, and keeping it a
+     perfect circle right up to the joint is what drew the "beak" at every
+     ankle — the leg's circular silhouette and the foot's wedge crossed
+     instead of meeting tangentially, a shape mismatch the foot alone could
+     not fix however well its own waist matched in size. The distal radius
+     is measured (bimalleolar breadth); these scales shape it. EST, from the
+     same mismatch: the foot's waist arrives ~33mm dorsal on a 34mm lateral,
+     and the tibia now leaves matching. The forearm gets the milder version
+     of the same truth — a wrist is wider than it is deep. */
+  const BONE_END_ANISO = {
+    tibia: [1.0, 0.78], forearm: [1.0, 0.82],
+  };
 
   function boneRadius(fig, id) {
     const base = id.replace(/\.[LR]$/, '');
@@ -327,7 +341,18 @@
        by the same eased ramp, so the two are one statement about one place
        rather than two numbers that have to be kept in step by hand. */
     const fe = e > 0 ? lerp(f, Math.min(f, EPI_SOFT), e) : f;
-    return vlen(vsub(P, c)) - (r + fe);
+    const d = vsub(P, c);
+    if (b.an && t > 1 - b.w) {
+      // shape the flare, not the shaft: the anisotropy eases in with the
+      // same ramp as the swell, so the bone leaves its shaft round and
+      // arrives at the joint as the wedge the next segment presents
+      const ee = sstep((t - (1 - b.w)) / b.w);
+      const ky = lerp(1, b.an[0], ee), kz = lerp(1, b.an[1], ee);
+      const ax = vdot(d, b.fr[0]);
+      const ly = vdot(d, b.fr[1]) / ky, lz = vdot(d, b.fr[2]) / kz;
+      return Math.sqrt(ax * ax + ly * ly + lz * lz) - (r + fe);
+    }
+    return vlen(d) - (r + fe);
   }
   const EPI_SOFT = 7;   // mm of skin and subcutaneous fat over a bony prominence — EST
   /** smootherstep, so a flare eases in and out rather than cornering */
@@ -357,7 +382,9 @@
       if (SHAPED[id.replace(/\.[LR]$/, '')]) continue;
       if (keep && !keep(id)) continue;
       const sh = boneShape(rig.figure, id);
-      out.push({ A: b.A, B: b.B, r: sh.r, r0: sh.r0, r1: sh.r1, w: sh.w, b0: sh.b0, b1: sh.b1 });
+      const an = BONE_END_ANISO[id.replace(/\.[LR]$/, '')] || null;
+      out.push({ A: b.A, B: b.B, r: sh.r, r0: sh.r0, r1: sh.r1, w: sh.w, b0: sh.b0, b1: sh.b1,
+        an, fr: an ? b.frame : null });
     }
     return out;
   }
