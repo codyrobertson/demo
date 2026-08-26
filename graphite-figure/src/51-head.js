@@ -192,15 +192,40 @@
        Both effects together are why TOP_MARGIN and BOT_MARGIN below are
        NEGATIVE: the core is told to overshoot the measured vertex and
        chin by a few millimetres before the scalp is added, not undershoot
-       them. Solved empirically against tools/proportions.js across eight
-       bodies, because the two effects above do not move in step across
-       different heads (a body with a longer face needed a different
-       balance than a shorter one) and no single clean formula in up, dn,
-       cy or cz reproduced the right answer for both the tallest and the
-       shortest body in the sample at once — the value below is the
-       compromise that clears the most checks across all eight, not a
-       number with a closed-form derivation behind it. */
-    const TOP_MARGIN = -3.5, BOT_MARGIN = -3.5;   // EST, solved against tools/proportions.js — see above
+       them.
+
+       WHY A FRACTION NOW, NOT THE FLAT -3.5mm THIS FILE SHIPPED WITH
+       FIRST. A flat millimetre count cannot know the one thing that
+       actually drives how much overshoot a given body needs: fitFat's
+       own solved `f`, which is not a fixed number but swings 5-12mm
+       across ordinary bodies (see THE SIZE BUDGET above), by however
+       much THAT body's bare polytope perimeter happens to fall short of
+       ITS OWN measured circumference. -3.5mm flat drew three of eight
+       sampled bodies under the 0.97 floor (0.952-0.969) — and all three
+       had the SMALLEST solved `f` in the sample (4.9-7.0mm, against a
+       4.9-11.9mm range): too little scalp came back to fill in what a
+       fixed pre-shrink held back, because the pre-shrink did not grow
+       with the body the way the shortfall it is compensating for does.
+       A fraction of the body's own measured envelope — tragiontopofhead
+       + mentonsellionlength, per the brief this rebuild's follow-up
+       gave — does not know `f` either (no closed form here can: `f` is
+       solved AFTER this file's planes exist, from a bisection against
+       the drawn circumference, not before). What it does do is scale
+       the overshoot to the body's own size instead of applying one
+       adult's number to every adult, which is enough: the band has
+       plenty of headroom on the high side (0.97-1.06, and the worst
+       sampled body reached only 1.025 even before this change), so
+       raising the floor by scaling up does not put anyone through the
+       ceiling. Solved empirically the same way the flat number was —
+       against tools/proportions.js across eight bodies — because no
+       single clean formula in up, dn, cy or cz reproduced the right
+       answer for both the tallest and the shortest body in the sample
+       at once; the fraction below is the compromise that clears the
+       most checks across all eight, not a number with a closed-form
+       derivation behind it. */
+    const measH = up + dn;                    // tragiontopofhead + mentonsellionlength
+    const MARGIN_FRAC = 0.028;   // EST, solved against tools/proportions.js — see above
+    const TOP_MARGIN = -MARGIN_FRAC * measH, BOT_MARGIN = -MARGIN_FRAC * measH;
     const vertexH = up - TOP_MARGIN;
     const chinH = -dn + BOT_MARGIN;
     const parietalH = up * 0.50;             // EST: where the skull is at its true widest
@@ -275,16 +300,122 @@
     // every direction is already some plane's inside, so this facet is
     // just one more entry rather than a different code path
     addPlane(vertexH, 0, 0, U, F, 0);
-    // upper + lower occiput, meeting at the most-posterior ridge — the
-    // instruction is "at ear height, as now", and the ear's own canon
-    // span is centred at occiputH, so that is where the ridge is put
-    addPlane(occiputH, 0, -cz * 0.83, Fn, U, 22);
-    addPlane(occiputH, 0, -cz * 0.83, Fn, Un, 16);
+    /* THE PHARAOH'S HOOD, which is what two occiput facets drew instead
+       of a skull. At az 90 the flat crown-top plane (F-independent,
+       deg 90 in this family's own terms) met the single upper-occiput
+       plane (deg 22 from Fn toward U) directly, a 68-degree jump taken
+       in one smax step — and a corner that sharp does not read as a
+       rounded skull however soft K is, it reads as a crease, because
+       the angle between the two planes' normals (not K) is what sets
+       how far a convex smax corner bulges. Worse than the crease itself:
+       that corner sat some 20+mm BEHIND the tragion (F worked out
+       negative at U = vertexH, the flat top's own height) rather than
+       over it, because the flat top plane does not care about F at all
+       and so extends exactly as far back as whatever plane stops it —
+       here, a single steep wall anchored at the ridge. The two together
+       drew a flat plateau roofing a near-vertical drop straight down to
+       the ear-height ridge: a nemes headdress silhouette, not a crown.
+
+       THE FIX IS MORE FACETS, NOT A ROUNDER ONE — a single replacement
+       angle for the old 22 still meets the flat top at whatever angle
+       it is given, and the review asked for "at least two more facets
+       back there": a crown-to-occiput transition plane, and a rounder
+       upper-occiput tilt below it. Three steps averaging under 30
+       degrees apiece (90 to the transition's 58, 58 to the revised
+       upper-occiput's 34, 34 down toward the ridge) read as a curve for
+       the same reason the front of the face gets six planes from brow
+       to chin instead of one: each individual smax join is softer when
+       the planes either side of it are closer in angle, corner bulge
+       included, and the CUMULATIVE effect of several gentle joins is a
+       dome, not a wedge.
+
+       PLACING occTransH/occTransZ is not free of the same trap the
+       original single plane fell into, and it caught this rebuild once
+       already: an early attempt anchored the transition too low (60%
+       of the way from ridge to crown) with too shallow a depth, and
+       because a FLATTER plane's own crossing with F=0 falls at a LOWER
+       U the flatter it is (U = h + |z|/tan(deg), which shrinks as
+       tan(deg) grows), that plane started overruling the crown-top cap
+       barely halfway up the head — drawn headH fell from 231mm to
+       200mm on seed 12345, a bald dome instead of a shaved-in temple.
+       The fix is the same identity read the other way: solve h and z
+       TOGETHER so the plane's crossing at F=0 lands close to vertexH
+       (not partway down), which is the same condition as its crossing
+       at U=vertexH landing close to F=0 — one straight line, so pinning
+       either point pins the other. h_t at 75% of the way from ridge to
+       crown with z_t at cz*0.55 back is what solves both at once for a
+       representative head; the upper-occiput revision below needed the
+       identical check, which is why its own new angle stops at 26
+       degrees; the arithmetic for both is in tools/ (scratch), not
+       carried here, because the smax chain and the envelope ellipsoid
+       both still touch the final position enough that this is a
+       starting point confirmed against renders, not a closed form
+       trusted past them.
+
+       UPPER-OCCIPUT'S OWN new angle — 26, not the file's first attempt
+       at 34 — answers the same trap a second time. 34 degrees is
+       "rounder" in isolation, but at the ridge's own anchor (cz*0.83
+       back) it crosses F=0 at U=86, more than 35mm below vertexH: the
+       same premature dome the transition plane's bad first placement
+       caused, from the OTHER facet. 26 degrees keeps that crossing at
+       U=127, just past vertexH, so upper-occiput still only governs
+       where it always did — behind the ear, not overhead — and the
+       roundING is left entirely to the new transition plane above it,
+       which is what "at least two more facets" asked for rather than
+       one facet doing double duty.
+
+       The most-posterior point does not move: upper-occiput and
+       lower-occiput still share the one anchor, at ear height, exactly
+       as the construction this replaces did — that instruction was
+       already correct, and nothing about fixing the top touches it. */
+    const occTransH = lerp(occiputH, vertexH, 0.75);   // EST: see above
+    addPlane(occTransH, 0, -cz * 0.55, Fn, U, 58);      // crown-to-occiput transition
+    addPlane(occiputH, 0, -cz * 0.83, Fn, U, 26);       // upper occiput, rounder than before
+    addPlane(occiputH, 0, -cz * 0.83, Fn, Un, 16);      // lower occiput, unchanged
     // jaw underside, from under the chin back toward the throat: the
     // floor rises going backward, which both caps the chin's own bottom
     // (replacing the old stack's capBot()) and gives the underside its
     // slope toward the neck
     addPlane(chinH, 0, cz * 0.50, Un, Fn, 24);
+
+    /* THE TEMPLE'S RATIO IS NOT A CONSTANT, and finding that out cost a
+       tenth of a point on either end of a band. headW and crownW
+       (proportions.js) both charge the skull's own lateral planes for
+       going too wide on some bodies while ANOTHER body needs every bit
+       of the same planes just to clear its OWN floor — seed 2 (headbreadth
+       161.5, headlength 197.7) sat at 0.995 of its own measured width in
+       the crown band, seed 3 (134.3, 182.0) sat at 1.105, and the two
+       failures in the brief (`head drawn W / measured W` over on seed 3,
+       1.217; crown 1.104) are exactly this, not a single body being an
+       outlier. A flat ratio applied to both bodies' own cy — already
+       "a fraction of the body's own headbreadth", per CORE.head above —
+       moves both by the same fraction of their own size and so preserves
+       the gap between them; it cannot close it.
+
+       What DOES differ between those two bodies, checked directly, is
+       ROUNDNESS: headbreadth/headlength, 0.817 for the seed that needed
+       the least pull-in and 0.738 for the one that needed the most. This
+       is not a coincidence dressed as a formula — it is the same
+       mechanism THE SIZE BUDGET above already named for height: an
+       elongated head (breadth small relative to length) has less bare-
+       polytope perimeter per millimetre of cy than a round one does, so
+       fitFat's bisection solves it a THICKER scalp to reach its own
+       measured circumference, and that scalp grows the temple plane
+       right along with every other one. Roundness is a stand-in for that
+       solved thickness, available here when the flat ratio it corrects
+       is not (fitFat runs after these planes exist), the same honest
+       relationship the height margin above has to `f` — a proxy, not a
+       prediction, but one that moves the right way on both of the
+       bodies that actually failed. Solved empirically against
+       tools/proportions.js across eight bodies, same as TOP_MARGIN: no
+       closed form in headbreadth and headlength alone reproduced the
+       right pull-in for the roundest AND the most elongated body in the
+       sample at once, so ROUND_REF and TEMPLE_K are the compromise that
+       clears all eight with room on both ends of the band, not a number
+       derived rather than fitted. */
+    const ROUND_REF = 0.78, TEMPLE_K = 2.2;   // EST, solved against tools/proportions.js — see above
+    const roundness = m.headbreadth / m.headlength;
+    const templeRatio = 1.06 - TEMPLE_K * (ROUND_REF - roundness);
 
     // ---- paired: side group + the paired front/crown facets -----------
     for (const sgn of [1, -1]) {
@@ -298,8 +429,10 @@
       // inward toward the crown above it
       addPlane(parietalH, sgn * cy * 1.10, cz * 0.30, side, U, 6);
       // temple: flat, near-vertical, easing in toward the crown the same
-      // way the parietal does, at a narrower base offset than it
-      addPlane(browH, sgn * cy * 1.06, cz * 0.45, side, U, 3);
+      // way the parietal does, at a narrower base offset than it —
+      // narrower still on an elongated head, wider on a round one (see
+      // THE TEMPLE'S RATIO above)
+      addPlane(browH, sgn * cy * templeRatio, cz * 0.45, side, U, 3);
       // front cheek: below the orbit, tilting back down toward the mouth
       // ring — meets the side cheek plane below at the zygomatic ridge,
       // the single most important break this file draws
@@ -546,7 +679,7 @@
       const half = (browH - noseBaseH) * 0.5 / Math.cos(TILT);
       for (const sgn of [1, -1]) {
         const mid = vmad(vmad(vmad(sk.A, U, (browH + noseBaseH) * 0.5), F, cz * 0.00),
-          L, sgn * cy * 1.00);
+          L, sgn * cy * 0.94);
         const A = vmad(mid, D, half);    // top, tipped back
         const B = vmad(mid, D, -half);   // base
         const Fr = [D, L, Dp];
