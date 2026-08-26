@@ -61,9 +61,16 @@
   //            further out, so the offset is resolved per figure and looked
   //            up here rather than written down.
   //    rest    [flex, abd, twist] in radians, baked in before any pose,
-  //            relative to the parent. Right for the small stuff: the
-  //            thoracic kyphosis and the lumbar lordosis are a couple of
-  //            degrees per level and are naturally said that way.
+  //            relative to the parent. Right for the small stuff, and also
+  //            for the standing spinal curve: every vertebra's flex here is
+  //            one INCREMENT of it, from a couple of degrees to over ten
+  //            depending on the level - see THE STANDING CURVE below.
+  //    tilt    spine bones only. The CUMULATIVE world-frame sagittal angle
+  //            this bone's own long axis sits at once every `rest` above it
+  //            in the chain has been applied - a running sum, not another
+  //            authored number; see THE STANDING CURVE. 20-build.js reads
+  //            it to know how much a tilted vertebra's length has to be let
+  //            out so its VERTICAL rise still matches the measured seg.
   //    aim     the alternative, and the right one for anything that starts a
   //            limb. A world direction the bone points in at rest, plus a
   //            roll about it. Euler angles on top of an accumulated frame
@@ -99,36 +106,168 @@
 
   const LUMBAR = 5, THORACIC = 12, CERVICAL = 7;
 
+  // =========================================================================
+  //  THE STANDING CURVE
+  //
+  //  First pass had every rest angle below at 0. Correct segment lengths,
+  //  correct stature, and the side view was a plank: a standing spine's
+  //  S-curve is not a fact about segment LENGTH — 00-anthro.js's measured
+  //  heights already have it baked in, since they were taken standing — it
+  //  is a fact about which way each vertebra LEANS. So the lengths stay
+  //  exactly what the survey measured, untouched, and the curve goes
+  //  entirely into the flex component of `rest`, per vertebra.
+  //
+  //  Tilting a bone eats into its own vertical reach (rise = len*cos(tilt)),
+  //  and left uncompensated that quietly shortened the figure by however
+  //  much curve got added — tens of millimetres at these angles, not the
+  //  sub-mm rounding error the previous, much smaller angles cost. 20-build
+  //  .js's spineLen() is the fix: it lets each vertebra's length back out to
+  //  seg/cos(tilt), so the MEASURED vertical rise is preserved exactly and
+  //  the anterior offset falls out of the tilt for free. It needs `tilt` —
+  //  the cumulative, world-frame sagittal angle this vertebra's own long
+  //  axis makes with vertical — which is why every bone below carries one.
+  //  It is a plain running sum and nothing fancier, because every rotation
+  //  in this whole chain is flex-only (abd=twist=0): solve() never rotates
+  //  any of it off world Y, so composing rest angles down a chain of
+  //  pure-Y rotations just adds them. `rest`'s own flex value at a level is
+  //  the INCREMENT; `tilt` is the running total after it.
+  //
+  //  MAGNITUDES. First pass set the sign by which region is "lordotic" and
+  //  which is "kyphotic" and got it backward: same-signed, monotonic
+  //  increments the whole way through a region, so each region's tilt just
+  //  keeps compounding the last one's instead of undoing it, and the chain
+  //  never turns back toward vertical until 60 degrees of forward lean had
+  //  piled up at L1 alone — a figure bowing from the waist, not standing.
+  //  Sign is a CURVATURE, not a direction of lean: what makes a lordosis a
+  //  lordosis is that the chain leans anterior (+, toward +Z) approaching
+  //  the region and has swung back PAST vertical to posterior (-) by its
+  //  far end, or the reverse for a kyphosis — the region's OWN increments
+  //  run the opposite way from the lean they start at, which is what turns
+  //  the lean back rather than extending it. So pelvic tilt hands the chain
+  //  a positive (anterior) starting lean, lumbar's own increments run
+  //  NEGATIVE to spend it (and overshoot past vertical — that overshoot IS
+  //  the lumbar hollow), thoracic's run POSITIVE to spend THAT and round
+  //  the upper back the other way, cervical's run NEGATIVE again to bring
+  //  the head back forward over it. Population means from the spine
+  //  literature for the size of each swing, degrees:
+  //    pelvic tilt        ~10-15, mean ~13-15 in asymptomatic adults on
+  //                        pooled radiographic series — but that clinical PT
+  //                        is the rotation of the pelvis about the HIP AXIS;
+  //                        what this one zero-length bone actually needs to
+  //                        supply is the SACRAL BASE's own orientation, the
+  //                        surface L5 sits on and swings up from, which is
+  //                        the separate, larger sacral-slope figure (~35-40,
+  //                        pooled radiographic mean ~37-38) — real spines get
+  //                        both angles from a separate sacrum and pelvis; one
+  //                        zero-length bone here has to stand in for both, so
+  //                        it is set nearer the sacral-slope end (25-30
+  //                        rather than 10-15). Tried at the cited PT figure
+  //                        first: with L5-S1 and L4-L5 alone spending 20+
+  //                        degrees of the lumbar total each (see
+  //                        LUMBAR_SHARE below), 12-15 degrees of starting
+  //                        lean is gone within L5 alone, the chain is already
+  //                        past vertical and falling before the lordosis
+  //                        gets to do any work, and the render was a
+  //                        continuous backward lean with no hollow in it at
+  //                        all — corrected by giving it more to spend. 28,
+  //                        EST, chosen by sweeping this against the lumbar
+  //                        and thoracic numbers below for a visible lumbar
+  //                        hollow without pushing either of THEM outside
+  //                        their own cited ranges.
+  //    lumbar lordosis    ~40-60, L1-S1. Reported means vary a lot by method
+  //                        and which levels are counted — one Cobb L1-S1
+  //                        series ~52, a stricter LLA method on a different
+  //                        cohort ~33±12. 48 taken, toward the low side of
+  //                        the wide range this file was given.
+  //    thoracic kyphosis  ~30-45, T1-T12; ~44 mean in one 80-subject
+  //                        asymptomatic series. 40 taken, near that but
+  //                        nudged down slightly by the same sweep — the
+  //                        upper end of the range overshot T1 past vertical
+  //                        and into a forward lean by the time it reached
+  //                        the shoulders.
+  //    cervical lordosis  ~20-40. EST, and honestly higher than the C2-C7
+  //                        Cobb literature specifically usually reports
+  //                        (commonly ~10-18 by that one method) — taken
+  //                        near the top of the wider range this file was
+  //                        given, partly because this is the term that has
+  //                        to close the loop: with the figures above, T1
+  //                        sits a few degrees short of vertical, and the
+  //                        cervical curve is what carries the head the rest
+  //                        of the way back over the trunk — which is also
+  //                        just true of a real neck, forward-head posture
+  //                        and all. 26 taken; the skull's own aimTo (below)
+  //                        absorbs whatever this doesn't close exactly.
+  //  DISTRIBUTION within a region (xSHARE below — fraction of the regional
+  //  total each level carries, same bottom-to-top order the loops below
+  //  walk in, each array summing to 1). LUMBAR_SHARE's first two entries are
+  //  a measured segmental breakdown: a CT study found L5-S1 42.7% and L4-L5
+  //  25.2% of total lumbar lordosis — the bottom two levels alone are two
+  //  thirds of the curve. Its other three levels are this file's own
+  //  tapered EST, there being no source read yet that splits the top three.
+  //  THORACIC_SHARE is left uniform for the opposite reason: no source read
+  //  yet argues for any particular taper, so it does not invent one.
+  //  CERVICAL_SHARE is a mild EST taper, heavier low, on the general pattern
+  //  the lumbar data shows rather than on a neck-specific source.
+  // =========================================================================
+  const PELVIC_TILT = 28 * M.DEG;
+  const LUMBAR_LORDOSIS = -48 * M.DEG;                              // spends the pelvic lean, and overshoots it
+  const THORACIC_KYPHOSIS = 40 * M.DEG;                             // spends the overshoot, the other way
+  const CERVICAL_LORDOSIS = -26 * M.DEG;                            // and spends THAT, back the first way again
+  const LUMBAR_SHARE = [0.427, 0.252, 0.130, 0.100, 0.091];         // L5 .. L1, measured low two + EST taper
+  const THORACIC_SHARE = new Array(THORACIC).fill(1 / THORACIC);    // T12 .. T1, EST uniform
+  const CERVICAL_SHARE = [0.22, 0.19, 0.16, 0.14, 0.12, 0.10, 0.07]; // C7 .. C1, EST taper
+
   function buildTree() {
     const T = [];
     const add = (b) => { T.push(b); return b; };
 
-    add({ id: 'pelvis', parent: '', at: [0, 0, 0], rest: [0, 0, 0], len: 'pelvis', dof: {} });
+    // pelvis's OWN rest stays [0,0,0] — PELVIC_TILT is folded into L5 below
+    // instead, and only there. Tried on the pelvis bone itself first, which
+    // reads naturally ("the sacral base's own orientation") since there is
+    // no separate sacrum bone here — but the pelvis is also where the femur
+    // hangs from (`atKey: 'hip'`, further down), and that offset is applied
+    // in the PARENT's frame same as any other, so a tilted pelvis silently
+    // dragged the hip joint centre round with it: legs unrotated (aim bones
+    // read world direction, not the parent frame) but ANCHORED somewhere
+    // else, and the sole came off the floor by two to three centimetres,
+    // not the sub-2mm the vertex/span checks tolerate. Real pelvic tilt
+    // rotates the pelvis approximately about the hip axis for exactly this
+    // reason — the legs do not care what the low back is doing — so this
+    // keeps the pelvis bone itself neutral and gives the tilt to the one
+    // chain that should actually feel it.
+    let cum = 0;
+    add({ id: 'pelvis', parent: '', at: [0, 0, 0], rest: [0, 0, 0], tilt: cum, len: 'pelvis', dof: {} });
     // the sacrum runs up from the root to the base of L5, so the lumbar
     // chain simply continues from its distal end like every other chain
 
     // ---- spine -----------------------------------------------------------
-    // Walked distally as a chain, L5 first. The rest curve is the resting
-    // sagittal profile: lordosis through the lumbar, kyphosis through the
-    // thoracic, a shallow lordosis again through the cervical. Authored per
-    // level as a small angle rather than as one bend, so that flattening the
-    // lumbar curve — which is most of what "standing up straight" is —
-    // remains a thing a pose can ask for.
+    // Walked distally as a chain, L5 first. `dof`/weights() below (posed
+    // range, and how unevenly it is shared out) are untouched by this pass —
+    // lumbar still carries most sagittal pose range and almost no axial,
+    // thoracic the other way round, exactly as before. What changed is only
+    // the REST each level sits at before any pose is applied; see THE
+    // STANDING CURVE above for where `d` and `tilt` below come from. L5
+    // alone also carries PELVIC_TILT, folded in rather than given to the
+    // pelvis bone — see the comment above.
     let prev = 'pelvis';
     for (let i = 0; i < LUMBAR; i++) {
       const id = 'L' + (LUMBAR - i);                 // L5 .. L1 walking up
+      const d = (i === 0 ? PELVIC_TILT : 0) + LUMBAR_LORDOSIS * LUMBAR_SHARE[i];
+      cum += d;
       add({
         id, parent: prev,
-        rest: [-0.055, 0, 0], len: 'lumbarSeg',
+        rest: [d, 0, 0], tilt: cum, len: id,
         dof: { flex: 'lumbarFlex', abd: 'lumbarSide', twist: 'lumbarTwist' },
       });
       prev = id;
     }
     for (let i = 0; i < THORACIC; i++) {
       const id = 'T' + (THORACIC - i);               // T12 .. T1
+      const d = THORACIC_KYPHOSIS * THORACIC_SHARE[i];
+      cum += d;
       add({
         id, parent: prev,
-        rest: [0.042, 0, 0], len: 'thoracicSeg',
+        rest: [d, 0, 0], tilt: cum, len: id,
         dof: { flex: 'thoracicFlex', abd: 'thoracicSide', twist: 'thoracicTwist' },
       });
       prev = id;
@@ -136,9 +275,11 @@
     const T1 = prev;
     for (let i = 0; i < CERVICAL; i++) {
       const id = 'C' + (CERVICAL - i);               // C7 .. C1
+      const d = CERVICAL_LORDOSIS * CERVICAL_SHARE[i];
+      cum += d;
       add({
         id, parent: prev,
-        rest: [-0.030, 0, 0], len: 'cervicalSeg',
+        rest: [d, 0, 0], tilt: cum, len: id,
         // Axial rotation is not spread evenly up the neck: roughly half of
         // it happens at C1-C2 alone, and a neck that rotates uniformly reads
         // as a hose. The weight is applied in distribute(), keyed off this.

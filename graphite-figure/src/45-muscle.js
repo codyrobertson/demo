@@ -397,6 +397,54 @@
       arch: 'strap', primaryJoint: { key: 'knee', bone: 'tibia' },
       touches: ['trunk', 'femur', 'tibia'],
     },
+    // THE ADDUCTOR COMPARTMENT — this file's own header names it the
+    // biggest single gap (~40mm of stand-in soft tissue at the thigh,
+    // against a real subcutaneous ~10mm), and data/rajagopal.json carries
+    // it whole: addbrev_r, addlong_r, and adductor magnus split into four
+    // OpenSim sub-bellies (addmagProx/Mid/Dist/Isch_r — one anatomical
+    // muscle, split there for its own moment-arm fidelity across hip
+    // range, not four separate muscles; data/bodyparts3d.json agrees,
+    // carrying magnus as one named part). All six originate on the pelvis
+    // and insert on the femur — architecturally gluteal's and hamstrings'
+    // own case again (pelvis -> femur), so this group is pelvis-anchored
+    // the same way, patched by fixPelvisOrigins() below alongside them.
+    //
+    // addmagIsch_r is the "hamstring part" of adductor magnus — it really
+    // does originate on the ischial tuberosity, next to the hamstrings
+    // proper, and its own femur point sits at y=-387.97mm of a 408.05mm
+    // reference femur (segmentLengthsMm.femur): 95% of the way down the
+    // shaft, at the adductor tubercle above the medial condyle, not
+    // mid-thigh. Folding it into one centroid with addbrev_r/addlong_r
+    // (whose own femur points sit at y=-118 and y=-239) pulls the group's
+    // insertion anchor back up toward the thigh's middle — the same trade
+    // hamstrings' own comment just above already makes for bfsh, for the
+    // same reason: a GROUP proxy is exactly where this belongs, not a
+    // defect to work around. What is not thrown away: the origin fan
+    // really does run from the pubic body to the ischial tuberosity
+    // (addlong_r's pelvis point sits at x=-7.58mm anterior, addmagIsch_r's
+    // at x=-89.62mm — most of the pelvis's own 154.5mm reference width),
+    // so oSpreadX carries that into `aspect` rather than discarding it,
+    // and every member muscle's own WrapCylinder (AB/AL/AMprox/AMmid/
+    // AMdist/AMisch_at_*, radii 16.5-40mm, all on femur_r) still feeds
+    // wrapInsertionMm, nudging the centreline medially the same way
+    // quadriceps' and tricepsSurae's own wraps already do.
+    //
+    // arch 'strap', not 'bipennate' or 'convergent': the real compartment
+    // reads as a continuous sheet running most of the femur's length, not
+    // a single spindle-shaped belly with one bulge — the same call
+    // hamstrings makes for the same reason (a broad band, pelvis to past
+    // mid-thigh). 'trunk' in touches follows gluteal's and hamstrings' own
+    // pelvis-anchored precedent directly above: the proximal end is
+    // groin-side geometry. Checked by render for the pec/lat-style far-end
+    // bar this file's header already warns a trunk-touching belly can
+    // produce — see this file's own musclefit2.js and the comment on
+    // fixPelvisOrigins() below for what that check found.
+    adductors: {
+      match: /^(addbrev|addlong|addmag(Prox|Mid|Dist|Isch))_r$/,
+      originBase: 'pelvis', insertionBase: 'femur_r',
+      arch: 'strap', primaryJoint: { key: 'hipFlex', bone: 'femur' },
+      touches: ['trunk', 'femur'],
+    },
     tricepsSurae: {
       // both gastrocnemius heads originate on the femur, just above the
       // condyles; soleus originates on the tibia and is not separately
@@ -405,6 +453,51 @@
       originBase: 'femur_r', insertionBase: 'calcn_r',
       arch: 'multipennate', primaryJoint: { key: 'ankle', bone: 'foot' },
       touches: ['femur', 'tibia', 'foot'],
+    },
+    // ANTEROLATERAL SHIN — the calf's own missing compartment, named in
+    // this file's own header: tricepsSurae above is the posterior
+    // compartment alone, so a bare-anterior shin was never a bug, it was
+    // this group not existing yet. tibant_r (tibialis anterior) is one
+    // muscle, origin/insertion both plain measured points (no wraps in
+    // data/rajagopal.json for it, same as several existing groups — see
+    // wrapRadiusOn()'s own "0 means none measured" contract). Its own
+    // tibia origin point sits at [x=15.4, z=16.2]mm from the knee (+x
+    // anterior, +z lateral, this file's meta.axes) — anterolateral, as
+    // real tibialis anterior is: against the tibial crest and the lateral
+    // condyle. Its own tendon is long relative to its belly (a raw
+    // tendon-slack/MTU ratio of 0.78, well past tendonFractionOf()'s 0.42
+    // ceiling — clamped there like any other group, not special-cased),
+    // which is real anatomy: the belly itself sits in the upper two-thirds
+    // of the shin, tapering to tendon well before the ankle.
+    tibialisAnterior: {
+      match: /^tibant_r$/,
+      originBase: 'tibia_r', insertionBase: 'calcn_r',
+      arch: 'multipennate', primaryJoint: { key: 'ankle', bone: 'foot' },
+      touches: ['tibia', 'foot'],
+    },
+    // The lateral compartment proper — perlong_r/perbrev_r (peroneus/
+    // fibularis longus and brevis; data/bodyparts3d.json's own catalogue
+    // uses "fibularis", checked directly — see BP3D_GROUPS below).
+    // fibularis tertius exists in that catalogue too but has no matching
+    // Rajagopal muscle (this model does not carry it separately from
+    // edl_r), so it is left out on the same "anchors and volume must name
+    // the same muscles" rule BP3D_GROUPS's own header states — a
+    // deliberately small, named omission rather than an unlabelled one.
+    // Both muscles originate further down/behind the tibia than tibant_r
+    // (perlong_r's own first tibia point sits at x=-20mm, posterior of
+    // tibant_r's x=+15.4) and their own calcn_r insertions run under the
+    // sole toward the midfoot — this two-point proxy does not chase that
+    // route, the same simplification tricepsSurae's own Achilles insertion
+    // already makes for the heel. Separate group from tibialisAnterior
+    // rather than folded in: different compartment, different side of the
+    // shin, and the task that added this group left that choice open
+    // ("peroneals if the pattern extends cleanly") — it does, with zero
+    // new code, so it is kept separate for a cleaner medial/lateral read.
+    peroneals: {
+      match: /^per(long|brev)_r$/,
+      originBase: 'tibia_r', insertionBase: 'calcn_r',
+      arch: 'fusiform', primaryJoint: { key: 'ankle', bone: 'foot' },
+      touches: ['tibia', 'foot'],
     },
   };
   const BASE_TO_BONE = { pelvis: 'pelvis', femur_r: 'femur', tibia_r: 'tibia', calcn_r: 'foot' };
@@ -527,6 +620,40 @@
       // real data existed, now informed by where MoBL-ARMS's own path
       // actually runs rather than guessed.
       originBase: 'humerus', insertionBase: 'radius',
+      arch: 'fusiform', primaryJoint: { key: 'elbow', bone: 'forearm' },
+      touches: ['humerus', 'forearm'],
+    },
+    // BRACHIALIS — named in this file's own header as the arm's own gap:
+    // biceps brachii alone tapers to tendon well above the elbow, and
+    // nothing else in the twelve original groups fills the distal humerus
+    // out to it. data/mobl-arms.json carries BRA directly (Holzbaur's own
+    // model, same source biceps/triceps/the forearm mass already use), and
+    // forearmMass's own comment just above already explains why BRA was
+    // excluded from THAT group rather than silently missing: the task
+    // naming "biceps brachii"/"triceps brachii" as specific muscles left
+    // brachialis nameless until now, not unmodelled by accident.
+    // Origin: BRA-P1, the path's own first point on the humerus body, at
+    // [x=6.8, y=-173.9]mm from the shoulder (this file's meta.axes: +x
+    // anterior, +y superior) — 60% of the way down a 290.72mm reference
+    // humerus, anterior face, i.e. genuinely mid-shaft-anterior, not an
+    // artefact of endPointsOnBody()'s own first-point rule (the path's
+    // OWN next two points, P2/P3, are its conditional elbow-wrap via
+    // points, correctly left out of the origin cluster the same way this
+    // file's own header describes for triceps/biceps). Insertion: BRA-P4,
+    // the path's own last point, on the ulna near the coronoid process —
+    // forearmSidePoints() picks it up unchanged (BRA has no radius-body
+    // point, so that half of the union is simply empty; the function does
+    // not need to know that in advance). No WrapCylinder on this muscle in
+    // data/mobl-arms.json (wraps: []), so wrapOriginMm/wrapInsertionMm are
+    // both 0 here — a straight sweep, same as several existing groups get
+    // where no wrap was measured.
+    // The origin sitting 60% down the shaft, and the insertion just past
+    // the elbow, is exactly what places this group's own belly on the
+    // DISTAL half of the upper arm where biceps' own taper leaves a gap —
+    // not tuned to do that, just where BRA's own recorded path already is.
+    brachialis: {
+      match: /^BRA$/,
+      originBase: 'humerus', insertionBase: 'ulna',
       arch: 'fusiform', primaryJoint: { key: 'elbow', bone: 'forearm' },
       touches: ['humerus', 'forearm'],
     },
@@ -799,14 +926,16 @@
   // =========================================================================
   function isPelvisAnchored(group) { return group.origin.frameBone === 'pelvis'; }
 
-  // Patch the two pelvis-anchored groups' origin closures once LOWER exists
-  // — done as a second pass rather than inline above because it needs
+  // Patch the pelvis-anchored groups' origin closures once LOWER exists —
+  // done as a second pass rather than inline above because it needs
   // `femur`'s OWN resolved length at query time, which localMmClosureFor()
-  // does not carry (femur is the group's INSERTION bone for neither of
-  // these two groups' plain closures — hamstrings' insertion is tibia,
-  // gluteal's is femur, so only gluteal's happens to already have it).
+  // does not carry for every one of them (femur is the group's INSERTION
+  // bone for gluteal and for adductors, so those two already have it from
+  // their own plain insertion closure; hamstrings' insertion is tibia, so
+  // it does not, and needs this pass for that reason as much as for the
+  // origin itself).
   function fixPelvisOrigins(lower, model) {
-    for (const name of ['gluteal', 'hamstrings']) {
+    for (const name of ['gluteal', 'hamstrings', 'adductors']) {
       const g = lower[name];
       const T = LOWER_TOPOLOGY[name];
       const muscles = model.muscles.filter((m) => T.match.test(m.name));
@@ -977,13 +1106,32 @@
     gluteal: ['right gluteus maximus', 'right gluteus medius', 'right gluteus minimus'],
     quadriceps: ['right vastus lateralis', 'right vastus medialis', 'right vastus intermedius', 'right rectus femoris'],
     hamstrings: ['long head of right biceps femoris', 'short head of right biceps femoris', 'right semimembranosus', 'right semitendinosus'],
+    // magnus, longus, brevis only — matching adductors' own LOWER_TOPOLOGY
+    // match exactly (addbrev/addlong/addmag*_r). data/bodyparts3d.json also
+    // separately catalogues "right adductor minimus" (12.7cm3, the
+    // smallest of the four) but data/rajagopal.json carries no matching
+    // muscle of its own — most sources fold minimus into magnus's own most
+    // proximal fibres, which is exactly where addmagProx_r already sits —
+    // so it is left out of the sum on the same rule this table's own
+    // header states: a group's size and its shape must name the same
+    // muscles.
+    adductors: ['right adductor magnus', 'right adductor longus', 'right adductor brevis'],
     tricepsSurae: ['medial head of right gastrocnemius', 'lateral head of right gastrocnemius', 'right soleus'],
     deltoid: ['clavicular part of right deltoid', 'acromial part of right deltoid', 'spinal part of right deltoid'],
     pectoralis: ['clavicular part of right pectoralis major', 'sternocostal part of right pectoralis major', 'abdominal part of right pectoralis major'],
     latissimus: ['right latissimus dorsi'],
     trapezius: ['ascending part of right trapezius', 'transverse part of right trapezius', 'descending part of right trapezius'],
     bicepsBrachii: ['long head of right biceps brachii', 'short head of right biceps brachii'],
+    // single named part in data/bodyparts3d.json's own catalogue — unlike
+    // biceps/triceps it is not split into heads there
+    brachialis: ['right brachialis'],
     tricepsBrachii: ['long head of right triceps brachii', 'lateral head of right triceps brachii', 'medial head of right triceps brachii'],
+    tibialisAnterior: ['right tibialis anterior'],
+    // catalogue name is "fibularis", checked directly against
+    // data/bodyparts3d.json rather than assumed from the more common
+    // "peroneus" — same muscles, tertius left out (see LOWER_TOPOLOGY's
+    // own comment on peroneals, just above, for why)
+    peroneals: ['right fibularis longus', 'right fibularis brevis'],
     abdominal: ['right rectus abdominis', 'right external oblique', 'right internal oblique'],
     forearmMass: [
       'right brachioradialis', 'right extensor carpi radialis longus', 'right extensor carpi radialis brevis',
@@ -1024,13 +1172,17 @@
     gluteal: { girth: 'hip', seg: 'femur' },
     quadriceps: { girth: 'thigh', seg: 'femur' },
     hamstrings: { girth: 'thigh', seg: 'femur' },
+    adductors: { girth: 'thigh', seg: 'femur' }, // same site as quadriceps/hamstrings — one ANSUR thigh circumference, no separate medial measurement exists to size against
     tricepsSurae: { girth: 'calf', seg: 'tibia' },
     deltoid: { girth: 'bideltoid', seg: 'humerus' }, // a breadth, not a circumference — 00-anthro.js's girths() deliberately carries no shoulder circumference (not in the fitted column set); bideltoid is the measured shoulder-width stand-in it names for exactly this
     pectoralis: { girth: 'chest', seg: 'humerus' },
     latissimus: { girth: 'chest', seg: 'humerus' },
     trapezius: { girth: 'neck', seg: 'humerus' },
     bicepsBrachii: { girth: 'biceps', seg: 'humerus' },
+    brachialis: { girth: 'biceps', seg: 'humerus' }, // same site as biceps/triceps — brachialis sits under/distal to biceps on the same segment, no separate ANSUR site for it
     tricepsBrachii: { girth: 'biceps', seg: 'humerus' },
+    tibialisAnterior: { girth: 'calf', seg: 'tibia' }, // same site as tricepsSurae — anterior/posterior share the one ANSUR calf circumference
+    peroneals: { girth: 'calf', seg: 'tibia' },
     abdominal: { girth: 'waist', seg: 'femur' },
     forearmMass: { girth: 'forearm', seg: 'forearm' },
   };
@@ -1092,7 +1244,8 @@
   //  NORMALIZED GROUP TABLE
   // =========================================================================
   const GROUP_NAMES = ['deltoid', 'pectoralis', 'latissimus', 'trapezius', 'abdominal',
-    'gluteal', 'quadriceps', 'hamstrings', 'tricepsSurae', 'bicepsBrachii', 'tricepsBrachii', 'forearmMass'];
+    'gluteal', 'quadriceps', 'hamstrings', 'adductors', 'tricepsSurae', 'tibialisAnterior', 'peroneals',
+    'bicepsBrachii', 'brachialis', 'tricepsBrachii', 'forearmMass'];
 
   /**
    * pectoralis' and latissimus' origins are re-based from MoBL-ARMS's

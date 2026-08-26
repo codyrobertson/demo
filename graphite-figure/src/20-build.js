@@ -61,6 +61,31 @@
   }
 
   /**
+   * A region's vertebrae, individually rescaled. `seg` is 00-anthro.js's one
+   * measured average for the region (e.g. seg.lumbarSeg) — the vertical rise
+   * a LEVEL BONE would need if it stood dead straight. 10-skeleton.js no
+   * longer stands them straight: each carries a `tilt`, the cumulative
+   * sagittal angle THE STANDING CURVE (there) puts it at, and tilting a bone
+   * without lengthening it would have eaten cos(tilt) of that rise. So each
+   * level is let back out to seg/cos(tilt) here instead, which is exactly
+   * enough to put the lost rise back — no more, since a bone this short of
+   * 90 degrees of tilt never needs much — and leaves the anterior offset to
+   * fall out of the tilt for free rather than being authored anywhere.
+   * `prefix`+1..`count` walks the same id scheme buildTree() used to name
+   * them (L1..L5, T1..T12, C1..C7), so this and the tree cannot drift apart.
+   */
+  function spineLen(seg, prefix, count) {
+    const out = {};
+    for (let i = 1; i <= count; i++) {
+      const id = prefix + i;
+      const b = GK.skel.BY_ID[id];
+      const tilt = (b && b.tilt) || 0;
+      out[id] = seg / Math.cos(tilt);
+    }
+    return out;
+  }
+
+  /**
    * One body, from the ANSUR II fit. Nothing here is a ratio: the femur is a
    * measured trochanterion height minus a measured lateral epicondyle height
    * on the same synthetic person, and it arrives already correlated with the
@@ -85,9 +110,9 @@
       // millimetres of spine that no measurement asked for. The sacrum's
       // own form belongs to the pelvic volume, not to the bone chain.
       pelvis: 0,
-      lumbarSeg: seg.lumbarSeg,
-      thoracicSeg: seg.thoracicSeg,
-      cervicalSeg: seg.cervicalSeg,
+      ...spineLen(seg.lumbarSeg, 'L', GK.skel.LUMBAR),
+      ...spineLen(seg.thoracicSeg, 'T', GK.skel.THORACIC),
+      ...spineLen(seg.cervicalSeg, 'C', GK.skel.CERVICAL),
       skull: seg.headLen,
       clavicle: seg.clavicle,
       scapula: seg.scapula,

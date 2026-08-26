@@ -685,14 +685,16 @@
       // A near-constant station swept across a wide beta range is a line of
       // LATITUDE around the head, not a frontal feature — the first pass
       // reached all the way to LEFT/RIGHT+0.34 (~70 degrees off centre,
-      // basically the ear line) and read as a headband circling the skull
-      // rather than a brow. Pulled in to within a radian of FRONT either way.
+      // basically the ear line) AND barely dropped in station on the way,
+      // so it read as a headband circling the skull rather than a brow.
+      // Pulled in laterally to within a radian of FRONT, and dropped hard
+      // in station toward the outer end the way a real brow tapers off.
       ctrl: [
-        [ofUp(0.10), (ctx) => FRONT - 0.92 * faceW(ctx)],
-        [ofUp(0.135), (ctx) => FRONT - 0.55 * faceW(ctx)],
+        [ofUp(0.02), (ctx) => FRONT - 0.92 * faceW(ctx)],
+        [ofUp(0.11), (ctx) => FRONT - 0.55 * faceW(ctx)],
         [ofUp(0.145), FRONT],
-        [ofUp(0.135), (ctx) => FRONT + 0.55 * faceW(ctx)],
-        [ofUp(0.10), (ctx) => FRONT + 0.92 * faceW(ctx)],
+        [ofUp(0.11), (ctx) => FRONT + 0.55 * faceW(ctx)],
+        [ofUp(0.02), (ctx) => FRONT + 0.92 * faceW(ctx)],
       ],
     },
 
@@ -750,9 +752,9 @@
     {
       id: 'noseUnder', tone: 0.36, minPx: 250, n: 10,
       ctrl: [
-        [ofDn(-0.35), (ctx) => FRONT - noseDelta(ctx) * 0.9],
-        [ofDn(-0.41), FRONT],
-        [ofDn(-0.35), (ctx) => FRONT + noseDelta(ctx) * 0.9],
+        [ofDn(-0.33), (ctx) => FRONT - noseDelta(ctx) * 0.9],
+        [ofDn(-0.38), FRONT],
+        [ofDn(-0.33), (ctx) => FRONT + noseDelta(ctx) * 0.9],
       ],
     },
 
@@ -763,25 +765,29 @@
     {
       id: 'lipLine', tone: 0.58, minPx: 190, n: 14,
       ctrl: [
-        [ofDn(-0.51), (ctx) => FRONT - mouthDelta(ctx)],
-        [ofDn(-0.525), FRONT],
-        [ofDn(-0.51), (ctx) => FRONT + mouthDelta(ctx)],
+        [ofDn(-0.545), (ctx) => FRONT - mouthDelta(ctx)],
+        [ofDn(-0.560), FRONT],
+        [ofDn(-0.545), (ctx) => FRONT + mouthDelta(ctx)],
       ],
     },
     {
       id: 'lipUpper', tone: 0.26, minPx: 270, n: 12,
+      // A first pass put this only 7-9mm below noseUnder, and with the
+      // nostril wing and nasolabial fold also converging on that same small
+      // patch the four marks piled into one tangle that read as a moustache
+      // rather than as a nose and a mouth. Given more room below the nose.
       ctrl: [
-        [ofDn(-0.475), (ctx) => FRONT - mouthDelta(ctx) * 0.85],
-        [ofDn(-0.495), FRONT],
-        [ofDn(-0.475), (ctx) => FRONT + mouthDelta(ctx) * 0.85],
+        [ofDn(-0.505), (ctx) => FRONT - mouthDelta(ctx) * 0.85],
+        [ofDn(-0.525), FRONT],
+        [ofDn(-0.505), (ctx) => FRONT + mouthDelta(ctx) * 0.85],
       ],
     },
     {
       id: 'lipLowerShadow', tone: 0.22, minPx: 280, n: 12,
       ctrl: [
-        [ofDn(-0.56), (ctx) => FRONT - mouthDelta(ctx) * 0.75],
-        [ofDn(-0.575), FRONT],
-        [ofDn(-0.56), (ctx) => FRONT + mouthDelta(ctx) * 0.75],
+        [ofDn(-0.605), (ctx) => FRONT - mouthDelta(ctx) * 0.75],
+        [ofDn(-0.620), FRONT],
+        [ofDn(-0.605), (ctx) => FRONT + mouthDelta(ctx) * 0.75],
       ],
     },
 
@@ -790,7 +796,7 @@
       id: 'nasolabial.L', tone: 0.34, minPx: 200, n: 14,
       ctrl: [
         [ofDn(-0.29), (ctx) => FRONT - noseDelta(ctx) * 1.1],
-        [ofDn(-0.43), (ctx) => FRONT - mouthDelta(ctx) * 1.35],
+        [ofDn(-0.49), (ctx) => FRONT - mouthDelta(ctx) * 1.35],
       ],
     },
     // the cheekbone's own crease, from near the ear down under the eye —
@@ -844,16 +850,19 @@
     // of where hair actually starts.
     {
       id: 'hairline', tone: 0.36, minPx: 115, n: 22,
-      // Same latitude-ring failure as the brow, worse here because the span
-      // reached to within 0.20 rad of the pure flank — nearly the ear line.
-      // A temple recedes, it does not reach the side of the head; pulled in
-      // to a bit over a radian off FRONT at its widest.
+      // Station barely moved across that whole beta sweep (0.46 to 0.60 of
+      // `up`), and a station a mark barely varies while its beta sweeps
+      // wide is a ring perpendicular to the head's own axis — a latitude
+      // line, which is a cap edge on any head, not a hairline on this one.
+      // A hairline recedes a long way from its centre-front peak down
+      // toward the temple before the beta sweep even gets there, so the
+      // station has to drop hard, not stay near-level.
       ctrl: [
-        [ofUp(0.46), (ctx) => FRONT - 1.10 * faceW(ctx)],
-        [ofUp(0.56), (ctx) => FRONT - 0.70 * faceW(ctx)],
-        [ofUp(0.60), FRONT],
-        [ofUp(0.56), (ctx) => FRONT + 0.70 * faceW(ctx)],
-        [ofUp(0.46), (ctx) => FRONT + 1.10 * faceW(ctx)],
+        [ofUp(0.28), (ctx) => FRONT - 1.10 * faceW(ctx)],
+        [ofUp(0.48), (ctx) => FRONT - 0.62 * faceW(ctx)],
+        [ofUp(0.62), FRONT],
+        [ofUp(0.48), (ctx) => FRONT + 0.62 * faceW(ctx)],
+        [ofUp(0.28), (ctx) => FRONT + 1.10 * faceW(ctx)],
       ],
     },
     // the occiput: the back of the vault's own curve, low enough to read

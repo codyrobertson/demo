@@ -121,7 +121,9 @@
        heights are plain fractions of up/dn, which is what they always
        were; only the fractions changed. */
     const capTop = () => Math.min(cy * 0.34, cz * 0.30) * 0.9;
-    const capBot = () => Math.min(zy * 0.42, cz * 0.40) * 0.9;
+    // NOT *0.9 here — see the note below on why the chin needs the looser
+    // of the two.
+    const capBot = () => Math.min(zy * 0.50, cz * 0.44);
     const ST = [
       [up - capTop(), cy * 0.34, cz * 0.30, -cz * 0.06],  // vertex
       [up * 0.68, cy * 0.62, cz * 0.52, -cz * 0.05],
@@ -130,7 +132,17 @@
       [browH, cy * 0.97, cz * 0.92, cz * 0.14],       // brow: widest at face height
       [-dn * 0.14, zy * 1.00, cz * 0.86, cz * 0.20],  // cheekbone, at its own measure
       [-dn * 0.58, zy * 0.76, cz * 0.62, cz * 0.30],  // the angle of the jaw
-      [-(dn - capBot()), zy * 0.42, cz * 0.40, cz * 0.42],  // chin
+      /* chin. A first cut here narrowed hard (zy*0.42, against the jaw's
+         0.76) AND pushed forward hard (offset cz*0.42) in the same short
+         segment, which is a cone by construction — a shape that shrinks
+         in cross-section and reaches further along its axis at the same
+         end is a point, whatever it's called. It rendered as one, in
+         profile, on every seed. Narrowing less (0.50) and reaching less
+         (0.36 — the rest of the forward reach a real chin has comes from
+         the boss below, which can be round about it in a way one more
+         tapering stack station cannot) keeps this station a plausible
+         jaw cross-section rather than a nose cast in the wrong place. */
+      [-(dn - capBot()), zy * 0.50, cz * 0.44, cz * 0.36],  // chin
     ];
     const at = (st) => vmad(vmad(sk.A, fr[0], st[0]), fr[2], st[3]);
     for (let i = 0; i < ST.length - 1; i++) {
@@ -150,25 +162,38 @@
        about it — menton-to-sellion reaches its root and stops — so every
        number here is EST, anchored to the head depth that IS measured.
 
-       A WEDGE, NOT A BUMP — which failed the first time as a symmetric
-       capsule bulging most at its own midpoint, the classic "bump" a
-       bump reads as: it recedes at both ends, and a real nose does not
-       recede at the tip. Fixed by making the three points a RAMP instead
-       of an arch: root, tip and base project further forward in that
-       order (1.00, 1.22, 1.03 of head depth) so the surface keeps
-       climbing until the tip and only turns back after it, and by a
-       flatter exponent (2.6, against the 2.2 everything round elsewhere
-       uses) so the ramp reads as two faces meeting at a ridge rather than
-       a rounded pipe. */
+       A WEDGE, NOT A BUMP — which failed twice. First as a symmetric
+       capsule bulging most at its own midpoint: it receded at both ends,
+       and a real nose does not recede at the tip. Fixed by making the
+       three points a RAMP instead of an arch: root, tip and base project
+       further forward in that order so the surface keeps climbing until
+       the tip and only turns back after it, with a flatter exponent
+       (2.6, against the 2.2 everything round elsewhere uses) so it reads
+       as two faces meeting at a ridge rather than a rounded pipe.
+
+       Second, more subtly, as a BEAK: root-to-tip and tip-to-base were
+       each given their own explicit cap, which is the right call at a
+       stack's two true free ends (see the vault above) and the wrong one
+       here, because the tip where they meet is not a free end, it is an
+       interior joint — exactly the case the vault's own comment warns
+       about. A cap forces ONE axial thickness across its whole segment,
+       and root and tip are not close to the same size, so root's own
+       small cap, forced onto the tip end too, pinched the bridge to a
+       point and tip's own cap, forced back onto the same point from the
+       other side, pinched it again — two capsule ends rounding toward
+       each other instead of one continuous ridge passing through. Left
+       uncapped, both segments take their axial thickness from their own
+       local width at every point instead of one borrowed value, and the
+       ridge runs through the tip rather than closing on it. */
     {
-      const tipH = lerp(noseBaseH, eyeH, 0.18);
+      const tipH = lerp(noseBaseH, eyeH, 0.32);
       const P0 = vmad(vmad(sk.A, fr[0], eyeH), fr[2], cz * 1.00);        // root, at sellion height
-      const P1 = vmad(vmad(sk.A, fr[0], tipH), fr[2], cz * 1.22);        // tip: the most forward point on the head
-      const P2 = vmad(vmad(sk.A, fr[0], noseBaseH), fr[2], cz * 1.03);   // base, at the measured nose-base
+      const P1 = vmad(vmad(sk.A, fr[0], tipH), fr[2], cz * 1.19);        // tip: the most forward point on the head
+      const P2 = vmad(vmad(sk.A, fr[0], noseBaseH), fr[2], cz * 1.06);   // base, at the measured nose-base
       const f1 = along(P0, P1, fr[1]), f2 = along(P1, P2, fr[1]);
-      const wR = cy * 0.075, wT = cy * 0.15, wB = cy * 0.15;   // EST: root narrow, base flared at the alae
-      put('head', (P, f) => sdSegSE(P, P0, P1, f1, wR, wR * 1.3, wT, wT * 1.05, 2.6, wR * 0.7, f));
-      put('head', (P, f) => sdSegSE(P, P1, P2, f2, wT, wT * 1.05, wB, wB * 1.25, 2.6, wT * 0.6, f));
+      const wR = cy * 0.075, wT = cy * 0.15, wB = cy * 0.17;   // EST: root narrow, base flared at the alae
+      put('head', (P, f) => sdSegSE(P, P0, P1, f1, wR, wR * 1.3, wT, wT * 1.05, 2.6, undefined, f));
+      put('head', (P, f) => sdSegSE(P, P1, P2, f2, wT, wT * 1.05, wB, wB * 1.25, 2.6, undefined, f));
 
       /* THE ROOT NOTCH. Without it the bridge simply starts, at whatever
          width P0 was given, unioned flat against the brow — a nose that
@@ -230,7 +255,7 @@
       const A = vmad(vmad(vmad(sk.A, fr[0], eyeH + cy * 0.02), fr[2], cz * 1.10),
         fr[1], sgn * cy * 0.42);
       const B = vmad(vmad(vmad(sk.A, fr[0], -dn * 0.05), fr[2], cz * 0.55),
-        fr[1], sgn * cy * 0.90);
+        fr[1], sgn * cy * 0.80);
       const F = along(A, B, fr[0]);
       put('head', (P, f) => sdSegSE(P, A, B, F,
         cy * 0.22, cy * 0.08, cy * 0.18, cy * 0.07, 2.4, cy * 0.06, f));
@@ -252,17 +277,26 @@
     }
 
     /* THE CHIN, as a BOSS rather than as wherever the jaw stack's own
-       taper happens to end. The stack alone leaves the point of the chin
-       roughly 20mm behind the brow line, which reads as a receding chin
-       on every face rather than on the minority that actually have one —
-       real profiles run close to plumb from brow to chin. This is a
-       small added knob, not a change to the stack, because the jaw
-       still needs its own taper for the stack to close cleanly; the
-       roundness a chin actually has comes from layering a blob on top of
-       that taper the same way the nose layers onto the face. */
+       taper happens to end. The stack alone (see its own comment above)
+       is kept a plausible cross-section rather than a point, which
+       leaves it under-projecting — real profiles run close to plumb
+       from brow to chin, and the stack alone falls short of that by
+       itself. This is a small added knob, not a change to the stack,
+       because the jaw still needs its own gentler taper for the stack
+       to close cleanly without pointing; the roundness and the rest of
+       the forward reach a chin actually has come from layering a ROUND
+       blob on top of that taper, the same way the nose layers onto the
+       face — one shape supplying bulk, a second supplying shape, rather
+       than asking one stack station to be both at once.
+
+       ax is kept inside the stack's own chin cap (dn*0.10 of headroom
+       below this centre) rather than at a round number: past it, the
+       boss's own lower edge pokes below the stack's true bottom and
+       draws a small rectangular tab hanging under the jaw — seen on an
+       earlier render of this pass, head-only, chin corner. */
     {
-      const c = vmad(vmad(sk.A, fr[0], -dn * 0.94), fr[2], cz * 0.98);
-      put('head', (P, f) => sdBlobSE(P, c, fr, dn * 0.12, zy * 0.24, cz * 0.14, 2.3, f));
+      const c = vmad(vmad(sk.A, fr[0], -dn * 0.90), fr[2], cz * 0.90);
+      put('head', (P, f) => sdBlobSE(P, c, fr, dn * 0.10, zy * 0.26, cz * 0.14, 2.2, f));
     }
 
     /* THE EARS, which sit ON the tragion because the tragion IS the ear.
@@ -288,12 +322,12 @@
       const half = (browH - noseBaseH) * 0.5 / Math.cos(TILT);
       for (const sgn of [1, -1]) {
         const mid = vmad(vmad(vmad(sk.A, fr[0], (browH + noseBaseH) * 0.5), fr[2], cz * 0.02),
-          fr[1], sgn * cy * 0.96);
+          fr[1], sgn * cy * 1.02);
         const A = vmad(mid, D, half);    // top, tipped back
         const B = vmad(mid, D, -half);   // base
         const F = [D, fr[1], Dp];
         put('head', (P, f) => sdSegSE(P, A, B, F,
-          cy * 0.13, cy * 0.19, cy * 0.10, cy * 0.15, 2.2, cy * 0.055, f));
+          cy * 0.13, cy * 0.19, cy * 0.10, cy * 0.15, 2.2, cy * 0.10, f));
       }
     }
   }
