@@ -470,11 +470,17 @@
     // a single spindle-shaped belly with one bulge — the same call
     // hamstrings makes for the same reason (a broad band, pelvis to past
     // mid-thigh). 'trunk' in touches follows gluteal's and hamstrings' own
-    // pelvis-anchored precedent directly above: the proximal end is
-    // groin-side geometry. Checked by render for the pec/lat-style far-end
-    // bar this file's header already warns a trunk-touching belly can
-    // produce — see this file's own musclefit2.js and the comment on
-    // fixPelvisOrigins() below for what that check found.
+    // pelvis-anchored precedent directly above, and cannot reproduce the
+    // pec/lat-style far-end bar this file's header warns a trunk-touching
+    // belly can cause: checked directly in src/50-field.js, the 'trunk'
+    // PART's own muscleKeys is NO_MUSCLE_BULK (that file's own "WHERE THE
+    // MUSCLES SUPPLY THE SHAPE, AND WHERE THEY DOUBLE-COUNT" section —
+    // ANSUR's chest/waist/hip breadth-and-depth measurements already carry
+    // the trunk's true form, so no group's own field is ever consulted for
+    // the trunk's own shape, adductors' included). 'trunk' here only
+    // widens where GK.muscle.query()/introspection reports this group
+    // touching, which is honest — the proximal end genuinely is groin-side
+    // geometry — and costs nothing to get wrong, since it draws nothing.
     adductors: {
       match: /^(addbrev|addlong|addmag(Prox|Mid|Dist|Isch))_r$/,
       originBase: 'pelvis', insertionBase: 'femur_r',
