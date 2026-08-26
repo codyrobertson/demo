@@ -224,8 +224,38 @@
        most checks across all eight, not a number with a closed-form
        derivation behind it. */
     const measH = up + dn;                    // tragiontopofhead + mentonsellionlength
-    const MARGIN_BASE = 0.027, MARGIN_K = 0.0016, BREADTH_REF = 150;
-    const MARGIN_FRAC = MARGIN_BASE - MARGIN_K * (BREADTH_REF - m.headbreadth);
+
+    /* THE SECOND-ORDER TERM, found only once the fraction above met its
+       OWN new neighbour: `head drawn H/W`, the EST canon band this file
+       had never threatened before. A narrow-breadth body draws its
+       ears and scalp as a LARGER fraction of its own small headbreadth
+       than a wide-breadth body does (same mechanism as THE TEMPLE'S
+       RATIO below, just visible here as a side effect rather than the
+       main event) — so the same measH-scaled margin that fixed the
+       floor for an ordinary body pushed a narrow-breadth one (134mm,
+       against a ~150mm mean) hard enough into H/W's 1.50 ceiling that
+       clearing it needed less margin specifically for that body, not a
+       smaller MARGIN_BASE for everyone — a flat reduction big enough to
+       help it dropped `stature / drawn head H`'s population MEAN under
+       6.9 instead (that check is judged on the mean deliberately, see
+       its own comment in tools/proportions.js, and a systematic height
+       cut against every body moves the mean regardless of which body
+       needed the cut).
+
+       headbreadth is what the two bodies that actually collided on
+       this — one narrow, one merely average — differ on, so it is what
+       the correction reads, the same "proxy for a later-solved number"
+       relationship roundness has to `f` in every comment below this
+       one. CLAMPED to the range this was checked against: an
+       unclamped linear term is exactly what turned into a NEW failure
+       the first time this fix used roundness the same way for the
+       temple plane (see the clamp on that one) — extrapolated past a
+       calibration sample's own range, a term tuned to correct eight
+       bodies can overcorrect a ninth harder than the flat number it
+       replaced ever did. */
+    const MARGIN_BASE = 0.027, MARGIN_K = 0.0016;   // EST, solved against tools/proportions.js
+    const breadthForMargin = Math.max(138, Math.min(163, m.headbreadth));
+    const MARGIN_FRAC = MARGIN_BASE - MARGIN_K * (150 - breadthForMargin);
     const TOP_MARGIN = -MARGIN_FRAC * measH, BOT_MARGIN = -MARGIN_FRAC * measH;
     const vertexH = up - TOP_MARGIN;
     const chinH = -dn + BOT_MARGIN;
@@ -413,9 +443,19 @@
        right pull-in for the roundest AND the most elongated body in the
        sample at once, so ROUND_REF and TEMPLE_K are the compromise that
        clears all eight with room on both ends of the band, not a number
-       derived rather than fitted. */
+       derived rather than fitted.
+
+       CLAMPED to [0.72, 0.82], the range the eight sampled bodies
+       actually spanned (0.722-0.817) — this is a linear correction
+       fitted to that range, not a physical law, and it does not stay
+       true past it. Left unclamped, a wider seed sample found a body
+       round enough (0.865) that the SAME formula swung the temple, and
+       the ear right after it, wider than the flat ratio this replaced
+       ever put them — an overcorrection worse than the problem, from
+       trusting one straight line further than the eight points that
+       fitted it. */
     const ROUND_REF = 0.78, TEMPLE_K = 2.2;   // EST, solved against tools/proportions.js — see above
-    const roundness = m.headbreadth / m.headlength;
+    const roundness = Math.max(0.72, Math.min(0.82, m.headbreadth / m.headlength));
     const templeRatio = 1.06 - TEMPLE_K * (ROUND_REF - roundness);
 
     // ---- paired: side group + the paired front/crown facets -----------
