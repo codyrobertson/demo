@@ -1110,7 +1110,14 @@
         name: 'arm' + S, chain: ['humerus' + S, 'forearm' + S],
         keep: limbKeep(['humerus' + S, 'forearm' + S, 'scapula' + S]),
         muscleKeys: MUSCLE_BULK ? ['humerus' + S, 'forearm' + S] : NO_MUSCLE_BULK,
-        s0: 0, s1: 1, ns: 30, na: 22,
+        /* Past the wrist by six per cent — into the carpal region the hand
+           covers. Stopped exactly at the joint, the arm closes with a flat
+           cap right where the hand's own palm outline is still fading in,
+           and the two read as a stump above a detached hand. Carried a few
+           millimetres further, the taper continues under the hand and the
+           cap lands inside the hand's own coverage, where the depth field
+           buries it. */
+        s0: 0, s1: 1.06, ns: 30, na: 22,
       });
       out.push({
         name: 'leg' + S, chain: ['femur' + S, 'tibia' + S],

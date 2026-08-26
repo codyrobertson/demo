@@ -99,7 +99,37 @@ if (!ONLY) {
       chirality: side === 'L' ? 'left' : 'right',
       size: probe.size * fig.m.handlength / ray,
     });
-    const pose = G.pose.preset(HA, 'rest');
+    /* Between 'rest' and 'flat'. The rest preset was tuned for the hand's
+       own plates, where a relaxed part-curl reads as ease; hanging off a
+       standing figure and seen from above-front, that same 39-degree PIP
+       curl reads as a claw about to grab something. A standing hand is
+       straighter — fingers together, a shadow of curl left in. */
+    const pR = G.pose.preset(HA, 'rest'), pF = G.pose.preset(HA, 'flat');
+    const pose = pR;
+    for (let d = 0; d < 5; d++) {
+      for (const k in pose.digits[d]) {
+        const a = pose.digits[d][k], b = (pF.digits[d] || {})[k];
+        if (typeof a === 'number' && typeof b === 'number') {
+          pose.digits[d][k] = a + (b - a) * 0.55;
+        }
+      }
+    }
+    /* Mid-pronation. The mount hands over the forearm's distal frame as-is,
+       whose +Z is anterior — anatomical position, palms to the camera, which
+       nobody standing at ease does. A resting hand hangs palm toward the
+       thigh: rotate the mount about the forearm's own axis, mirrored per
+       side, stopping short of a full quarter-turn because a relaxed palm
+       still shows a sliver of itself to the front. */
+    /* 0.9 rad, not the full quarter-turn: at 72 degrees the front view saw
+       the hand edge-on — a thin strip with fingers — and read as a claw
+       hanging off a stump. At ~50 the front view gets the dorsum at
+       three-quarter, which is what a standing figure's hand shows. */
+    const spin = (side === 'L' ? -1 : 1) * 0.9;
+    const cs = Math.cos(spin), sn = Math.sin(spin);
+    const f1 = mount.frame[1], f2 = mount.frame[2];
+    mount.frame = [mount.frame[0],
+      M.vadd(M.vmul(f1, cs), M.vmul(f2, sn)),
+      M.vadd(M.vmul(f2, cs), M.vmul(f1, -sn))];
     HANDS.push({
       side, anatomy: HA, pose, mount,
       // Contacts off, so the pose the renderer draws is the pose solved
@@ -212,7 +242,7 @@ const HAND_STATE = HANDS.map((H, i) => ({
   mount: { origin: H.mount.origin, frame: H.mount.frame },
   view: { az, el, roll: 0 }, fit: fitPin,
   df, idBase: 1000 + i * HAND_ID_SPAN, graphite: null,
-  style: { grade: 3, tone: 1, wobble: 1, ghost: 0, search: 0 },
+  style: { grade: 3, tone: handPx >= 330 ? 1 : 0.85, wobble: 1, ghost: 0, search: 0 },
   // At full-figure scale a hand is eighty pixels across. Everything the
   // hand project knows how to draw INSIDE its own outline — prints, ridges,
   // creases, folds, nails, tendons — is finer than that, and drawn anyway
@@ -221,7 +251,16 @@ const HAND_STATE = HANDS.map((H, i) => ({
   // against the hand's own size on this plate rather than against the
   // plate's size, which is what makes the rule hold at any framing.
   detail: { print: 0, ridge: 0, lattice: 0, hair: 0, vein: 0 },
-  layers: fine ? { print: false, ridge: false, hair: false, vein: false, hatch: false, model: false }
+  /* Graduated, not binary. At 190px the old rule switched EVERYTHING on —
+     folds, knuckle fields, tendons — and a 240px hand came out a dark
+     tangled knot, far past what a pencil would state at that size. Full
+     apparatus only when the hand approaches the size of its own standalone
+     plates; in between, outline plus the few creases and nails that read. */
+  layers: handPx >= 330 ? { print: false, ridge: false, hair: false, vein: false, hatch: false, model: false }
+    : fine ? {
+      print: false, ridge: false, hair: false, vein: false, hatch: false, model: false,
+      fold: false, tendon: false,
+    }
     : {
       print: false, ridge: false, hair: false, vein: false, hatch: false, model: false,
       crease: false, fold: false, nail: false, palmcrease: false, tendon: false, bone: false,
@@ -321,9 +360,17 @@ function coverageOutline(idLo) {
       cov[j] = 1; dep[j] = df.z0[i];
     }
   }
+  /* Smoothing scaled to the hand's size on the page. At 250px of hand the
+     border walk's detail is real — knuckle scallops, a thumb's silhouette.
+     At 60px those same scallops are two cells wide and alias into wiggles
+     that read as a cartoon mitten drawn with a shaky pen. What a pencil
+     drawing does at that size is state the hand as one calm shape with at
+     most a notch for the thumb — which is exactly what heavier smoothing
+     leaves behind. */
+  const hp = (typeof handPx === 'number') ? handPx : 200;
   return G.trace.traceMask({
     w, h, cov, dep, cell: D, x0: bx0 * D, y0: by0 * D, pad: PAD, defaultOwn: idLo,
-  }, { smooth: 3 });
+  }, { smooth: hp < 75 ? 7 : hp < 130 ? 5 : 3 });
 }
 
 if (fine) {
