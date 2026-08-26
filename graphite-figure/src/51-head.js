@@ -224,7 +224,8 @@
        most checks across all eight, not a number with a closed-form
        derivation behind it. */
     const measH = up + dn;                    // tragiontopofhead + mentonsellionlength
-    const MARGIN_FRAC = 0.028;   // EST, solved against tools/proportions.js — see above
+    const MARGIN_BASE = 0.027, MARGIN_K = 0.0016, BREADTH_REF = 150;
+    const MARGIN_FRAC = MARGIN_BASE - MARGIN_K * (BREADTH_REF - m.headbreadth);
     const TOP_MARGIN = -MARGIN_FRAC * measH, BOT_MARGIN = -MARGIN_FRAC * measH;
     const vertexH = up - TOP_MARGIN;
     const chinH = -dn + BOT_MARGIN;
@@ -660,18 +661,37 @@
     /* THE EARS, which sit ON the tragion because the tragion IS the ear.
        Kept as the smooth stack's own flattened-oval-angled-back capsule —
        ears are cartilage, not bone, and nothing about "more planar" asks
-       for a faceted ear. What changed is size and standoff: pulled from
-       cy*1.02 (fractionally PAST the skull's own widest point) to cy*0.90
-       (inside the parietal's 0.97cy, sitting against the temple/side-
-       cheek surface rather than beside it) and thinned from a cy*0.19
-       max cross-section to cy*0.14, because the proportions critic
+       for a faceted ear. Standoff pulled in from cy*1.02 (fractionally
+       PAST the skull's own widest point) and thinned from a cy*0.19 max
+       cross-section to cy*0.14, because the proportions critic
        (tools/proportions.js) charges the whole head's drawn width against
        ears included, and the old figures — 1.17 of measured headbreadth,
        against a crown-only (no-ear) band of 0.98-1.10 — were the ear
        standing nearly a full old-parietal's-width proud of the skull
-       rather than sitting against it. The canon span (brow line to nose
-       base, tipped back 15° off vertical) did not move; only how far off
-       the skull and how thick the ear itself is did. */
+       rather than sitting against it. (An EARLIER pass through this
+       rebuild recorded the standoff as pulled specifically to cy*0.90;
+       the number actually committed was cy*1.00, and the two sat
+       undetected against each other for a full construction because
+       nothing checked the comment against the code it was describing —
+       worth naming so the next person trusts the CODE over the prose
+       when the two disagree, here or anywhere else in this file.)
+
+       THE STANDOFF IS NOW A FORMULA, not the flat cy*1.00 that mismatch
+       left behind, for the identical reason the temple plane's ratio
+       is (see THE TEMPLE'S RATIO ISN'T A CONSTANT, in the paired loop
+       above): the ear is the single widest thing on the head on most
+       bodies, so `head drawn W / measured W` is really an ear check
+       wearing a head-shaped costume, and it inherits the same tension
+       — a round-headed body (roundness 0.817) needed room to breathe
+       up near the 1.20 ceiling's OPPOSITE problem, `shoulders / drawn
+       head W` and the H/W canon both crowding THEIR ceilings when the
+       ear was pulled in enough for an elongated body (0.738) to clear
+       1.20. EAR_REF and EAR_K are solved the same way TEMPLE_K was —
+       against tools/proportions.js across eight bodies, not derived —
+       and share ROUND_REF and `roundness` rather than each computing
+       their own version of the same fact about the body. */
+    const EAR_K = 1.2;   // EST, solved against tools/proportions.js — see above
+    const earRatio = 0.99 - EAR_K * (ROUND_REF - roundness);
     {
       const TILT = 15 * Math.PI / 180;
       const D = vnorm(vsub(vmul(U, Math.cos(TILT)), vmul(F, Math.sin(TILT))));   // up-and-back
@@ -679,7 +699,7 @@
       const half = (browH - noseBaseH) * 0.5 / Math.cos(TILT);
       for (const sgn of [1, -1]) {
         const mid = vmad(vmad(vmad(sk.A, U, (browH + noseBaseH) * 0.5), F, cz * 0.00),
-          L, sgn * cy * 0.94);
+          L, sgn * cy * earRatio);
         const A = vmad(mid, D, half);    // top, tipped back
         const B = vmad(mid, D, -half);   // base
         const Fr = [D, L, Dp];
