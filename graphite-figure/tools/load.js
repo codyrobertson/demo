@@ -45,6 +45,7 @@ const FIGURE = [
   '40-surface',       // superelliptic sections, still the section solver
   '45-muscle',        // the muscle layer, when it exists
   '50-field',         // the layered field and the skin over it
+  '60-draw',          // the inside of the outline: tone and landmark creases
 ];
 
 // Datasets, and which accessor takes each. A dataset whose accessor did not

@@ -87,6 +87,23 @@
    */
   function smax(a, b, k) { return -smin(-a, -b, k); }
 
+  /**
+   * A frame whose FIRST axis runs along a segment.
+   *
+   * sdSegSE measures its two transverse semi-axes against fr[1] and fr[2]
+   * and caps along fr[0], which is right for anything running down its own
+   * bone's axis and wrong for everything else. A nose runs down AND forward
+   * at about forty degrees; an ear runs sideways; a sternocleidomastoid runs
+   * down, forward and inward at once. Handed a parent's frame, all three
+   * would be measured on the wrong axes entirely — the semi-axis meant to be
+   * the thing's width would be read along its length.
+   */
+  function frameAlong(A, B, side) {
+    const x = vnorm(vsub(B, A));
+    const z = vnorm(M.vcross(x, side));
+    return [x, vnorm(M.vcross(z, x)), z];
+  }
+
   /** signed distance to a capsule: the primitive every bone is made of */
   function sdCapsule(P, A, B, ra, rb) {
     const ab = vsub(B, A), ap = vsub(P, A);
@@ -550,26 +567,190 @@
       }
     }
 
-    // ---- the head --------------------------------------------------------
-    // Measured in all three axes, which is unusual and worth using: head
-    // length is the anteroposterior one, head breadth the lateral, and the
-    // vertical is tragion-to-vertex plus the face below it. The exponent then
-    // makes the horizontal section's perimeter the measured head
-    // circumference — a head is not an ellipse either.
+    /* THE STERNOCLEIDOMASTOID, which is what makes a neck a neck.
+       Everything else in this file builds the neck as a tapered tube on the
+       cervical spine, and a tube is what it drew: correct in circumference,
+       correct in taper, and unmistakably a length of pipe with a head on it.
+       A real neck is not smooth. Two straps run from behind each ear forward
+       and down to the notch between the collar bones, and the hollow they
+       make between them at the front, and the flat plane they leave behind
+       them, are most of what a neck's surface IS.
+
+       Both ends are anchored to measured landmarks: the upper to the skull's
+       own frame just behind and below the ear, the lower to suprasternale
+       height, which ANSUR measures. The thickness is EST. */
     {
-      const s = rig.bones.skull;
-      if (s) {
-        const az = CORE.head * m.headlength * 0.5;    // anteroposterior
-        const ay = CORE.head * m.headbreadth * 0.5;   // lateral
-        const ax = CORE.head * (m.tragiontopofhead + m.mentonsellionlength) * 0.5;
-        const n = exponentFor(az, ay, CORE.head * m.headcircumference);
-        // the head's centre sits above the tragion by half the difference
-        // between what is above it and what hangs below it
-        const up = (m.tragiontopofhead - m.mentonsellionlength) * 0.5;
-        const fr = s.frame;
-        // and back: the face is forward of the ear, the occiput further back
-        const C = vmad(vmad(s.A, fr[0], up), fr[2], az * 0.10);
-        put('head', (P, f) => sdBlobSE(P, C, fr, ax, ay, az, n, f));
+      const sk = rig.bones.skull;
+      if (sk) {
+        const fr = sk.frame;
+        const cy = m.headbreadth * 0.5, cz = m.headlength * 0.5;
+        const notchH = m.suprasternaleheight - fig.rootHeight;
+        const notchZ = m.chestdepth * 0.30;
+        for (const sgn of [1, -1]) {
+          // the mastoid, behind and below the ear
+          const A = vmad(vmad(vmad(sk.A, fr[0], -m.mentonsellionlength * 0.22),
+            fr[2], -cz * 0.24), fr[1], sgn * cy * 0.66);
+          // and the notch, where the two of them nearly meet
+          const B = [notchH, sgn * m.biacromialbreadth * 0.055, notchZ];
+          const F = frameAlong(A, B, [1, 0, 0]);
+          const w = m.neckcircumference * 0.055;      // EST: a strap ~17mm across
+          put('trunk', (P, f) => sdSegSE(P, A, B, F,
+            w * 0.9, w * 0.75, w * 1.25, w * 0.85, 2.1, w * 0.7, f));
+        }
+      }
+    }
+
+    /* THE TRAPEZIUS, as the slope a shoulder hangs from. The clavicle and
+       the scapula are thin struts, so without this the neck met the shoulder
+       at a corner and the figure had the squared-off look of a coat hanger.
+       Both ends measured: the medial end sits on the cervical spine, the
+       lateral end on the acromion the clavicle already aims at. */
+    for (const side of ['L', 'R']) {
+      const cl = rig.bones['clavicle.' + side], c7 = rig.bones.C7;
+      if (!cl || !c7) continue;
+      const A = vmad(c7.A, c7.frame[2], -vertR * 0.6);
+      const B = vmad(cl.B, cl.frame[2], -m.chestdepth * 0.06);
+      const F = frameAlong(A, B, [1, 0, 0]);
+      const t = m.biacromialbreadth * 0.075;          // EST
+      put('trunk', (P, f) => sdSegSE(P, A, B, F,
+        t * 1.5, t * 0.85, t * 1.15, t * 0.95, 2.3, t * 0.5, f));
+    }
+
+    // ---- the head --------------------------------------------------------
+    /* A HEAD IS ONE SECTION CHANGING, NOT TWO SOLIDS MEETING.
+       Two earlier versions got this wrong in opposite directions. The first
+       was a single superellipsoid on head length, breadth and height: the
+       right size and a featureless egg, because a head does not read as a
+       head by being the right size. The second was a braincase plus a
+       separate jaw, which read as two balls on a stalk however much fascia
+       was thrown at the join — a step in depth of thirty millimetres between
+       two closed forms is a step, and smoothing it only rounds the corner.
+
+       What a head actually is, going down: a vault that is nearly spherical,
+       widest at the brow, narrowing below the cheekbone, and leaning FORWARD
+       the whole way, so the chin ends up well anterior of the ear and a
+       little behind the brow. That is one section changing along one axis,
+       which is the same construction the ribcage uses, and it gives a jaw
+       without ever building one.
+
+       Every width and depth here is a fraction of a measured number — head
+       breadth, head length, bizygomatic breadth — and every height is a
+       fraction of a measured one, tragion-to-vertex above and menton-to-
+       sellion below. The fractions themselves are EST: they are the shape of
+       a head, and no tape measures those. */
+    {
+      const sk = rig.bones.skull;
+      if (sk) {
+        const fr = sk.frame;                            // +X up, +Y left, +Z front
+        const cz = CORE.head * m.headlength * 0.5;      // anteroposterior
+        const cy = CORE.head * m.headbreadth * 0.5;     // lateral
+        const zy = CORE.head * m.bizygomaticbreadth * 0.5;
+        const up = m.tragiontopofhead, dn = m.mentonsellionlength;
+        const n = exponentFor(cz, cy, CORE.head * m.headcircumference);
+
+        /* height above the tragion | half-breadth | half-depth | how far the
+           section's own centre sits forward of the ear.
+
+           Eight stations, and the four above the brow are what make a dome.
+           A first pass used two up there and the vault came out a cylinder
+           with a lid: between the brow and the upper vault the width fell by
+           seven per cent over forty millimetres, which is not a curve, and
+           the head read as a slab from every angle. A cranium loses most of
+           its width in its top third. */
+        const ST = [
+          [up * 0.93, cy * 0.30, cz * 0.32, cz * 0.02],   // vertex, less its own cap
+          [up * 0.86, cy * 0.55, cz * 0.58, cz * 0.02],
+          [up * 0.66, cy * 0.78, cz * 0.80, cz * 0.03],
+          [up * 0.42, cy * 0.93, cz * 0.94, cz * 0.04],
+          [up * 0.12, cy * 1.00, cz * 1.00, cz * 0.06],   // brow, the widest
+          [-dn * 0.16, zy * 1.00, cz * 0.94, cz * 0.15],  // cheekbone
+          [-dn * 0.55, zy * 0.74, cz * 0.72, cz * 0.26],  // the angle of the jaw
+          [-dn * 0.90, zy * 0.40, cz * 0.44, cz * 0.44],  // chin
+        ];
+        const at = (st) => vmad(vmad(sk.A, fr[0], st[0]), fr[2], st[3]);
+        const along = frameAlong;
+        for (let i = 0; i < ST.length - 1; i++) {
+          const a0 = ST[i], a1 = ST[i + 1];
+          const A = at(a0), B = at(a1);
+          // Caps only at the two ends of the whole stack; in between the
+          // segments overlap and a cap would show as a bulge inside the head.
+          const cap = i === 0 ? Math.min(a0[1], a0[2]) * 0.9
+            : i === ST.length - 2 ? Math.min(a1[1], a1[2]) * 0.9 : undefined;
+          put('head', (P, f) => sdSegSE(P, A, B, fr, a0[1], a0[2], a1[1], a1[2], n, cap, f));
+        }
+
+        /* THE NOSE. In profile it is the most identifying thing on a head,
+           and it is the one part of a face that is a FORM rather than a mark:
+           no amount of line work on a smooth face plane produces it, because
+           what a nose does is break the silhouette. ANSUR measures nothing
+           about it — menton-to-sellion reaches its root and stops — so every
+           number here is EST, anchored to the face height and head length
+           that ARE measured, and the shape is the ordinary one: a bridge
+           running down and forward from the root, a tip beyond the brow
+           line, and an underside coming back to the lip. */
+        {
+          const P0 = vmad(vmad(sk.A, fr[0], -dn * 0.02), fr[2], cz * 0.86);   // root
+          const P1 = vmad(vmad(sk.A, fr[0], -dn * 0.40), fr[2], cz * 1.16);   // tip
+          const P2 = vmad(vmad(sk.A, fr[0], -dn * 0.50), fr[2], cz * 0.94);   // under
+          const f1 = along(P0, P1, fr[1]), f2 = along(P1, P2, fr[1]);
+          const w = cy * 0.10;                       // EST: a nose root, ~7mm
+          put('head', (P, f) => sdSegSE(P, P0, P1, f1, w, w * 0.9, w * 1.9, w * 1.7, 2.2, w * 0.6, f));
+          put('head', (P, f) => sdSegSE(P, P1, P2, f2, w * 1.9, w * 1.7, w * 1.5, w * 1.2, 2.2, w * 0.5, f));
+        }
+
+        /* THE BROW. A shallow ridge, and shallow is the point: overdone it
+           reads as a scowl, absent it leaves the forehead running smoothly
+           into the eye socket and the face has no shelf to sit under. */
+        {
+          const b = cy * 0.56;
+          const A = vmad(vmad(sk.A, fr[0], dn * 0.10), fr[2], cz * 0.94);
+          const B = vmad(A, fr[1], -b * 2);
+          const F = [fr[1], fr[0], fr[2]];
+          put('head', (P, f) => sdSegSE(P, vmad(A, fr[1], b), B, F,
+            cy * 0.13, cy * 0.10, cy * 0.13, cy * 0.10, 2.4, cy * 0.06, f));
+        }
+
+        /* THE EYE SOCKETS, which are the one part of a face that has to be
+           taken AWAY. Everything else here adds — a brow, a nose, a
+           cheekbone — and a face built only from additions is a face with no
+           eyes in it, because an eye sits in a hollow. So these are cuts, and
+           shallow ones: the sphere doing the cutting sits mostly in front of
+           the face and only its back bites, which is what makes a scoop
+           rather than a hole. */
+        for (const sgn of [1, -1]) {
+          const c = vmad(vmad(vmad(sk.A, fr[0], dn * 0.02), fr[2], cz * 1.16),
+            fr[1], sgn * cy * 0.40);
+          put('head', (P) => sdBlobSE(P, c, fr, cy * 0.20, cy * 0.36, cy * 0.34, 2.1), true);
+        }
+
+        /* THE CHEEKBONE, running from just in front of the ear forward and
+           down under the eye. It is a narrow ridge and it does most of the
+           work of saying which way a head is turned — the plane above it
+           catches the light and the plane below it does not, and that step is
+           a face's widest and most legible feature after the nose. */
+        for (const sgn of [1, -1]) {
+          const A = vmad(vmad(vmad(sk.A, fr[0], dn * 0.02), fr[2], -cz * 0.04),
+            fr[1], sgn * cy * 0.86);
+          const B = vmad(vmad(vmad(sk.A, fr[0], -dn * 0.06), fr[2], cz * 0.74),
+            fr[1], sgn * cy * 0.46);
+          const F = along(A, B, fr[0]);
+          put('head', (P, f) => sdSegSE(P, A, B, F,
+            cy * 0.11, cy * 0.09, cy * 0.13, cy * 0.10, 2.3, cy * 0.05, f));
+        }
+
+        /* THE EARS, which sit ON the tragion because the tragion IS the ear.
+           Small, and worth the two solids anyway: an ear is the only thing
+           breaking the silhouette of a head seen from the front or the back,
+           and a head without them reads as a mannequin's block however good
+           the vault is. */
+        for (const sgn of [1, -1]) {
+          const c = vmad(vmad(sk.A, fr[0], dn * 0.06), fr[2], -cz * 0.06);
+          const A = vmad(c, fr[1], sgn * cy * 0.84);
+          const B = vmad(c, fr[1], sgn * cy * 1.05);
+          const F = [vmul(fr[1], sgn), fr[0], fr[2]];
+          put('head', (P, f) => sdSegSE(P, A, B, F,
+            dn * 0.30, dn * 0.17, dn * 0.26, dn * 0.14, 2.3, cy * 0.05, f));
+        }
       }
     }
 
@@ -872,7 +1053,15 @@
 
   const KEEP = {
     trunk: (id) => /^(pelvis|[LTC]\d+|clavicle\.[LR]|scapula\.[LR])$/.test(id),
-    head: (id) => /^(skull|C[123])$/.test(id),
+    /* The head is its own volumes and nothing else. It used to take the top
+       three cervical vertebrae as well, on the reasoning that they are
+       inside it — and they are, but as 28mm capsules on the SPINE axis,
+       which sits well behind the head's own centre. They packed out the
+       space under the occiput, so the back of every skull ran straight down
+       into the neck with no overhang at all, and a head measured 81mm deep
+       at the chin where its own jaw is 38. The neck is the trunk's, and the
+       two parts overlap there quite happily. */
+    head: () => false,
   };
   const limbKeep = (ids) => (id) => ids.indexOf(id) >= 0;
 
@@ -892,7 +1081,14 @@
    */
   function radiusAlong(rig, part, C, dir, opts) {
     opts = opts || {};
-    const fascia = opts.fascia === undefined ? 14 : opts.fascia;
+    /* How much soft tissue lies over the join between two solids, and so how
+       far apart they can be and still read as one form. Fourteen millimetres
+       is right for a limb, where the things being merged are a bone and a
+       muscle belly lying along it. It is far too little for a head, where a
+       braincase and a jaw meet across a thirty-millimetre step in depth and
+       came out as two balls on a stalk rather than as a skull. */
+    const fascia = opts.fascia === undefined
+      ? (part.fascia === undefined ? 14 : part.fascia) : opts.fascia;
     const fat = opts.fat === undefined ? fatAt(rig.figure, part.name, opts.h, opts.s) : opts.fat;
     const bones = part._bones || (part._bones = bonesFor(rig, part.keep));
     const vols = part._vols || (part._vols = volumesFor(rig, part.name));
@@ -1059,8 +1255,19 @@
       s0: -0.42, s1: 1.10, ns: 52, na: 30,
     });
     out.push({
+      // A head is small on the page and entirely curvature: stations too
+      // coarse and the crown facets, which is the one place on a figure
+      // where a flat spot is unmistakable.
+      /* A head is small on the page and entirely curvature, so stations too
+         coarse and the crown facets — the one place on a figure where a flat
+         spot is unmistakable. And once it has features the ANGULAR sampling
+         matters more still: a nose is 25mm across on a head 140mm wide, so
+         at thirty samples round it lands on two of them and the surface
+         normal never finds it at all. The modelling then flows straight over
+         a nose as if it were not there. */
       name: 'head', bone: 'skull', keep: KEEP.head, muscleKeys: NO_MUSCLE_BULK,
-      s0: -1.60, s1: 1.50, ns: 22, na: 24,
+      fascia: 26,
+      s0: -1.60, s1: 1.50, ns: 44, na: 52,
     });
     /* A LIMB IS ONE PART. Drawn as two — an upper and a lower — each closes
        its own silhouette, and where they meet both end caps are exposed: the

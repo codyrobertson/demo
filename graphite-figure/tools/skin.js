@@ -138,6 +138,20 @@ for (const H of HANDS) {
     }
   }
 }
+/* FRAME=<low>,<high> in millimetres above the floor crops the plate to a
+   band of the body, so one region can be worked on at the size it deserves
+   rather than at the size a whole figure leaves it. The band is measured in
+   the body's own units, not in pixels, so the same FRAME means the same
+   anatomy on every seed. */
+if (process.env.FRAME) {
+  const [lo, hi] = process.env.FRAME.split(',').map(Number);
+  const yTop = view.px([hi - fig.rootHeight, 0, 0])[1];
+  const yBot = view.px([lo - fig.rootHeight, 0, 0])[1];
+  y0 = Math.min(yTop, yBot); y1 = Math.max(yTop, yBot);
+  // keep the horizontal centred on the body, widened to the band's own aspect
+  const cx0 = (x0 + x1) * 0.5, half = Math.max((x1 - x0) * 0.5, (y1 - y0) * 0.5);
+  x0 = cx0 - half; x1 = cx0 + half;
+}
 const sc = Math.min(S * 0.90 / Math.max(1e-6, x1 - x0), S * 0.90 / Math.max(1e-6, y1 - y0));
 view.scale = sc;
 view.cx = S * 0.5 - sc * (x0 + x1) * 0.5;
@@ -339,13 +353,66 @@ if (fine) {
   }
 }
 
+// ---------------------------------------------------------------------------
+//  THE INSIDE OF THE OUTLINE
+//  Drawn after every silhouette, because graphite accumulates: a mark gives
+//  way where the page is already dark, and modelling laid down before the
+//  contours would be pressing on bare paper and then buried under them.
+// ---------------------------------------------------------------------------
+const DRAW = G.draw;
+const LAMP = DRAW.lamp(view);
+let shaded = 0;
+if (!process.env.NOMODEL) {
+  const put = (P, id, style) => {
+    const pts = P.map((q) => {
+      const p = view.px(q);
+      const z = view.near(q);
+      const v = (1 - df.hidden(p[0], p[1], z, id, eps, gap)) * (q[3] === undefined ? 1 : q[3]);
+      return [p[0], p[1], v];
+    });
+    for (const run of RE.runs(pts, 0.05, 2, 30)) {
+      g.stroke(run.pts, Object.assign({ grade, passes: 1, wobble: 1 }, style, { vis: run.vis }));
+      shaded++;
+    }
+  };
+  for (const P of PARTS) {
+    const rows = RING[P.id];
+    // the shadow band, running along the form
+    // A head is a hundred pixels of page. Hatching it at the density a
+    // thigh takes draws hair, not a head.
+    /* Enough marks that they read as TONE rather than as lines. Graphite
+       accumulates into a field and is tone-mapped once, so twenty light
+       passes are a grey and five heavy ones are five lines — the count is
+       the lever here, not the pressure. A head gets few because a head is a
+       hundred pixels of page and hatching it at a thigh's density draws
+       hair. */
+    const marks = P.name === 'trunk' ? 26 : P.name === 'head' ? 16 : 17;
+    const mrng = new M.Rng(seed ^ (0x9e37 + P.id * 2654435761));
+    for (const b of DRAW.modelling(P, rows, view, { lamp: LAMP, marks, rng: mrng })) {
+      put(b.pts, P.id, {
+        tone: 0.44, weight: 0.62, taper: 0.9, jitter: 0.9, phase: P.id * 3.1 + b.t * 17,
+      });
+    }
+    // and the creases, which are anchored to measured heights where ANSUR
+    // reaches them and to a station along the part where it does not
+    const stationOf = (key) => (key && P.chain)
+      ? G.field.stationAtHeight(rig, P, fig.m[key]) : 0.5;
+    for (const c of DRAW.landmarks(P.name, rows, stationOf)) {
+      put(c.pts, P.id, {
+        tone: 0.95, weight: 1.0, taper: 0.6, jitter: 0.45, phase: c.id.length * 7.7,
+      });
+    }
+  }
+}
+
 const px = g.resolve({ paper: [244, 241, 232], ink: [26, 25, 23], k: 1.55, gamma: 1 });
 writePNG(out, px, S, S);
 
 console.log('seed ' + seed + '  stature ' + fig.stature.toFixed(0) + 'mm  ' +
   PARTS.length + ' parts, ' + drawn + ' runs' + (empty ? ', ' + empty + ' traced to nothing' : '') +
   (HANDS.length ? ', ' + HANDS.length + ' hands at ' + handPx.toFixed(0) + 'px' +
-    (fine ? '' : ' (outline only)') : ''));
+    (fine ? '' : ' (outline only)') : '') +
+  (shaded ? ', ' + shaded + ' modelling' : ''));
 console.log('muscle layer: ' + (!G.muscle ? 'ABSENT' :
   (process.env.NOBULK ? 'loaded, shaping only (NOBULK=1)' : 'loaded, driving limb bulk')));
 console.log('soft tissue each region needed, to reach its measured girth:');
