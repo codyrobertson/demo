@@ -973,6 +973,15 @@
   }
 
   function axisAt(rig, part, s) {
+    /* A part may carry its own axis — a function of station returning
+       {C, fr} — because a bone is not always the right spine for a form.
+       The foot found this: its bone runs horizontally at ankle height, so
+       rings sampled around it could never let the dorsum slope below the
+       ankle without the sampling ray leaving the solid and the toes being
+       trimmed away. The foot's true sampling spine drops from the ankle
+       toward the toes, and only the foot knows that, so the axis lives
+       with the part's own geometry (via tweakPart) rather than here. */
+    if (part.axis) return part.axis(rig, s);
     if (part.chain) {
       const nd = part.nodes || (part.nodes = chainNodes(rig, part.chain));
       const f = s * (nd.length - 1);
