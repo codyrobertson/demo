@@ -475,30 +475,61 @@
       arch: 'multipennate', primaryJoint: { key: 'ankle', bone: 'foot' },
       touches: ['tibia', 'foot'],
     },
-    // The lateral compartment proper — perlong_r/perbrev_r (peroneus/
-    // fibularis longus and brevis; data/bodyparts3d.json's own catalogue
-    // uses "fibularis", checked directly — see BP3D_GROUPS below).
-    // fibularis tertius exists in that catalogue too but has no matching
-    // Rajagopal muscle (this model does not carry it separately from
-    // edl_r), so it is left out on the same "anchors and volume must name
-    // the same muscles" rule BP3D_GROUPS's own header states — a
-    // deliberately small, named omission rather than an unlabelled one.
-    // Both muscles originate further down/behind the tibia than tibant_r
-    // (perlong_r's own first tibia point sits at x=-20mm, posterior of
-    // tibant_r's x=+15.4) and their own calcn_r insertions run under the
-    // sole toward the midfoot — this two-point proxy does not chase that
-    // route, the same simplification tricepsSurae's own Achilles insertion
-    // already makes for the heel. Separate group from tibialisAnterior
-    // rather than folded in: different compartment, different side of the
-    // shin, and the task that added this group left that choice open
-    // ("peroneals if the pattern extends cleanly") — it does, with zero
-    // new code, so it is kept separate for a cleaner medial/lateral read.
-    peroneals: {
-      match: /^per(long|brev)_r$/,
-      originBase: 'tibia_r', insertionBase: 'calcn_r',
-      arch: 'fusiform', primaryJoint: { key: 'ankle', bone: 'foot' },
-      touches: ['tibia', 'foot'],
-    },
+    // PERONEALS — ATTEMPTED, REVERTED. Worth recording in full because the
+    // data side worked perfectly; the reason it is not here is downstream.
+    //
+    // perlong_r/perbrev_r (peroneus/fibularis longus and brevis;
+    // data/bodyparts3d.json's own catalogue uses "fibularis", checked
+    // directly) anchor exactly like tibialisAnterior above — same
+    // originBase 'tibia_r', same insertionBase 'calcn_r', zero new code —
+    // and BUILT cleanly: real measured points, a sensible volume (58.5 +
+    // 15.8 cm3), a smooth own-field taper verified the same way
+    // tibialisAnterior's was (GK.muscle.fieldAt() probed in isolation along
+    // its own peak width axis: a plain symmetric bump, no discontinuity).
+    // fibularis tertius exists in the bodyparts3d catalogue too but has no
+    // matching Rajagopal muscle (this model does not carry it separately
+    // from edl_r), so it would have been left out on this file's own
+    // "anchors and volume must name the same muscles" rule regardless.
+    //
+    // What killed it was rendered, not computed. tibialisAnterior alone
+    // (above) draws a clean anterolateral shin — one moderate crease where
+    // belly gives way to tendon, the kind a real lean shin shows. Adding
+    // peroneals alongside it, at seed 12345, turned the same shin's front
+    // contour into a multi-step staircase (tools/skin.js 12345 90 0, framed
+    // to the shin): four-plus sharp corners over about 90mm of height,
+    // visible even at whole-figure scale — matching this file's own
+    // warning to look for exactly this shape of failure. Isolated with
+    // GK.field.radiusAlong() called directly, station by station: EACH
+    // group's own field is smooth on its own (confirmed the same way for
+    // both — a plain rise and fall, no jump, matching stationsFor()'s own
+    // linearly-interpolated a/b down to the millimetre). Disabling only
+    // peroneals' touches and re-rendering the identical figure reproduced
+    // tibialisAnterior's own clean taper exactly; re-enabling it brought
+    // the staircase straight back. So the fault is neither anchor: it is
+    // src/50-field.js's radiusAlong(), which finds a ring's radius by
+    // marching out from the bone axis and bisecting at the FIRST crossing
+    // to outside (that file's own header, "THE FIRST CROSSING, NOT ANY
+    // CROSSING", documents exactly this failure mode for a detached
+    // shoulder belly). Two comparably-sized, independently-tapering limb
+    // bellies this close together — tibialisAnterior peaking around 70-80%
+    // down the tibia, peroneals a little further on — can make that march
+    // non-monotone along some rays: which one the ray reaches first
+    // depends on angle and height, so the reported radius hands off
+    // between them rather than blending, and the handoff is what draws as
+    // a corner. Never a problem with one such belly next to bone and
+    // tricepsSurae; this is the first time three comparably-sized limb
+    // bellies have overlapped in one small region, and it is a
+    // src/50-field.js fix, not a src/45-muscle.js one, so it is not this
+    // task's to make. The topology below is commented out rather than
+    // deleted, so a future radiusAlong() that blends rather than marches
+    // can re-enable it by uncommenting, unchanged:
+    //
+    // peroneals: {
+    //   match: /^per(long|brev)_r$/,
+    //   originBase: 'tibia_r', insertionBase: 'calcn_r',
+    //   arch: 'fusiform', primaryJoint: { key: 'ankle', bone: 'foot' },
+    //   touches: ['tibia', 'foot'],
+    // },
   };
   const BASE_TO_BONE = { pelvis: 'pelvis', femur_r: 'femur', tibia_r: 'tibia', calcn_r: 'foot' };
 
@@ -1127,11 +1158,11 @@
     brachialis: ['right brachialis'],
     tricepsBrachii: ['long head of right triceps brachii', 'lateral head of right triceps brachii', 'medial head of right triceps brachii'],
     tibialisAnterior: ['right tibialis anterior'],
-    // catalogue name is "fibularis", checked directly against
-    // data/bodyparts3d.json rather than assumed from the more common
-    // "peroneus" — same muscles, tertius left out (see LOWER_TOPOLOGY's
-    // own comment on peroneals, just above, for why)
-    peroneals: ['right fibularis longus', 'right fibularis brevis'],
+    // peroneals: attempted and reverted — see LOWER_TOPOLOGY's own comment
+    // on it, just above tibialisAnterior's table entry, for why. Not
+    // listed here for the same reason its GIRTH_SITE entry below is not:
+    // GROUP_NAMES never names it, so nothing tries to attach a volume to a
+    // group that no longer exists in the table.
     abdominal: ['right rectus abdominis', 'right external oblique', 'right internal oblique'],
     forearmMass: [
       'right brachioradialis', 'right extensor carpi radialis longus', 'right extensor carpi radialis brevis',
@@ -1182,7 +1213,6 @@
     brachialis: { girth: 'biceps', seg: 'humerus' }, // same site as biceps/triceps — brachialis sits under/distal to biceps on the same segment, no separate ANSUR site for it
     tricepsBrachii: { girth: 'biceps', seg: 'humerus' },
     tibialisAnterior: { girth: 'calf', seg: 'tibia' }, // same site as tricepsSurae — anterior/posterior share the one ANSUR calf circumference
-    peroneals: { girth: 'calf', seg: 'tibia' },
     abdominal: { girth: 'waist', seg: 'femur' },
     forearmMass: { girth: 'forearm', seg: 'forearm' },
   };
@@ -1244,7 +1274,7 @@
   //  NORMALIZED GROUP TABLE
   // =========================================================================
   const GROUP_NAMES = ['deltoid', 'pectoralis', 'latissimus', 'trapezius', 'abdominal',
-    'gluteal', 'quadriceps', 'hamstrings', 'adductors', 'tricepsSurae', 'tibialisAnterior', 'peroneals',
+    'gluteal', 'quadriceps', 'hamstrings', 'adductors', 'tricepsSurae', 'tibialisAnterior',
     'bicepsBrachii', 'brachialis', 'tricepsBrachii', 'forearmMass'];
 
   /**

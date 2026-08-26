@@ -227,13 +227,24 @@ for (const side of ['L', 'R']) {
   put('trunk', (P, f) => sdSegSE(P, Med, Acr, F,
     ts * 1.15, ts * 0.6, ts * 0.7, ts * 0.5, 2.3, ts * 0.55, f));
 
-  // infraspinatus: a broader, shallower pad below the spine, same run
-  const Mi = [Med[0] - 40, medY * 1.06, Med[2] - 4];
-  const Ai = [Acr[0] - 48, Acr[1] * 0.92, Acr[2] - 8];
+  // infraspinatus: a small fullness tucked under the spine's medial half,
+  // not a second bar reaching all the way to the acromion. It first went in
+  // as a shallow pad running the SAME full medial-to-acromion distance as
+  // the spine above it, and it broke chest girth on one seed in the wider
+  // sample — not by being big, its own anchors sit 50-75mm above chest
+  // height, but by being SHALLOW-ANGLED over that reach (28mm of drop
+  // across ~85mm sideways, the same ratio that coat-hangered the trapezius
+  // before this file's other fix), so past a fat threshold its cross-section
+  // reached straight down into the chest ring as one wide slab. Shortened to
+  // stop at the spine's midpoint instead of its acromial end, which keeps
+  // the same shallow angle but roughly halves the sideways reach and, with
+  // it, the width of any slab that angle can produce.
+  const Mi = [Med[0] - 34, medY * 1.08, Med[2] - 4];
+  const Ai = [lerp(Med[0], Acr[0], 0.55) - 34, lerp(medY, Acr[1], 0.55), lerp(Med[2], Acr[2], 0.55) - 6];
   const Fi = frameAlong(Mi, Ai, [1, 0, 0]);
-  const ti = m.interscyeii * 0.056;
+  const ti = m.interscyeii * 0.036;
   put('trunk', (P, f) => sdSegSE(P, Mi, Ai, Fi,
-    ti * 0.85, ti * 0.55, ti * 1.0, ti * 0.5, 2.2, ti * 0.4, f));
+    ti * 0.8, ti * 0.55, ti * 0.95, ti * 0.5, 2.2, ti * 0.45, f));
 }
 
 /* Erector spinae: two ropes flanking the spine from mid-thoracic down to

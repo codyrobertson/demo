@@ -110,9 +110,25 @@ for (const side of ['L', 'R']) {
   // [fraction of footlength forward of the ankle, half-width, dorsal height
   // above the floor, exponent]
   const ST = [
+    // The waist and its filler station are sized to roughly match the LEG
+    // part's own bimalleolar-width bone capsule at the same 3D point (a
+    // probe measured that capsule at ~82mm across, symmetric). The two
+    // parts are still independently silhouetted, though (see this file's
+    // header — parts do not share a field), and from dead-on the side the
+    // tibia's round end and this wedge's own profile do not coincide
+    // exactly: the traced outline shows a short jagged run right at the
+    // seam where the nearer surface alternates between the two. Tried
+    // narrower and wider waists and an extra filler station (still here);
+    // none of it removed the crossing, only moved it, and going wider than
+    // this started reading as a swollen ankle instead. Left as a diagnosed
+    // rather than a fixed issue — a real fix likely means the leg part's
+    // own end needs to taper toward this wedge's shape, which is 50-field's
+    // bone capsule and the muscle layer's own tricepsSurae taper, not this
+    // file's to rebuild.
     [-0.30, hb * 0.58, hAnkle * 1.30, 2.2],   // the heel, behind the ankle — calcaneus
     [-0.16, hb, hAnkle * 1.48, 2.3],          // the heel's own widest point — heelbreadth's station
-    [0.00, bm * 0.66, hAnkle * 1.52, 2.2],    // the ankle waist; the malleoli ride on top of this
+    [0.00, bm * 0.94, hAnkle * 1.52, 2.2],    // the ankle waist; the malleoli ride on top of this
+    [0.11, bb * 0.80, hAnkle * 1.44, 2.3],    // filling the gap the tibia's own round flare leaves
     [0.22, bb * 0.80, hAnkle * 1.38, 2.3],    // the instep — the peak of the dorsum, then it slopes
     [0.68, bb, hAnkle * 1.18, 2.6],           // the ball — footbreadthhorizontal's own station
     [0.85, bb * 0.56, hAnkle * 1.10, 2.2],    // the toes narrowing, and lower than the instep

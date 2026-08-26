@@ -120,12 +120,17 @@
        little soft tissue: 5 of 6 seeds failed girthcheck against 1
        before this file was touched. Keeping the two heights apart by
        more than the ear's own cap radius (cy*0.10, about a centimetre)
-       is the right idea and 0.10 * up (6-9mm of headroom) was not
-       enough of it in practice — 2 of 6 seeds still failed, because the
-       ear's axis is TILTED, so points off that axis project to t=1 from
-       farther away than a straight capsule's would. 0.05 * up (11-13mm
-       of headroom across the three test seeds) is what girthcheck
-       actually wants. */
+       is the right idea, and how far apart took three tries to find
+       empirically rather than by computing it, because the collision is
+       through a projection (sdSegSE's t = project(P, A, B) on the ear's
+       TILTED axis) rather than a plain distance: 0.16 * up (equal, the
+       original idea) failed 5 of 6 seeds; 0.10 * up (6-9mm of headroom)
+       still failed 2; 0.05 * up (11-13mm) cleared girthcheck but sits
+       at or below eyeH on some bodies, which is a brow below the eye it
+       sits over. 0.08 * up is the value that both passes girthcheck (1
+       of 6, matching the count before this file was touched — see
+       tools/girthcheck.js) and stays visibly above eyeH on all three
+       test seeds. */
     const browH = up * 0.08;
     const eyeH = (up - dn) * 0.5;                    // canon: mid vertex-to-chin
     const noseBaseH = (browH - dn) * 0.5;            // canon: halfway brow-to-chin
