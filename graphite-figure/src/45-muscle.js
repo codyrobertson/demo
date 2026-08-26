@@ -5,21 +5,26 @@
    (src/10-skeleton.js) and the isosurface fields that loft a shell over them
    (src/50-field.js). This is a PROXY system: the goal is the silhouette a
    figure drawing needs — a belly, a taper, a wrap over the joint it
-   crosses — not a fibre-accurate simulation. Twelve groups, not eighty-plus
-   muscles.
+   crosses — not a fibre-accurate simulation. Fifteen groups, not eighty-plus
+   muscles (twelve at this file's first pass; adductors, brachialis and
+   tibialisAnterior joined them later — see THE THREE NAMED GAPS below —
+   and a sixteenth, peroneals, was built, measured, checked and then taken
+   back out, which is also recorded there).
 
    WHAT IS MEASURED, FROM WHERE, AND WHAT IS NOT.
 
    ANCHORS (where a group starts and ends).
-     LOWER BODY (glutes, quadriceps, hamstrings, triceps surae): real
-     attachment sites out of the Rajagopal et al. (2016) model
-     (data/rajagopal.json, via src/00-osim.js) — origin/insertion centroids
-     from actual path points, a transverse spread from how those points
-     scatter, a wrap radius from the model's own WrapCylinder objects.
+     LOWER BODY (glutes, quadriceps, hamstrings, adductors, triceps surae,
+     tibialis anterior): real attachment sites out of the Rajagopal et al.
+     (2016) model (data/rajagopal.json, via src/00-osim.js) —
+     origin/insertion centroids from actual path points, a transverse
+     spread from how those points scatter, a wrap radius from the model's
+     own WrapCylinder objects.
      UPPER BODY except trapezius (deltoid, pectoralis, latissimus, biceps
-     brachii, triceps brachii, the forearm mass): real attachment sites out
-     of the Holzbaur/MoBL-ARMS model (data/mobl-arms.json, via
-     src/00-mobl-arms.js) — same technique, second independent source.
+     brachii, brachialis, triceps brachii, the forearm mass): real
+     attachment sites out of the Holzbaur/MoBL-ARMS model
+     (data/mobl-arms.json, via src/00-mobl-arms.js) — same technique,
+     second independent source.
      TRAPEZIUS: MoBL-ARMS has no trapezius, rhomboid or serratus anterior —
      its own header says so ("noTrapezius": scapular kinematics there are
      driven by a constraint, not a muscle). So trapezius alone is anchored
@@ -52,18 +57,22 @@
    The one thing bodyparts3d's own header admits is approximate is the
    volume itself (a closed-mesh assumption that is not always exactly true);
    this file does not pretend otherwise, and tools/musclefit.js's own
-   report says plainly where the result still falls short and why (mostly:
-   twelve named groups is not a limb's complete musculature — the adductor
-   compartment at the thigh above all).
+   report says plainly where the result still falls short and why (three of
+   its four named gaps — the adductor compartment, brachialis, tibialis
+   anterior — are narrower now than when it was written; see THE THREE
+   NAMED GAPS below for by how much, and tools/musclefit2.js for the check
+   that measured it. mid-forearm, its fourth site, is untouched by this
+   pass — no group here claims it).
 
    ARCHITECTURE. A fusiform belly, a multipennate cap and a broad convergent
    sheet do not distribute the same volume the same way along a sweep, so
-   each group is tagged (ARCH below): fusiform (biceps brachii, the
-   forearm mass), bipennate (quadriceps), multipennate (deltoid, triceps
-   brachii, triceps surae), convergent (pectoralis, latissimus, trapezius,
-   gluteal — broad origin narrowing to a point), strap (the abdominal mass,
-   hamstrings). The tag sets where the belly's plateau sits along the sweep
-   and how sharp the tendon taper at each end is; the taper's WIDTH is not
+   each group is tagged (ARCH below): fusiform (biceps brachii, brachialis,
+   the forearm mass), bipennate (quadriceps), multipennate (deltoid, triceps
+   brachii, triceps surae, tibialis anterior), convergent (pectoralis,
+   latissimus, trapezius, gluteal — broad origin narrowing to a point),
+   strap (the abdominal mass, hamstrings, adductors). The tag sets where the
+   belly's plateau sits along the sweep and how sharp the tendon taper at
+   each end is; the taper's WIDTH is not
    guessed either — both Rajagopal and MoBL-ARMS carry a tendon slack length
    and an optimal fibre length per muscle, and tendonFractionOf() below
    turns those into a real fraction of the muscle-tendon unit that is tendon.
@@ -78,6 +87,33 @@
    distance thickens the belly, radius ~ 1/sqrt(length), volume conserved to
    first order; wrap — the centreline is nudged off the bone's own axis by a
    radius read from a real WrapCylinder where the group has one.
+
+   THE THREE NAMED GAPS, AND THE ONE THAT STAYED A GAP.
+     This file's own header used to end its VOLUME section on "twelve named
+     groups is not a limb's complete musculature — the adductor compartment
+     at the thigh above all", quoting tools/musclefit.js's own report. Three
+     specific groups closed part of that: adductors (LOWER_TOPOLOGY, below
+     — magnus/longus/brevis, real Rajagopal anchors, pelvis to femur),
+     brachialis (UPPER_TOPOLOGY — real MoBL-ARMS anchors, humerus to ulna),
+     tibialisAnterior (LOWER_TOPOLOGY — real Rajagopal anchors, tibia to
+     calcn). Measured with tools/musclefit2.js (companion to musclefit.js,
+     same direct area-sum check, the three new groups added to the sites
+     they actually occupy): mid-thigh's own undershoot narrows about 14%
+     (adductors is real and substantial, but sartorius, gracilis and the
+     simplifications already documented in quadriceps'/hamstrings' own
+     comments are still missing — this was always going to be the
+     partial one), mid-biceps about 20%, max-calf about 19%. Checked
+     against tools/girthcheck.js too, over 12 bodies: thigh soft-tissue mm
+     dropped from 51.8 to 48.0 with adductors alone changing nothing else;
+     biceps and calf stayed EXACTLY unchanged (27.1mm, 16.7mm, to the
+     millimetre this file prints and to four decimals underneath it) —
+     not a bug, see brachialis's and tibialisAnterior's own comments below:
+     both groups' own real peak sits past the one specific height ANSUR's
+     protocol happens to measure at, so a real, visible, correctly-anchored
+     addition can leave that one number exactly alone. A fourth group,
+     peroneals, was built the same way, measured clean, and reverted after
+     rendering showed why — see LOWER_TOPOLOGY's own comment on it, right
+     after tibialisAnterior's table entry, for the full account.
 
    THE TWO PUBLIC ENTRY POINTS.
      GK.muscle.query(rig) — a sampled centreline with world-space elliptical

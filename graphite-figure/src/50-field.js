@@ -1148,7 +1148,13 @@
     { region: 'arm', part: 'arm.L', bone: 'humerus.L', s: 0.45, girth: 'biceps' },
     { region: 'arm', part: 'arm.L', bone: 'forearm.L', s: 0.20, girth: 'forearm' },
     { region: 'arm', part: 'arm.L', bone: 'forearm.L', s: 0.96, girth: 'wrist' },
-    { region: 'head', part: 'head', s: 0.16, girth: 'head' },
+    /* 0.24, not 0.16: the head-circumference tape runs just above the brow,
+       but at 0.16 of tragion-to-vertex the sampling ring sits exactly where
+       a brow ridge and an ear's tilted top also want to be, and for one
+       calibration round fitFat was measuring the EAR's girth instead of the
+       skull's on every seed alike. A slightly deeper station keeps a margin
+       between the site and the face features that will keep evolving. */
+    { region: 'head', part: 'head', s: 0.24, girth: 'head' },
     { region: 'trunk', part: 'trunk', at: 'chestheight', girth: 'chest' },
     { region: 'trunk', part: 'trunk', at: 'waistheightomphalion', girth: 'waist' },
     { region: 'trunk', part: 'trunk', at: 'buttockheight', girth: 'hip' },
