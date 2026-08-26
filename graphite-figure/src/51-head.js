@@ -262,10 +262,17 @@
     const parietalH = up * 0.50;             // EST: where the skull is at its true widest
     const zygoH = lerp(noseBaseH, eyeH, 0.40);  // EST: cheekbone height, below the orbit
     const jawH = lerp(chinH, mouthH, 0.50);     // EST: the angle of the jaw
-    // the ear's own canon span is browH to noseBaseH (see above), so its
-    // mid-height is the "ear height" the occiput's most-posterior ridge is
-    // specified against
-    const occiputH = (browH + noseBaseH) * 0.5;
+    /* NOT the ear's mid-height. Two constructions anchored the occipital
+       ridge at (browH+noseBaseH)/2 on the reasoning that the ear's centre
+       is "ear height" — and the profile curve, finally measured instead of
+       squinted at, put the skull's most-posterior point at 21mm BELOW the
+       tragion, with the whole rear above it retreating in one straight
+       diagonal. That diagonal was the hood's rear edge both times. The
+       inion sits on the BROW's horizontal — the Frankfurt-plane fact every
+       skull diagram shows — so the ridge anchors at browH, and everything
+       below it curves in toward the nape instead of everything above it
+       fleeing forward. */
+    const occiputH = browH;
 
     const U = fr[0], L = fr[1], F = fr[2];
     const Un = vmul(U, -1), Fn = vmul(F, -1);
@@ -351,14 +358,13 @@
        angle for the old 22 still meets the flat top at whatever angle
        it is given, and the review asked for "at least two more facets
        back there": a crown-to-occiput transition plane, and a rounder
-       upper-occiput tilt below it. Three steps averaging under 30
-       degrees apiece (90 to the transition's 58, 58 to the revised
-       upper-occiput's 34, 34 down toward the ridge) read as a curve for
-       the same reason the front of the face gets six planes from brow
-       to chin instead of one: each individual smax join is softer when
-       the planes either side of it are closer in angle, corner bulge
-       included, and the CUMULATIVE effect of several gentle joins is a
-       dome, not a wedge.
+       upper-occiput tilt below it. Three steps of roughly 32 degrees
+       apiece (90 to the transition's 58, 58 to the revised upper-
+       occiput's 26) read as a curve for the same reason the front of
+       the face gets six planes from brow to chin instead of one: each
+       individual smax join is softer when the planes either side of it
+       are closer in angle, corner bulge included, and the CUMULATIVE
+       effect of several gentle joins is a dome, not a wedge.
 
        PLACING occTransH/occTransZ is not free of the same trap the
        original single plane fell into, and it caught this rebuild once
@@ -399,10 +405,19 @@
        lower-occiput still share the one anchor, at ear height, exactly
        as the construction this replaces did — that instruction was
        already correct, and nothing about fixing the top touches it. */
-    const occTransH = lerp(occiputH, vertexH, 0.75);   // EST: see above
-    addPlane(occTransH, 0, -cz * 0.55, Fn, U, 58);      // crown-to-occiput transition
-    addPlane(occiputH, 0, -cz * 0.83, Fn, U, 26);       // upper occiput, rounder than before
-    addPlane(occiputH, 0, -cz * 0.83, Fn, Un, 16);      // lower occiput, unchanged
+    /* With the ridge raised to the brow line, the three rear tilts change
+       jobs: the upper occiput stays NEAR-VERTICAL (12 degrees) so the back
+       of the skull keeps its depth through the vault's middle half — the
+       measured curve used to lose 30mm of depth between the ear and
+       two-thirds height, which is the retreat that read as a wedge — and
+       the transition plane starts higher and turns harder, carrying the
+       curve into the crown in the last fifth. Below the ridge the nape
+       steepens to 22, since the hollow now has real overhang to tuck
+       under. EST throughout, against the measured profile curve. */
+    const occTransH = lerp(occiputH, vertexH, 0.82);
+    addPlane(occTransH, 0, -cz * 0.58, Fn, U, 50);      // crown-to-occiput transition
+    addPlane(occiputH, 0, -cz * 0.86, Fn, U, 12);       // upper occiput: stay deep
+    addPlane(occiputH, 0, -cz * 0.86, Fn, Un, 22);      // nape, tucking under the ridge
     // jaw underside, from under the chin back toward the throat: the
     // floor rises going backward, which both caps the chin's own bottom
     // (replacing the old stack's capBot()) and gives the underside its
@@ -680,11 +695,15 @@
        were sized against. */
     {
       const half = cy * 0.30;   // EST: mouth width, roughly under the nose alae
-      const A = vmad(vmad(sk.A, U, mouthH), F, cz * 0.90);
+      /* cz*0.82, walked in from 0.90: the measured profile put the lip
+         pillow at z=108 against the brow's own 101-108 — a muzzle as proud
+         as the forehead reads as a duckbill from the side. Ten millimetres
+         behind the brow plane is where a mouth sits. */
+      const A = vmad(vmad(sk.A, U, mouthH), F, cz * 0.82);
       const B = vmad(A, L, -half * 2);
       const Fr = [L, U, F];
       put('head', (P, f) => sdSegSE(P, vmad(A, L, half), B, Fr,
-        cy * 0.055, cy * 0.045, cy * 0.055, cy * 0.045, 2.4, cy * 0.03, f));
+        cy * 0.045, cy * 0.038, cy * 0.045, cy * 0.038, 2.4, cy * 0.03, f));
     }
 
     /* THE CHIN BOSS is also gone as a separate shape — merged into the
@@ -718,7 +737,7 @@
 
        THE STANDOFF IS NOW A FORMULA, not the flat cy*1.00 that mismatch
        left behind, for the identical reason the temple plane's ratio
-       is (see THE TEMPLE'S RATIO ISN'T A CONSTANT, in the paired loop
+       is (see THE TEMPLE'S RATIO IS NOT A CONSTANT, in the paired loop
        above): the ear is the single widest thing on the head on most
        bodies, so `head drawn W / measured W` is really an ear check
        wearing a head-shaped costume, and it inherits the same tension
@@ -726,10 +745,10 @@
        up near the 1.20 ceiling's OPPOSITE problem, `shoulders / drawn
        head W` and the H/W canon both crowding THEIR ceilings when the
        ear was pulled in enough for an elongated body (0.738) to clear
-       1.20. EAR_REF and EAR_K are solved the same way TEMPLE_K was —
-       against tools/proportions.js across eight bodies, not derived —
-       and share ROUND_REF and `roundness` rather than each computing
-       their own version of the same fact about the body. */
+       1.20. EAR_K is solved the same way TEMPLE_K was — against
+       tools/proportions.js across eight bodies, not derived — and
+       shares ROUND_REF and the same clamped `roundness` rather than
+       computing its own version of the same fact about the body. */
     const EAR_K = 1.2;   // EST, solved against tools/proportions.js — see above
     const earRatio = 0.99 - EAR_K * (ROUND_REF - roundness);
     {
