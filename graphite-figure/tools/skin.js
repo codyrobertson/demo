@@ -28,10 +28,11 @@ const ONLY = process.env.ONLY || null;
 // is the only way to answer "is this layer helping?" with a picture rather
 // than with an opinion.
 if (process.env.NOMUSCLE) delete G.muscle;
-// MUSCLE=1 puts the muscle layer back in charge of limb BULK. Off by
-// default — see the note on MUSCLE_BULK in src/50-field.js for the
-// measurements behind that.
-if (process.env.MUSCLE) G.field.useMuscleBulk(true);
+// NOBULK=1 takes the muscle layer back out of limb BULK, leaving the limbs
+// to bone-with-measured-epiphyses plus a solved thickness. That comparison
+// is how the chirality bug in the pelvis-anchored groups was found, so it
+// stays available.
+if (process.env.NOBULK) G.field.useMuscleBulk(false);
 
 const fig = G.figure.buildFigure(seed);
 const rig = G.skel.solve(fig, POSE);
@@ -252,7 +253,7 @@ console.log('seed ' + seed + '  stature ' + fig.stature.toFixed(0) + 'mm  ' +
   (HANDS.length ? ', ' + HANDS.length + ' hands at ' + handPx.toFixed(0) + 'px' +
     (fine ? '' : ' (outline only)') : ''));
 console.log('muscle layer: ' + (!G.muscle ? 'ABSENT' :
-  (process.env.MUSCLE ? 'loaded, driving limb bulk' : 'loaded, shaping only — MUSCLE=1 for bulk')));
+  (process.env.NOBULK ? 'loaded, shaping only (NOBULK=1)' : 'loaded, driving limb bulk')));
 console.log('soft tissue each region needed, to reach its measured girth:');
 for (const r of fit.report) {
   console.log('  ' + (r.region + ' @ ' + r.girth).padEnd(24) + r.t.toFixed(1).padStart(6) + 'mm   girth ' +

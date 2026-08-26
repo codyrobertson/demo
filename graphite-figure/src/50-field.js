@@ -800,24 +800,27 @@
      the skin is. */
   const NO_MUSCLE_BULK = [];
 
-  /* AND FOR NOW, NOT THE LIMBS EITHER — a judgement about the state of the
-     muscle module, not about the architecture.
+  /* THE LIMBS DO TAKE MUSCLE BULK, and briefly did not.
 
-     The layer is meant to give a limb its form, and in principle it does:
-     with it a leg has a thigh swell and a calf belly. In practice its
-     geometry still has holes and phantoms. The thigh's own outline currently
-     runs 218mm wide, 74mm, 180mm within a tenth of its length — a bite taken
-     out of it — because a belly reports itself 144mm from the femur where
-     its widest station there is 24mm, and because the quadriceps group
-     starts 182mm below the top of the femur it declares as its origin.
-     Measured against the alternative, bone-with-measured-epiphyses plus a
-     solved thickness gives a leg with a knee at 345mm and a calf at 396mm
-     and no holes at all; the muscle layer fills that knee back in.
+     This was switched off for a few hours because the thigh's own outline
+     ran 218mm wide, 74mm, 180mm within a tenth of its length — a bite taken
+     out of it — and a leg with a bite in it is worse than a leg with no
+     quadriceps. Two things were blamed at the time and neither was the
+     cause. The cause was chirality: the pelvis-anchored muscle groups, which
+     is to say exactly the gluteal and the hamstrings, had their local
+     vectors flipped for the left side twice and so landed back on the right.
+     gluteal.L ran from y = -83 to +124, starting on the wrong side of the
+     body and crossing the midline to reach its own femur, and the left
+     thigh's outline reached 216mm across its own axis to a point 143mm the
+     wrong side of the midline. Quadriceps and triceps surae were unaffected,
+     which is the tell: they anchor to the femur, already mirrored by the
+     skeleton, while the pelvis is a midline bone and is not.
 
-     So the default is the one that reads, and this is one line to flip back
-     the moment those two are fixed. MUSCLE=1 renders with it now, which is
-     how the comparison above was made and how it should be re-made. */
-  let MUSCLE_BULK = false;
+     Fixed at the source in 45-muscle.js. All four leg girths now solve and
+     the profile is smooth from hip to ankle. NOMUSCLE=1 still renders
+     without, which is how the trunk finding was made and how this one was
+     checked. */
+  let MUSCLE_BULK = true;
   function useMuscleBulk(v) { MUSCLE_BULK = !!v; return MUSCLE_BULK; }
 
   const KEEP = {

@@ -842,7 +842,19 @@
       const k = rb.len / femurRef;
       const scaled = vmul(anchor.localMm(rig, side), k);
       const hip = rig.figure.at.hip;
-      const hipInPelvis = [hip[0], hip[1] * (side === 'R' ? -1 : 1), hip[2]];
+      /* RIGHT-SIDE CONVENTION, and only once. Every local vector in this
+         file is expressed as Rajagopal expresses it — for the RIGHT limb —
+         and mirrorLocal() below is what turns it into a left one. This line
+         used to apply its own side sign as well, so the left leg got flipped
+         twice and landed back on the right: gluteal.L's station centres ran
+         from y = -83 to +124, starting on the wrong side of the body and
+         crossing the midline to reach their own femur. Measured on the
+         drawing, the left thigh's own outline reached 216mm across its axis
+         to a point 143mm the WRONG side of the midline.
+         quadriceps and triceps surae were unaffected and that is the tell:
+         they anchor to the femur, which the skeleton has already mirrored,
+         while the pelvis is a midline bone and has not. */
+      const hipInPelvis = [hip[0], -Math.abs(hip[1]), hip[2]];
       const local = mirrorLocal(vadd(hipInPelvis, scaled), side);
       return vadd(fb.A, M.mApply(fb.frame, local));
     }
@@ -1398,7 +1410,6 @@
     const cache = rig._muscleFieldCache || (rig._muscleFieldCache = {});
     let d = 1e9, any = false;
     for (const name in groups) {
-      if (process.env.MUSCLE_EXCLUDE && process.env.MUSCLE_EXCLUDE.split(',').indexOf(name) >= 0) continue; // TEMP diagnostic, remove before done
       const g = groups[name];
       if (g.touches.indexOf(base) < 0) continue;
       for (const s of (side ? [side] : ['L', 'R'])) {
