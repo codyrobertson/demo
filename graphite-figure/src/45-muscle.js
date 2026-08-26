@@ -479,7 +479,17 @@
       // onto the clavicle so both land in one cluster
       originBase: 'clavicle', insertionBase: 'humerus',
       arch: 'multipennate', primaryJoint: { key: 'ghAbd', bone: 'humerus' },
-      touches: ['trunk', 'humerus'],
+      // 'trunk' deliberately absent, for the same reason pectoralis' and
+      // latissimus' own comment gives, plus one this project's own
+      // rendered test and its own fitFat() found independently: deltoid
+      // is anatomically defensible in both scopes (it does originate off
+      // the trunk-side skeleton), but for a DRAWING it reads as the
+      // shoulder's roundness ON THE ARM, and having the trunk ring root-
+      // find past a belly sitting out at the shoulder is what a chest
+      // measurement jumping to the far side of the shoulder turned out to
+      // be. Scoped to 'humerus' only — the visible loss is a slightly
+      // squarer trunk/shoulder join than a real deltoid gives it.
+      touches: ['humerus'],
     },
     pectoralis: {
       match: /^PECM[123]$/,
