@@ -38,7 +38,11 @@ const S = parseInt(a[4] || '900');
    the rest pose is still every angle at zero, which is what checkfit.js
    measures the chain against. Any POSE= key overrides it, `{"hipAbd":0}`
    included. */
-const STANCE = { hipAbd: 0.05 };
+/* Elbows very slightly bent and the arms fractionally out, because nobody
+   stands with locked elbows and arms glued to their seams — and because dead
+   straight, the hands hang exactly in the thighs' plane and bury themselves
+   in them from every camera. */
+const STANCE = { hipAbd: 0.05, ghAbd: 0.09, elbow: 0.22 };
 const POSE = Object.assign({}, STANCE, process.env.POSE ? JSON.parse(process.env.POSE) : {});
 const ONLY = process.env.ONLY || null;
 // NOMUSCLE=1 draws the same figure with the muscle layer switched off, which

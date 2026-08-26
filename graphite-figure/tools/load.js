@@ -45,6 +45,9 @@ const FIGURE = [
   '40-surface',       // superelliptic sections, still the section solver
   '45-muscle',        // the muscle layer, when it exists
   '50-field',         // the layered field and the skin over it
+  '51-head',          // the head's volumes
+  '52-torso',         // the trunk's surface anatomy
+  '53-limbs',         // joint forms and extremities
   '60-draw',          // the inside of the outline: tone and landmark creases
 ];
 
