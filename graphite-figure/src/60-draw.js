@@ -461,17 +461,32 @@
    * wide out of twenty-plus, it cannot move the MIDDLE-ranked value enough
    * to hide itself from a test built on that value.
    *
-   * Returns [{beta, peak}] — peak in radians, one entry per separate
-   * over-threshold run found around the ring (a jaw can show two corners
-   * on the one station), ordered by angular position.
+   * Returns [{beta, peak, sign}] — peak in radians, sign the run's own
+   * POLARITY (see the comment on `sweep` below — this is what lets
+   * chainBreaks() tell two DIFFERENT edges a few degrees apart from one
+   * continuous one), one entry per separate over-threshold run found around
+   * the ring (a jaw can show two corners on the one station), ordered by
+   * angular position.
    */
   function ringBreaks(row, nrmRow) {
     if (!row || !nrmRow) return [];
     const NA = nrmRow.length;
     if (NA < 8) return [];
     const edge = new Float64Array(NA);
+    // cx[k] is the same step from nrmRow[k] to nrmRow[k+1] edge[k] already
+    // reduces to a magnitude (via acos) — kept here as the full rotation
+    // vector too, and summed into `sweep`, because a MAGNITUDE is not
+    // enough to tell two DIFFERENT edges apart when they sit within
+    // BREAK_STEP of each other; see the POLARITY comment below for why that
+    // turned out to matter and not just be a theoretical worry.
+    const cx = new Array(NA);
+    const sweep = [0, 0, 0];
     for (let k = 0; k < NA; k++) {
-      edge[k] = Math.acos(clamp(vdot(nrmRow[k], nrmRow[(k + 1) % NA]), -1, 1));
+      const a = nrmRow[k], b = nrmRow[(k + 1) % NA];
+      edge[k] = Math.acos(clamp(vdot(a, b), -1, 1));
+      const c = vcross(a, b);
+      cx[k] = c;
+      sweep[0] += c[0]; sweep[1] += c[1]; sweep[2] += c[2];
     }
     const median = edge.slice().sort()[Math.floor(NA / 2)];
     const relFloor = RING_REL_MULT * median;
@@ -520,7 +535,48 @@
       let peak = 0;
       for (let j = k0; j <= k1; j++) peak = Math.max(peak, val(j));
       const kf = (k0f + k1f) * 0.5 + 0.5;   // edge-index run centre -> sample-grid position
-      out.push({ beta: (kf / NA) * Math.PI * 2, peak });
+
+      /* POLARITY — found by instrumenting exactly this function against the
+         ear, where a hand-authored crease (earHelix) sits over a real
+         geometric one: the ear is a capsule smoothed onto the skull, so a
+         ring through it crosses the blend TWICE, once entering the ear's
+         footprint and once leaving it, and on the render these two
+         crossings came out as one continuous chain doing a dense zigzag
+         instead of two clean lines either side of the ear. Printed
+         side-by-side (this feature's probe script), the two crossings sat
+         as little as ~15-20 degrees apart at some stations — inside
+         BREAK_STEP — and at exactly the stations where one of them faded
+         under threshold for a ring or two, chainBreaks' nearest-in-angle
+         match had nothing else to prefer and jumped onto the other one,
+         which is what a sawtooth IS: the same chain alternating between two
+         different edges because distance-in-beta was the only thing being
+         asked.
+
+         A magnitude (edge[], peak) cannot tell these two crossings apart —
+         both are real, both are sharp. What DOES separate them is which way
+         the normal is turning: walking a ring, the normal sweeps through
+         very close to a full turn (it has to, having started and ended
+         facing the same way), and `sweep` above is that ring's own net
+         rotation axis, summed from every step rather than measured once so
+         one noisy sample cannot swing it. Entering a protrusion the normal
+         swings the SAME way as that ambient sweep — a ridge is the surface
+         turning faster than its surroundings, not against them — and
+         leaving it the normal has to swing back, against the sweep, to
+         rejoin the skull's own turning. Front-of-ear and back-of-ear are
+         therefore opposite in sign by construction, not by anything
+         particular to an ear: verified against the probe's own numbers,
+         where the two crossings held a stable, opposite sign across every
+         station either one existed at, including the stations where their
+         BETA values alone came within eleven degrees of each other.
+
+         Summed across the whole run rather than read off one sample, same
+         reasoning as peak just above: a run a few samples wide should not
+         have its polarity decided by whichever one of them is noisiest. */
+      let turn = 0;
+      for (let j = k0; j <= k1; j++) turn += vdot(cx[((j % NA) + NA) % NA], sweep);
+      const sign = turn < 0 ? -1 : 1;
+
+      out.push({ beta: (kf / NA) * Math.PI * 2, peak, sign });
     }
     return out;
   }
@@ -544,6 +600,20 @@
    * within range is sorted by distance and claimed in that order, so two
    * chains converging toward the same seam cannot both claim the one ring
    * sample nearest it.
+   *
+   * SAME POLARITY ONLY. A chain also carries the `sign` its first candidate
+   * was built with (ringBreaks() — see that function's own POLARITY
+   * comment) and will only extend onto a same-sign candidate; an
+   * opposite-sign one is not even offered a distance, however close in
+   * beta. This is the ear-sawtooth fix: front-of-ear and back-of-ear are
+   * two genuinely different edges that happen to run near each other in
+   * angle, opposite in sign by construction, and without this a station
+   * where the chain's own edge faded out for a ring would hand the nearest-
+   * in-angle match to the OTHER edge instead, because distance was the only
+   * thing being asked. Refusing that match does not bridge the gap — same
+   * as running out of BREAK_STEP, the chain simply ends there, which is
+   * exactly what should happen to two different edges rather than either
+   * one bending to reach the other.
    */
   function chainBreaks(cands, NS) {
     let active = [];
@@ -553,6 +623,7 @@
       const pairs = [];
       for (let a = 0; a < active.length; a++) {
         for (let c = 0; c < list.length; c++) {
+          if (active[a].sign !== list[c].sign) continue;
           const d = betaDist(active[a].lastBeta, list[c].beta);
           if (d <= BREAK_STEP) pairs.push([d, a, c]);
         }
@@ -572,7 +643,9 @@
       }
       active = stillActive;
       for (let c = 0; c < list.length; c++) {
-        if (!usedC.has(c)) active.push({ pts: [{ i, beta: list[c].beta, peak: list[c].peak }], lastBeta: list[c].beta });
+        if (!usedC.has(c)) {
+          active.push({ pts: [{ i, beta: list[c].beta, peak: list[c].peak }], lastBeta: list[c].beta, sign: list[c].sign });
+        }
       }
     }
     for (const a of active) chains.push(a);
@@ -1563,5 +1636,11 @@
     lamp, normals, bandAt, modelling, planeBreaks, landmarks, onSurface, LANDMARKS, HZ,
     resolveStation, nativeFrac, nearestOnRows, projectBone,
     partExtentMm, partPxOf, visibleAt,
+    // the two stages inside planeBreaks(), exposed the same way its other
+    // internals already are (resolveStation, nearestOnRows, ...) — this is
+    // what let the ear-zigzag bug get instrumented directly, ring candidates
+    // in and chained beta sequence out, instead of only ever seeing the
+    // already-densified world-space polyline planeBreaks() itself returns.
+    ringBreaks, chainBreaks,
   };
 })(window.GK = window.GK || {});
