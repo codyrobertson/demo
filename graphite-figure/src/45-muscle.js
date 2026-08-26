@@ -1251,6 +1251,21 @@
 
     const oAxes = anchorAxes(rig, side, group.origin);
     const iAxes = anchorAxes(rig, side, group.insertion);
+    // A width/depth AXIS, not a signed vector: sdSegE reads it only through
+    // vdot(...) inside a hypot() (see uu/vv there), so flipping either one's
+    // sign changes nothing about the ellipse it describes. Lerping between
+    // two independently-built bone frames is not sign-free, though —
+    // vlerp(oAxes.width, iAxes.width, t) passes through the zero vector at
+    // whatever t the two nearly cancel, and vnorm of a near-zero vector is
+    // noise, not a direction. A group whose ends sit on bones far apart in
+    // the tree (hamstrings: pelvis -> tibia, crossing both hip and knee)
+    // hits this for real, not just in theory — it read as a station's width
+    // snapping to an unrelated direction mid-sweep, i.e. a belly flaring out
+    // to the side where nothing anchors it. Re-picking iAxes' hemisphere to
+    // match oAxes' first removes the crossing without touching either end's
+    // own cross-section.
+    if (vdot(oAxes.width, iAxes.width) < 0) iAxes.width = vmul(iAxes.width, -1);
+    if (vdot(oAxes.depth, iAxes.depth) < 0) iAxes.depth = vmul(iAxes.depth, -1);
 
     const stretch = currentStretch(rig, side, group);
     // sqrt(1/stretch): shorten -> thicken, lengthen -> thin, conserving
