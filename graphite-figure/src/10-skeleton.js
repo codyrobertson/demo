@@ -185,18 +185,72 @@
   //                        upper end of the range overshot T1 past vertical
   //                        and into a forward lean by the time it reached
   //                        the shoulders.
-  //    cervical lordosis  ~20-40. EST, and honestly higher than the C2-C7
-  //                        Cobb literature specifically usually reports
-  //                        (commonly ~10-18 by that one method) — taken
-  //                        near the top of the wider range this file was
-  //                        given, partly because this is the term that has
-  //                        to close the loop: with the figures above, T1
-  //                        sits a few degrees short of vertical, and the
-  //                        cervical curve is what carries the head the rest
-  //                        of the way back over the trunk — which is also
-  //                        just true of a real neck, forward-head posture
-  //                        and all. 26 taken; the skull's own aimTo (below)
-  //                        absorbs whatever this doesn't close exactly.
+  //    cervical lordosis  ~20-40 by the wide general figure, ~10-18 by the
+  //                        stricter C2-C7 Cobb method. First pass took 26,
+  //                        near the top of the wide range, reasoning that
+  //                        this is the term that has to close the loop:
+  //                        T1 (below) sits 20 degrees forward of vertical
+  //                        (PELVIC_TILT + LUMBAR_LORDOSIS + THORACIC_KYPHOSIS,
+  //                        summed), so cervical has to spend it back down
+  //                        before the head is over the trunk, not out in
+  //                        front of it — and 26 sounded closer to enough
+  //                        than the bottom of the range did. That reasoning
+  //                        was never checked against a landmark, and
+  //                        posture — the CARRIAGE posts below exist for —
+  //                        is exactly the wrong place to skip that check.
+  //
+  //                        Checked: solve() at rest, per seed, and compare
+  //                        tragion (rig.bones.skull.A — where the neck's
+  //                        own chain ends) against the acromion
+  //                        (rig.bones['clavicle.L'].B, pinned exact by its
+  //                        own aimTo). A little ear-ahead-of-shoulder is
+  //                        normal in a good standing side view; a lot, or
+  //                        ear BEHIND shoulder, is not — 0 to 25mm ahead
+  //                        taken as the band. At 26 degrees, 60 seeds:
+  //                        mean -8.9mm — BEHIND the acromion, not ahead of
+  //                        it — worst seed -34mm, and only +12.9mm at the
+  //                        best. Wrong direction entirely, and the reason
+  //                        is the thing "close the loop" reasoning missed:
+  //                        T1's own 20 degrees is not the whole hole to
+  //                        climb out of. THORACIC_KYPHOSIS leaves the chain
+  //                        some 45mm deep in Z by T7 — the FULL kyphotic
+  //                        trough, not just T1's exit angle from it — and
+  //                        the cervical segments are too short to climb
+  //                        back out of a trough that deep by tilting
+  //                        harder. Past a fairly small angle, every extra
+  //                        degree of "closing" instead walks the chain
+  //                        PAST vertical, which moves the tragion BACKWARD,
+  //                        not forward — the sign-is-a-curvature rule two
+  //                        paragraphs up, working exactly as documented,
+  //                        just past the point this file meant to stop.
+  //                        Swept against the same measurement instead of
+  //                        reasoned about: closing exactly what
+  //                        THORACIC_KYPHOSIS opened — 20 degrees, no more —
+  //                        lands C1 at vertical and the tragion within
+  //                        1.4mm of the acromion ON AVERAGE across the same
+  //                        60 seeds — essentially ear-over-shoulder. A hair
+  //                        on the posterior side of the 0-25mm band rather
+  //                        than inside it, but nowhere near the miss 26
+  //                        degrees was: BEHIND the acromion on average and
+  //                        only +12.9mm ahead at its very best. Worst seeds
+  //                        -27mm/+21mm now, spread that is body size (a taller
+  //                        person's cervical segments swing further for
+  //                        the same angle) rather than bias, which a
+  //                        RANGE-checked proportion (tools/proportions.js)
+  //                        is the right way to leave rather than chasing
+  //                        with a bigger table. Tighter magnitudes were
+  //                        swept too, back into the stricter Cobb range
+  //                        cited above — 12 degrees pulls the mean a
+  //                        further 10mm anterior, comfortably inside the
+  //                        band — but were not kept: every degree spent
+  //                        here also turns the skull's own aimTo direction
+  //                        (below), which plenty downstream of this file
+  //                        reads, and closing exactly what THORACIC_KYPHOSIS
+  //                        put in is the smallest change this pass can
+  //                        justify on the tree's own numbers alone rather
+  //                        than on a further-tuned fit. 20 taken. The
+  //                        skull's own aimTo still absorbs whatever this
+  //                        doesn't close exactly.
   //  DISTRIBUTION within a region (xSHARE below — fraction of the regional
   //  total each level carries, same bottom-to-top order the loops below
   //  walk in, each array summing to 1). LUMBAR_SHARE's first two entries are
@@ -212,7 +266,7 @@
   const PELVIC_TILT = 28 * M.DEG;
   const LUMBAR_LORDOSIS = -48 * M.DEG;                              // spends the pelvic lean, and overshoots it
   const THORACIC_KYPHOSIS = 40 * M.DEG;                             // spends the overshoot, the other way
-  const CERVICAL_LORDOSIS = -26 * M.DEG;                            // and spends THAT, back the first way again
+  const CERVICAL_LORDOSIS = -20 * M.DEG;                            // spends exactly THAT — see cervical lordosis above
   const LUMBAR_SHARE = [0.427, 0.252, 0.130, 0.100, 0.091];         // L5 .. L1, measured low two + EST taper
   const THORACIC_SHARE = new Array(THORACIC).fill(1 / THORACIC);    // T12 .. T1, EST uniform
   const CERVICAL_SHARE = [0.22, 0.19, 0.16, 0.14, 0.12, 0.10, 0.07]; // C7 .. C1, EST taper
@@ -272,7 +326,6 @@
       });
       prev = id;
     }
-    const T1 = prev;
     for (let i = 0; i < CERVICAL; i++) {
       const id = 'C' + (CERVICAL - i);               // C7 .. C1
       const d = CERVICAL_LORDOSIS * CERVICAL_SHARE[i];
@@ -290,15 +343,28 @@
     add({ id: 'skull', parent: prev, aimTo: 'vertex', len: 'skull', dof: {} });
 
     // ---- shoulder girdle and arm ----------------------------------------
-    // The clavicle leaves the spine at T1, forward and to the side; the
-    // scapula rides on the ribcage at its far end; the humerus hangs from
-    // the scapula, not from the trunk. Skipping the girdle and hanging an
-    // arm off the chest is the single most common way a figure comes out
-    // wrong: the shoulder cannot then rise, and a raised arm tears away
-    // from the body instead of carrying the shoulder with it.
+    // The clavicle leaves the spine at the C7/T1 junction, forward and to
+    // the side; the scapula rides on the ribcage at its far end; the
+    // humerus hangs from the scapula, not from the trunk. Skipping the
+    // girdle and hanging an arm off the chest is the single most common
+    // way a figure comes out wrong: the shoulder cannot then rise, and a
+    // raised arm tears away from the body instead of carrying the
+    // shoulder with it.
+    //
+    // Parent is C7, not T1, and it matters which: atKey offsets apply from
+    // the PARENT's own ORIGIN (solve() below — `p.A`, not `p.B`), and
+    // `fig.at.sc` (20-build.js) is built as a delta from m.cervicaleheight,
+    // which 00-anthro.js's segments() stacks the thoracic column UP TO —
+    // that is, it is C7.A (equivalently T1.B, the same point) the offset
+    // is measured from, not T1.A a whole thoracic segment below it. Parented
+    // at T1 first, the clavicle's origin came out a segment low and, once
+    // THE STANDING CURVE gave T1 its own anterior tilt, rotated by the
+    // wrong bone's frame on top of that — the clavicle stretching to reach
+    // its aimTo acromion (below) rather than reaching it at its measured
+    // length. See 20-build.js for the rest of that fix.
     add({
       // out along the shoulder, a little up and a little back
-      id: 'clavicle', parent: T1, atKey: 'sc', aimTo: 'acromion',
+      id: 'clavicle', parent: 'C7', atKey: 'sc', aimTo: 'acromion',
       len: 'clavicle', side: true, lat: 1,
       dof: { flex: 'clavElev', abd: 'clavProt', twist: null },
     });

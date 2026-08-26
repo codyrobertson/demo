@@ -125,9 +125,78 @@
 
     // Offsets are differences between two measured heights on the same
     // person, not fractions of stature. The root sits at the sacral base.
+    //
+    // `sc`'s two components — a height (suprasternale below cervicale) and
+    // a depth (chest-depth-derived, in Lm.suprasternale's own Z) — are
+    // WORLD-frame deltas from the C7/T1 junction: m.cervicaleheight is what
+    // 00-anthro.js's segments() stacks the thoracic column up TO, so the
+    // delta is measured from that junction, not from T1's own origin a
+    // segment below it — which is exactly why the clavicle is parented at
+    // C7 now rather than T1 (10-skeleton.js): atKey applies its offset
+    // from the PARENT's own ORIGIN (solve() — `p.A`, not `p.B`), and C7.A
+    // IS the C7/T1 junction where T1.A was a whole thoracic segment short
+    // of it.
+    //
+    // That alone was one bug, and it predates THE STANDING CURVE — a
+    // straight spine would have been off by one segment's worth of height
+    // and never shown it, because nothing downstream checked the
+    // clavicle's own length. THE STANDING CURVE added a second, worse one
+    // on top: atKey's offset is applied in the PARENT's own FRAME, which
+    // used to be fine because every vertebra's frame WAS the world frame —
+    // no longer true once C7 carries its own share of cervical tilt. The
+    // same [dHeight, 0, dDepth] handed through a tilted frame no longer
+    // lands at the world-frame position it was measured as; it inherits
+    // the parent's lean on top of it. Both together stretched the
+    // clavicle, whose OTHER end is pinned exact to the survey's acromion
+    // by its own aimTo, to close the gap — 189mm solved against a 156.8mm
+    // measured length at seed 12345, 21.7% over on average across 60
+    // seeds, entirely from the origin sitting in the wrong place; the
+    // length itself was never wrong.
+    //
+    // Fixed the parent (10-skeleton.js) for the first bug; this rotates
+    // the WORLD-frame delta BACKWARD by the parent's own tilt for the
+    // second, so the rotation solve() is about to apply cancels back out
+    // and the sternoclavicular joint lands at the same world-frame spot
+    // regardless of how much curve its parent happens to be carrying. The
+    // tilt is a fixed property of the tree (THE STANDING CURVE), not of
+    // any one figure, so it is read once here rather than re-derived.
+    const scParent = GK.skel.BY_ID.C7;
+    const scTilt = (scParent && scParent.tilt) || 0;
+    const ct = Math.cos(scTilt), st = Math.sin(scTilt);
+    const scUp = Lm.suprasternale[0] - m.cervicaleheight;   // world height delta, C7/T1 junction -> SC joint
+    const scFwd = Lm.suprasternale[2];                      // world anterior delta
+    // Both bugs fixed and the clavicle STILL solved 16%+ over length — a
+    // third thing, and a curve-independent one: `at.sc`'s lateral (Y)
+    // component was a flat 0, i.e. the sternoclavicular joint sits exactly
+    // on the midline, while aimTo:'acromion' (above) pins the clavicle's
+    // OTHER end at the FULL half-biacromial-breadth. A straight line
+    // between a point on the midline and a point half-biacromial-breadth
+    // off it is at minimum that half-breadth long, by Pythagoras, before
+    // the height or depth components add anything at all — and
+    // s.clavicle (00-anthro.js) is 0.86 of that same half-breadth. 0.86
+    // of a distance is always less than the distance, so the clavicle
+    // was being asked to come in UNDER a floor its own two endpoints set:
+    // no anterior offset, no height offset, no curve fix of any kind can
+    // reach it while the origin sits on the midline. This is exactly the
+    // gap 00-anthro.js's own comment on s.clavicle names and half-solves
+    // — "acromial end inboard of the acromion" softens the ACROMIAL end,
+    // but aimTo still closes on the acromion exactly (rightly: checkfit's
+    // acromion-height check needs it to), leaving nothing to soften the
+    // STERNAL end. SC_INBOARD gives the origin back the width the real
+    // sternum has — the two sternoclavicular joints sit either side of
+    // the manubrium, not stacked on top of each other — pulling the
+    // origin off the midline by a fraction of biacromial breadth. Swept
+    // against the same measurement as the other two fixes: 0.10 lands
+    // clavicle.L.len at fig.len.clavicle's own ±5% band for nearly all of
+    // 60 seeds (mean +1.4%, worst +7.3%/-3.3%); much below it and the old
+    // floor reappears, much above it and the joint sits implausibly far
+    // off the sternum. EST — no ANSUR column measures manubrium width —
+    // and the roomiest of the three fixes, because it is doing double
+    // duty for a second uncorrected inset (see above) as well as its own.
+    const SC_INBOARD = 0.10;
     const at = {
       hip: [Lm.hip[0] - rootH, Lm.hip[1], 0],
-      sc: [Lm.suprasternale[0] - m.cervicaleheight, 0, Lm.suprasternale[2]],
+      sc: [scUp * ct + scFwd * st, SC_INBOARD * m.biacromialbreadth, scFwd * ct - scUp * st],
     };
 
     const fig = {
