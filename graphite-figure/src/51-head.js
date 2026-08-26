@@ -253,8 +253,31 @@
        calibration sample's own range, a term tuned to correct eight
        bodies can overcorrect a ninth harder than the flat number it
        replaced ever did. */
-    const MARGIN_BASE = 0.027, MARGIN_K = 0.0016;   // EST, solved against tools/proportions.js
-    const breadthForMargin = Math.max(138, Math.min(163, m.headbreadth));
+
+    /* RE-FIT A THIRD TIME, once restoring the rear planes' depth (see
+       THE TRAP, A THIRD TIME, by the occiput planes below) gave solved
+       `f` back most of its old range. MARGIN_BASE and MARGIN_K were both
+       fit against a fitFat regime that no longer exists once cz*0.78 down
+       there puts head `f` back near 6-9mm instead of the 3-7mm the
+       regression this pass fixes left behind — and a MARGIN_FRAC sized
+       for a thin f overshoots vertexH once a healthy f is added on top of
+       it. `vertex overshoot mm` (drawn crown past measured stature) is
+       the check that catches it, and it caught the two widest-headbreadth
+       bodies in the sample first — seed 1 (160.1) and seed 4 (162.5),
+       both close enough to the OLD upper clamp of 163 that MARGIN_K's own
+       headbreadth term was, by construction, handing them MORE margin
+       than an average body: exactly backwards from what a body already
+       close to overshooting its own stature needs once f is no longer
+       anaemic. MARGIN_BASE raised 0.027 to 0.0285 to keep `head drawn H /
+       measured H`'s own floor clear now that less of its margin is
+       coming from a thin f; the UPPER breadth clamp tightened 163 to 155
+       so the widest bodies stop drawing extra margin they no longer need
+       — the LOWER clamp (138) is untouched, since the narrow-body H/W fix
+       above still depends on it. Solved against tools/proportions.js
+       across the same eight bodies, same discipline as everything else
+       re-fit this pass. */
+    const MARGIN_BASE = 0.0285, MARGIN_K = 0.0016;   // EST, solved against tools/proportions.js
+    const breadthForMargin = Math.max(138, Math.min(155, m.headbreadth));
     const MARGIN_FRAC = MARGIN_BASE - MARGIN_K * (150 - breadthForMargin);
     const TOP_MARGIN = -MARGIN_FRAC * measH, BOT_MARGIN = -MARGIN_FRAC * measH;
     const vertexH = up - TOP_MARGIN;
@@ -416,8 +439,72 @@
        under. EST throughout, against the measured profile curve. */
     const occTransH = lerp(occiputH, vertexH, 0.82);
     addPlane(occTransH, 0, -cz * 0.58, Fn, U, 50);      // crown-to-occiput transition
-    addPlane(occiputH, 0, -cz * 0.86, Fn, U, 12);       // upper occiput: stay deep
-    addPlane(occiputH, 0, -cz * 0.86, Fn, Un, 22);      // nape, tucking under the ridge
+    addPlane(occiputH, 0, -cz * 0.78, Fn, U, 12);       // upper occiput: stay deep
+    addPlane(occiputH, 0, -cz * 0.78, Fn, Un, 22);      // nape, tucking under the ridge
+
+    /* THE TRAP, A THIRD TIME — SUSPECTED, THEN RULED OUT BY ITS OWN
+       ALGEBRA, WHICH IS WHAT LEFT ROOM TO FIND THE REAL CAUSE.
+       The profile pass above regressed two of the eight proportion-gate
+       bodies (crown width, drawn H/W, drawn H — see tools/proportions.js)
+       and the suspect was this file's own documented failure a third
+       time: a rear plane's F=0 crossing (U = h0 + |z0|/tan(deg), the
+       identity this file already derived twice above) landing below a
+       body's vertexH, overruling the crown cap. Redone for THIS plane set
+       against all eight sampled bodies, including the roundest (seed 2:
+       headbreadth 161.5, headlength 197.7) and the most elongated (seed
+       3: 134.3, 182.0) — it does not hold: crossTrans = occTransH +
+       cz*0.58/tan(50) sits 21-26mm ABOVE vertexH on every one of the
+       eight, and crossUpper, the near-vertical 12-degree plane, sits
+       230-275mm above it — nowhere near overruling anything. The
+       suspicion was reasonable, it is the same SHAPE of bug on record
+       twice already, but the numbers said no, and chasing the wrong
+       mechanism would have meant re-shortening a profile that
+       tools/profcurve.js had just finished getting right.
+
+       THE REAL MECHANISM is one level removed: not the crown cap, the
+       GIRTH SITE. SITES samples head circumference at s=0.24 of
+       tragion-to-vertex (50-field.js), which lands 19-22mm above
+       occiputH on these eight bodies — close enough to the near-vertical
+       upper-occiput's own anchor that its BARE (unscalped) reach there
+       barely falls off before the anchor's own maximum depth. Measured
+       directly (fat forced to 0, ringAt at s=0.24, all eight bodies): the
+       bare perimeter at that one station grew 44-51mm, UNIFORMLY across
+       every body, the moment occiputH rose to browH and upper-occiput
+       went near-vertical — a real and correct consequence of giving the
+       vault its depth back, not a bug in it. But fitFat solves ONE
+       thickness per body from THAT one station against the body's
+       measured head girth, and applies it to every plane in this file
+       alike; a bare shape that already reaches most of the way to its
+       target circumference gets told to add almost nothing on top.
+       Solved `f` (tools/girthcheck.js) collapsed from a 9.8mm mean
+       (6.1-12.5mm range, healthy) to a 3.8mm mean (0.6-6.7mm, one body
+       nearly bald) — and because that thinner scalp grows EVERY facet in
+       this file by less, not only the rear ones, the crown band measured
+       narrow on all eight sampled bodies (`head crown W / measured W`,
+       0.907-0.980 against a 0.98 floor) though not one of the planes that
+       actually draws the crown had changed. The rear planes did not eat
+       the crown's own width; they starved the shared scalp budget
+       everything else in this file was still depending on.
+
+       THE FIX matches the mechanism it actually is: cz*0.86 pulled to
+       cz*0.78 on both the upper-occiput and nape anchors — DEPTH only,
+       not the 12/22-degree tilts and not occiputH's own height, so
+       tools/profcurve.js's two numbers (posterior ridge, crown apex —
+       both governed by HEIGHT and by occiputH, neither of which this
+       touches) come out identical before and after on all three probed
+       seeds. Solved empirically against tools/proportions.js across the
+       same eight bodies, same as every other constant in this file:
+       cz*0.78 is not a re-derivation of the crossing algebra above (that
+       algebra never predicted a problem here, so it cannot size a fix for
+       one) — it is the depth that puts solved `f` back in a healthy band
+       (6.3mm mean, 2.9-8.8mm range on the eight gate bodies) without
+       giving back so much of the vault's own depth that the wedge this
+       file's whole profile pass was written to close starts reopening.
+       The per-body terms downstream of `f` — the temple base and the ear
+       standoff base, both below — needed re-fitting to the same restored
+       budget for the identical reason; the crownW floor and the H/W
+       ceiling only cleared once temple and ear stopped assuming a scalp
+       this thick. */
     // jaw underside, from under the chin back toward the throat: the
     // floor rises going backward, which both caps the chin's own bottom
     // (replacing the old stack's capBot()) and gives the underside its
@@ -469,9 +556,24 @@
        ever put them — an overcorrection worse than the problem, from
        trusting one straight line further than the eight points that
        fitted it. */
+
+    /* THE BASE ALSO MOVED, 1.06 to 1.14, in the SAME pass that pulled the
+       rear planes' depth back in (see THE TRAP, A THIRD TIME, above) — a
+       second, independent draw on the same shared scalp budget fitFat's
+       collapse had thinned. Pulling the occiput back in recovered MOST of
+       the lost `f`, not all of it: 6.3mm mean against the 9.8mm this file
+       was drawing on when 1.06 was fit, so the temple plane, like every
+       plane in this file, is still getting less free width from the
+       solved scalp than it was tuned against, and needed its own base
+       raised to compensate directly. TEMPLE_K and ROUND_REF are
+       UNCHANGED — the roundness-conditioned SLOPE that widens an
+       elongated head's temple relative to a round one's was never the
+       broken part, only the flat amount every body gets regardless of
+       roundness was. Re-solved the same way, against
+       tools/proportions.js across the same eight bodies. */
     const ROUND_REF = 0.78, TEMPLE_K = 2.2;   // EST, solved against tools/proportions.js — see above
     const roundness = Math.max(0.72, Math.min(0.82, m.headbreadth / m.headlength));
-    const templeRatio = 1.06 - TEMPLE_K * (ROUND_REF - roundness);
+    const templeRatio = 1.14 - TEMPLE_K * (ROUND_REF - roundness);
 
     // ---- paired: side group + the paired front/crown facets -----------
     for (const sgn of [1, -1]) {
@@ -749,8 +851,25 @@
        tools/proportions.js across eight bodies, not derived — and
        shares ROUND_REF and the same clamped `roundness` rather than
        computing its own version of the same fact about the body. */
+
+    /* THE BASE MOVED HERE TOO, 0.99 to 1.03, the same shared-scalp-budget
+       story as the temple's own base above: less free width comes back
+       from `f` now than when 0.99 was fit, and `shoulders / drawn head W`
+       felt it first — two of eight bodies over the 3.10 ceiling once the
+       occiput's depth was restored (above) and the crown-band floor
+       cleared without also widening the ear that mostly sets this
+       check. EAR_K keeps its own value and keeps sharing ROUND_REF — a
+       round head still needs proportionally less of this bump than an
+       elongated one does, that relationship did not change, only the
+       flat floor under it did. NOTE: pushed to 1.04 in a coarser search
+       first, one body's OWN drawn-W reading dropped sharply (1.062 to
+       0.986) instead of continuing to rise with it — found empirically,
+       not chased to a root cause, but real enough that 1.03 is a wall
+       found by testing rather than a floor left on the table; do not
+       push this one on faith. Solved against tools/proportions.js across
+       the same eight bodies. */
     const EAR_K = 1.2;   // EST, solved against tools/proportions.js — see above
-    const earRatio = 0.99 - EAR_K * (ROUND_REF - roundness);
+    const earRatio = 1.03 - EAR_K * (ROUND_REF - roundness);
     {
       const TILT = 15 * Math.PI / 180;
       const D = vnorm(vsub(vmul(U, Math.cos(TILT)), vmul(F, Math.sin(TILT))));   // up-and-back
