@@ -22,14 +22,28 @@ const seed = process.argv[2] || '12345';
 const out = process.argv[3] || '/tmp/sheet.png';
 const CELL = parseInt(process.argv[4] || '440');
 
+/* The crop bands come from the FIGURE, not from constants. They were fixed
+   millimetres once — a head band of 1330..1690 — and on any seed taller
+   than the band the head cells guillotined the skull at the brow: the
+   remaining lower rear of the head read as a hooded cowl, the flat cut as
+   a gabled forehead, and an evening nearly went to diagnosing head
+   geometry that profcurve had already measured as right. The sampled body
+   knows where its own vertex, cervicale and crotch are; ask it. */
+const G = require('./load.js')();
+const M = G.figure.buildFigure(parseInt(seed)).m;
+const band = (lo, hi) => Math.round(lo) + ',' + Math.round(hi);
+const HEAD = band(M.suprasternaleheight - 40, M.stature + 45);
+const TORSO = band(M.crotchheight - 40, M.cervicaleheight + 50);
+const LEGS = band(30, M.crotchheight + 140);
+
 // label | az | el | FRAME height band (mm above floor) or null for the whole
 const VIEWS = [
   ['front', 180, 0, null], ['three-quarter', 140, 0, null],
   ['side', 90, 0, null], ['back', 0, 0, null],
-  ['head front', 180, 0, '1330,1690'], ['head 3q', 140, 0, '1330,1690'],
-  ['head side', 90, 0, '1330,1690'], ['head back', 0, 0, '1330,1690'],
-  ['torso front', 180, 0, '900,1500'], ['torso side', 90, 0, '900,1500'],
-  ['legs front', 180, 0, '30,980'], ['legs side', 90, 0, '30,980'],
+  ['head front', 180, 0, HEAD], ['head 3q', 140, 0, HEAD],
+  ['head side', 90, 0, HEAD], ['head back', 0, 0, HEAD],
+  ['torso front', 180, 0, TORSO], ['torso side', 90, 0, TORSO],
+  ['legs front', 180, 0, LEGS], ['legs side', 90, 0, LEGS],
 ];
 
 function readPNG(f) {

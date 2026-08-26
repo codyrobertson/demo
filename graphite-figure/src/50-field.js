@@ -1230,6 +1230,25 @@
     { region: 'trunk', part: 'trunk', at: 'chestheight', girth: 'chest' },
     { region: 'trunk', part: 'trunk', at: 'waistheightomphalion', girth: 'waist' },
     { region: 'trunk', part: 'trunk', at: 'buttockheight', girth: 'hip' },
+    /* The neck was the last measured circumference the model ignored, and it
+       showed: the cervical anchors took their thickness from the CHEST's
+       solve, scaled by estimated weights, and the chest's 40mm is not fat —
+       it is the pectorals the trunk does not model. Inherited by the neck it
+       drew a 570mm column under a 312mm tape, head-wide from the front, and
+       in profile its rear face lined up with the occiput into one straight
+       hooded slope with no nape. The bare form was already right — within
+       millimetres of the tape at mid-neck — so this site mostly solves the
+       inherited error back OUT.
+
+       The tape runs just under the larynx, so the ring is measured midway
+       between the measured C7 landmark and the top of the cervical chain —
+       both facts about this body, neither a typed height. The anchor written
+       is cervicale's, and stature's rides along (see the solve), because the
+       two of them ARE the neck profile. */
+    {
+      region: 'trunk', part: 'trunk', at: 'cervicaleheight', girth: 'neck',
+      site: (rg, p) => (stationAtHeight(rg, p, rg.figure.m.cervicaleheight) + 1) / 2,
+    },
   ];
 
   /**
@@ -1312,6 +1331,7 @@
 
     const stationFor = (st) => {
       const p = P[st.part];
+      if (st.site !== undefined) return st.site(rig, p);
       if (st.at !== undefined) return stationAtHeight(rig, p, fig.m[st.at]);
       return st.bone === undefined ? st.s : stationOf(rig, p, st.bone, st.s);
     };
@@ -1369,6 +1389,7 @@
 
     const report = [];
     for (const st of sites) {
+      if (st.girth === 'neck') continue;   // after the fill — see below
       let r;
       if (st.region === 'trunk') {
         const i = trunkAnchors.findIndex((a2) => a2[3] === st.at);
@@ -1400,6 +1421,30 @@
       let best = solved[0];
       for (const c of solved) if (Math.abs(c[0] - a2[0]) < Math.abs(best[0] - a2[0])) best = c;
       a2[1] = best ? a2[2] * (best[1] / best[2]) : 0;
+    }
+
+    /* The neck, LAST, overwriting what the fill just estimated for its two
+       anchors. Order is the point: run before the fill and the cervicale
+       anchor's solved value becomes the "nearest solved anchor" for the
+       suprasternale estimate just below it, deflating the upper chest —
+       whose thickness genuinely does stand in for missing pectoral bulk and
+       genuinely should scale from the CHEST's solve. The two neck anchors
+       are one profile with one measured girth, so the solve writes both,
+       holding their estimated RATIO: one degree of freedom against one tape,
+       same as everywhere else. */
+    const neckSite = sites.find((st) => st.girth === 'neck');
+    if (neckSite && fig.girth[neckSite.girth] !== undefined) {
+      const iC = trunkAnchors.findIndex((a2) => a2[3] === neckSite.at);
+      const iS = trunkAnchors.findIndex((a2) => a2[3] === 'stature');
+      if (iC >= 0 && iS >= 0) {
+        const ratio = trunkAnchors[iS][2] / trunkAnchors[iC][2];
+        const r = solve(neckSite, (t) => {
+          trunkAnchors[iC][1] = t;
+          trunkAnchors[iS][1] = t * ratio;
+        });
+        r.region = neckSite.region; r.girth = neckSite.girth;
+        report.push(r);
+      }
     }
     return { soft: fig.soft, report, anchors: trunkAnchors };
   }
