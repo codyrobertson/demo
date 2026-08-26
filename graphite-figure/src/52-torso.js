@@ -34,6 +34,55 @@
   // [height, lateral, anterior] points rather than to a bone's own frame.
   const ID = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
 
+  /* WHY THE TRUNK'S OWN BONE SCOPE DROPS CLAVICLE AND SCAPULA.
+     Probed directly — sampling the TRUNK part's own widest ring, exactly
+     the way tools/proportions.js's "shoulders" check does, then asking
+     which of that ring's own contributors (50-field.js's boneField vs this
+     file's own volumeField) was actually closest to zero AT that point —
+     the trunk's widest point across four sample bodies was never one of
+     this file's own shoulder features. It was the SCAPULA bone capsule
+     (50-field.js's BONE_R.scapula, a flat 30% of the scapula's own length,
+     no taper) sitting on the acromion, wrapped in the region's ordinary
+     soft-tissue term: on a 1750mm figure, a 22mm capsule plus 38mm of
+     regional fat put the trunk's own corner 60mm past the acromion before
+     this file's trapezius or scapular-spine ropes got a vote, and — the
+     part that makes it a bug rather than a coincidence — neither number
+     has anything to do with bideltoid breadth. Both scale with this body's
+     overall SIZE and FAT, which is why the very same mechanism landed
+     within band on two of the four sampled bodies and missed by 12-17% on
+     the other two: it is answering "how big is this body", not "how far
+     does this body's deltoid reach past its own acromion", and those two
+     questions only happen to agree by coincidence.
+
+     The clavicle capsule alone, underneath the scapula's, is smaller but
+     still not small enough to leave room for a body whose gap is genuinely
+     narrow — 16.5mm of bone plus 38mm of the SAME unrelated regional fat
+     is 54.5mm on that same figure, against a measured gap of 26mm. Since a
+     smooth union can only ever bulge OUTWARD (smin's own floor is
+     min(a,b), never more), no amount of resizing this file's OWN volumes
+     can pull the corner back IN while either bone capsule still reaches
+     further — addition alone can fix the two bodies this rebuilt corner
+     undershoots, never the one it overshoots. BONE_R and the fat table
+     that feeds both capsules are 50-field.js's shared constants, used by
+     other parts (BONE_R.scapula by the arm too), so they are not this
+     file's numbers to retune.
+
+     What IS this file's to decide is which bones the TRUNK part's own
+     field is built from — tweakPart is the sanctioned way to do that from
+     outside 50-field.js (51-head.js and 53-limbs.js already do exactly
+     this for other parts) without touching that file's shared tables at
+     all. Dropping clavicle and scapula from the trunk's OWN bone scope
+     costs it nothing visible: both bones stay exactly where they were for
+     posing and for every anchor below that reads their positions (Acr is
+     still `clavicle.B`), and the arm part keeps its own, separate copy of
+     the scapula (50-field.js's own `limbKeep` for 'arm') untouched. All it
+     removes is two capsules that were never the trunk's own documented
+     shoulder shape to begin with — they were filling in, uncontrolled,
+     for a corner this file now sizes on purpose, directly against the one
+     measurement that names the gap: bideltoid breadth. See the trapezius
+     and scapular-spine sections below for where that measurement goes in. */
+  GK.field.tweakPart('trunk', { keep: (id) => /^(pelvis|[LTC]\d+)$/.test(id) });
+
   GK.field.registerVolumes('torso', (ctx) => {
     const { rig, fig, m, g, put, vertR, smin, smax, sdSegSE, sdBlobSE,
       frameAlong, exponentFor, CORE } = ctx;
@@ -157,6 +206,50 @@
    Checked the same way it was broken: the same height-sampling probe now
    shows a monotone climb from the neck's own width up to shoulder width,
    nowhere more than about 20mm of jump between five-millimetre steps. */
+/* THE ACROMIAL TIP, AND WHY IT CARRIES BIDELTOID BREADTH DIRECTLY.
+   Everything above closes this rope exactly on the acromion, which is
+   right for a BONE landmark — but tools/proportions.js's own "shoulders"
+   check does not measure a bone landmark, it measures the widest point of
+   this PART, anywhere along it, against bideltoidbreadth: a tape run
+   outboard of both deltoids. 45-muscle.js's own deltoid group is what that
+   tape actually measures, and it is deliberately scoped OFF the trunk
+   entirely (see its own comment on 'touches': putting a shoulder-belly
+   into the TRUNK's field is what welded the chest-girth ring to the far
+   side of it and made chest circumference non-monotone in soft-tissue
+   thickness — not a mistake to repeat here). So the trunk's own corner has
+   to carry bideltoid breadth's information some other way, and the only
+   candidate already sitting at the right point is this rope's own
+   acromial tip.
+
+   Measured directly: half of (bideltoidbreadth - biacromialbreadth) is
+   exactly how many millimetres of tissue sit outboard of the acromion on
+   THIS body — not an estimate, the two are both ANSUR fields already in
+   `m`. Sized against it here, at the one end (t=1) where this segment
+   already terminates on the acromion, leaving the Sh end above untouched
+   (still tj-scaled, still fully fleshed by the region's own soft-tissue
+   term) so the slope's own look near the neck does not change.
+
+   THE FAT CANCELLATION IS DELIBERATE, NOT AN OVERSIGHT. Before this, the
+   acromial tip's width was `tj * 0.85` PLUS whatever the region's solved
+   soft-tissue term added on top — and that second term is sized against
+   chest/waist/hip adiposity, which has nothing to do with how far a
+   deltoid bulges past its own acromion. Probed across a sample: two bodies
+   with nearly identical deltoid gaps came out 30mm+ apart in drawn
+   shoulder width purely because one carried more trunk fat, and — the
+   sharper failure — the body with the SMALLEST measured gap (narrowest
+   shoulders relative to its own frame) was overshooting the loudest,
+   because it was also the biggest-framed, highest-fat body of the sample,
+   and fat was doing the deciding instead of the gap. So the region's own
+   `f` is cancelled at this one end (subtracted before the closure hands it
+   back to sdSegSE, which adds it straight back on) and the deltoid gap is
+   let in in its place — the width HERE tracks the gap, at any body
+   fatness, and the fascia blend with the still-fleshed Sh end 46mm away
+   keeps the tip from reading as a bare knuckle. The floor beneath the
+   subtraction is the ORIGINAL tj-based size, so a body with an unusually
+   large local fat solve and a small gap never goes narrower than the rope
+   already was. */
+const deltGap = Math.max(0, (m.bideltoidbreadth - m.biacromialbreadth) * 0.5);
+const DELT_KW = 0.90;   // EST fraction of the measured gap this cap reaches for
 for (const side of ['L', 'R']) {
   const sgn = side === 'L' ? 1 : -1;
   const c7 = rig.bones.C7, cl = rig.bones['clavicle.' + side];
@@ -178,8 +271,21 @@ for (const side of ['L', 'R']) {
   put('trunk', (P, f) => sdSegSE(P, N, Sh, F1,
     tj * 1.0, tj * 0.7, tj * 1.3, tj * 0.9, 2.3, undefined, f));
   const F2 = frameAlong(Sh, Acr, [1, 0, 0]);
+  /* The lateral reach beyond Acr does NOT come from a1/b1 here — this leg
+     runs "shallow, into the acromion" (see the comment above), which in
+     frame terms means F2's own AXIS (frameAlong's fr[0]) is already almost
+     entirely lateral (measured: 90-98% of it is world Y across a sample of
+     bodies), so the plane PERPENDICULAR to that axis — the one a1/b1 size
+     — is close to the height/depth plane and barely touches lateral reach
+     at all. What extends past Acr laterally is the ROUNDED END CAP: with
+     `cap` left undefined elsewhere in this file it defaults to
+     min(a1,b1), which is what every other use of sdSegSE wants (a blunt
+     taper), but here it is the one dial that is actually aimed down this
+     segment's own (near-lateral) axis, so it is the one sized against the
+     measured gap — see the acromial-tip comment above. */
   put('trunk', (P, f) => sdSegSE(P, Sh, Acr, F2,
-    tj * 1.3, tj * 0.9, tj * 0.85, tj * 0.75, 2.3, undefined, f));
+    tj * 1.3, tj * 0.9, tj * 0.85, tj * 0.75, 2.3,
+    Math.max(tj * 0.7, deltGap * DELT_KW - f), f));
 }
 
 /* THE PECTORAL PLANE. The lower pec border is one of the strongest lines a
@@ -245,8 +351,17 @@ for (const side of ['L', 'R']) {
   const Med = [t3.A[0], medY, t3.A[2] - vertR * 0.3];
   const F = frameAlong(Med, Acr, [1, 0, 0]);
   const ts = m.interscyeii * 0.046;                // EST: a thin ridge, not a bar
+  // The end cap here runs the same near-lateral gauntlet the trapezius's
+  // own acromial tip does — Med sits close in to the spine and Acr sits
+  // far out, so this rope's own axis is mostly world Y too, and it is the
+  // CAP (aimed down that axis), not the a1/b1 cross-section, that reaches
+  // past Acr. Sized the same way and for the same reason as the
+  // trapezius's own tip just above — see that section's own comment, and
+  // the file header's note on why the trunk's bone scope no longer carries
+  // a competing capsule at this exact point.
   put('trunk', (P, f) => sdSegSE(P, Med, Acr, F,
-    ts * 1.15, ts * 0.6, ts * 0.7, ts * 0.5, 2.3, ts * 0.55, f));
+    ts * 1.15, ts * 0.6, ts * 0.7, ts * 0.5, 2.3,
+    Math.max(ts * 0.55, deltGap * DELT_KW - f), f));
 
   // infraspinatus: a small fullness tucked under the spine's medial half,
   // not a second bar reaching all the way to the acromion. It first went in
