@@ -441,14 +441,15 @@ if (!process.env.NOMODEL) {
     const mrng = new M.Rng(seed ^ (0x9e37 + P.id * 2654435761));
     for (const b of DRAW.modelling(P, rows, view, { lamp: LAMP, marks, rng: mrng })) {
       put(b.pts, P.id, {
-        tone: 0.44, weight: 0.62, taper: 0.9, jitter: 0.9, phase: P.id * 3.1 + b.t * 17,
+        tone: 0.44, weight: 0.62, taper: 0.9, jitter: 0.5, phase: P.id * 3.1 + b.t * 17,
       });
     }
     // and the creases, which are anchored to measured heights where ANSUR
     // reaches them and to a station along the part where it does not
-    const stationOf = (key) => (key && P.chain)
-      ? G.field.stationAtHeight(rig, P, fig.m[key]) : 0.5;
-    for (const c of DRAW.landmarks(P.name, rows, stationOf)) {
+    // landmarks() resolves its own stations now — ANSUR heights, projected
+    // bones, and the LOD gate all live beside the marks themselves, and the
+    // caller only says how big the plate is
+    for (const c of DRAW.landmarks(P, rows, { rig, mmPerPx: view.mmPerPx })) {
       put(c.pts, P.id, {
         tone: 0.95, weight: 1.0, taper: 0.6, jitter: 0.45, phase: c.id.length * 7.7,
       });
