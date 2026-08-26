@@ -229,27 +229,79 @@
    (still tj-scaled, still fully fleshed by the region's own soft-tissue
    term) so the slope's own look near the neck does not change.
 
-   THE FAT CANCELLATION IS DELIBERATE, NOT AN OVERSIGHT. Before this, the
-   acromial tip's width was `tj * 0.85` PLUS whatever the region's solved
-   soft-tissue term added on top — and that second term is sized against
-   chest/waist/hip adiposity, which has nothing to do with how far a
-   deltoid bulges past its own acromion. Probed across a sample: two bodies
-   with nearly identical deltoid gaps came out 30mm+ apart in drawn
-   shoulder width purely because one carried more trunk fat, and — the
-   sharper failure — the body with the SMALLEST measured gap (narrowest
+   WHY THIS IS FAT-INDEPENDENT, AND WHY THAT TAKES NO SUBTRACTION. Before
+   this, the acromial tip's width was `tj * 0.85` PLUS whatever the
+   region's solved soft-tissue term added on top — and that second term is
+   sized against chest/waist/hip adiposity, which has nothing to do with
+   how far a deltoid bulges past its own acromion. Probed across a sample:
+   two bodies with nearly identical deltoid gaps came out 30mm+ apart in
+   drawn shoulder width purely because one carried more trunk fat, and —
+   the sharper failure — the body with the SMALLEST measured gap (narrowest
    shoulders relative to its own frame) was overshooting the loudest,
    because it was also the biggest-framed, highest-fat body of the sample,
-   and fat was doing the deciding instead of the gap. So the region's own
-   `f` is cancelled at this one end (subtracted before the closure hands it
-   back to sdSegSE, which adds it straight back on) and the deltoid gap is
-   let in in its place — the width HERE tracks the gap, at any body
-   fatness, and the fascia blend with the still-fleshed Sh end 46mm away
-   keeps the tip from reading as a bare knuckle. The floor beneath the
-   subtraction is the ORIGINAL tj-based size, so a body with an unusually
-   large local fat solve and a small gap never goes narrower than the rope
+   and fat was doing the deciding instead of the gap.
+
+   The fix is not to cancel `f` against the cap — sdSegSE never adds it in
+   the first place. Read its own cap line (50-field.js): `const aw = cap
+   === undefined ? Math.min(ay, az) : cap`, where ay/az (=cy+f/cz+f) are
+   what `f` feeds. That ternary is the whole mechanism: `f` reaches the
+   axial cap ONLY on the undefined branch, the ordinary blunt-taper case
+   every other sdSegSE call in this file uses. Pass a cap explicitly, as
+   here, and `f` never touches it — not because it was subtracted back out,
+   but because that branch is never taken. An EARLIER version of this
+   comment claimed the opposite (`f` "cancelled" here and "added straight
+   back on" by sdSegSE) and shipped `deltGap * DELT_KW - f` on the strength
+   of that claim, which is simply false against the code above; the
+   subtraction it justified made the reach SHRINK as `f` grew — 25-40mm
+   across this region — and hit the floor on exactly the highest-fat
+   bodies, losing the measured-gap information on the very seeds this fix
+   was for. Passing the cap explicitly already gives fat-independence for
+   free; `deltGap * DELT_KW` alone is the whole cap, at any body fatness,
+   and the fascia blend with the still-fleshed Sh end 46mm away keeps the
+   tip from reading as a bare knuckle. The floor is the ORIGINAL tj-based
+   size, so a body with a small gap never goes narrower than the rope
    already was. */
 const deltGap = Math.max(0, (m.bideltoidbreadth - m.biacromialbreadth) * 0.5);
-const DELT_KW = 0.90;   // EST fraction of the measured gap this cap reaches for
+/* EST fraction of the measured gap this cap reaches for. Solved the way
+   TEMPLE_K and EAR_K were (51-head.js) — against tools/proportions.js's
+   "shoulders / bideltoid" row across seeds 1-30, not derived: the cap's own
+   value and the ring's actual lateral reach are related by the smin blend
+   and the segment's axis (not quite 100% lateral — see the F2 comment
+   above), so there is no closed form from "fraction of the gap" to "mm the
+   silhouette moves" to solve directly.
+
+   0.90, tried first on the reasoning that "90% of the gap" is a plausible
+   physical fraction, undershot the 0.96 floor on five of thirty seeds
+   (3, 16, 22, 27, 28) even though the cap-to-reach relation is short of
+   1:1 (see below), so the cap needed to reach past the raw gap, not stop
+   short of it. 1.0 already clears three of those five (16, 22, 27); seed
+   28 needed 1.15 to get close (0.959) and 1.20 to actually clear. 1.20 is
+   the smallest value tested that clears every seed but 3 without pushing
+   any ratio past 1.05 (ceiling is 1.12) or adding a new failure to
+   "shoulders / drawn head W" beyond the set 1.15 already had.
+
+   SEED 3 DOES NOT CLEAR AT ANY DELT_KW, AND THAT IS NOT THIS DIAL'S FAULT.
+   Swept 0.90 through 3.0: seed 3's ratio sits at 0.909 and does not move
+   until DELT_KW passes roughly 2 — because seed 3's trunk is not
+   shoulder-limited at all. Probed directly (station-by-station, the same
+   way the coat-hanger cliff above was found): this body's widest trunk
+   point sits in the PELVIS, at 179mm of half-width against a measured
+   hipbreadth/2 of 183mm — the model is drawing this body's hip correctly,
+   not overbuilding it. Its own ANSUR hipbreadth is already 93% of its own
+   bideltoidbreadth (316.8mm biacromial, 393.8mm bideltoid, but 366.2mm
+   hipbreadth) — a genuinely wide-hipped, narrow-shouldered individual, not
+   a modelling error. The shoulder itself is fixed: at any DELT_KW past
+   about 1.1 its OWN peak (measured at acromion height alone) tracks the
+   gap correctly and keeps climbing, it is simply climbing toward a target
+   the hip already reached first. Forcing the deltoid cap out far enough to
+   out-reach the hip needs DELT_KW above ~2 — twice the measured tissue gap
+   — which blows every other seed's ratio well past 1.12 (seed 8 alone
+   reaches 1.3+). The pelvis capsule that wins this contest is 50-field.js's
+   (THE MEASURED VOLUMES), not this file's, and shrinking it to chase one
+   seed's ratio here would under-draw its own measured hip on every body,
+   which is a worse bug than the one being fixed. Left failing on purpose;
+   see 52-torso.js's own gate notes for the numbers. */
+const DELT_KW = 1.20;
 for (const side of ['L', 'R']) {
   const sgn = side === 'L' ? 1 : -1;
   const c7 = rig.bones.C7, cl = rig.bones['clavicle.' + side];
@@ -285,7 +337,7 @@ for (const side of ['L', 'R']) {
      measured gap — see the acromial-tip comment above. */
   put('trunk', (P, f) => sdSegSE(P, Sh, Acr, F2,
     tj * 1.3, tj * 0.9, tj * 0.85, tj * 0.75, 2.3,
-    Math.max(tj * 0.7, deltGap * DELT_KW - f), f));
+    Math.max(tj * 0.7, deltGap * DELT_KW), f));
 }
 
 /* THE PECTORAL PLANE. The lower pec border is one of the strongest lines a
@@ -361,7 +413,7 @@ for (const side of ['L', 'R']) {
   // a competing capsule at this exact point.
   put('trunk', (P, f) => sdSegSE(P, Med, Acr, F,
     ts * 1.15, ts * 0.6, ts * 0.7, ts * 0.5, 2.3,
-    Math.max(ts * 0.55, deltGap * DELT_KW - f), f));
+    Math.max(ts * 0.55, deltGap * DELT_KW), f));
 
   // infraspinatus: a small fullness tucked under the spine's medial half,
   // not a second bar reaching all the way to the acromion. It first went in
