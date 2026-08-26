@@ -451,8 +451,10 @@ if (!process.env.NOMODEL) {
     // caller only says how big the plate is. eye rides along so a mark (or a
     // detected break) coinciding with the silhouette can bow out to the
     // outline that already draws it.
+    // NOLM=1 / NOPB=1 drop the landmark and plane-break layers: when a line
+    // looks wrong these bisect "geometry or marks" in one render each
     const pbCtx = { rig, mmPerPx: view.mmPerPx, eye: view.e };
-    for (const c of DRAW.landmarks(P, rows, pbCtx)) {
+    for (const c of (process.env.NOLM ? [] : DRAW.landmarks(P, rows, pbCtx))) {
       put(c.pts, P.id, {
         tone: 0.95, weight: 1.0, taper: 0.6, jitter: 0.45, phase: c.id.length * 7.7,
       });
@@ -460,7 +462,7 @@ if (!process.env.NOMODEL) {
     // and the plane breaks — ridges the surface actually has, detected from
     // its own normals rather than authored, so when a form gains a facet the
     // drawing gains its edge with no second hand-off
-    for (const c of DRAW.planeBreaks(P, rows, pbCtx)) {
+    for (const c of (process.env.NOPB ? [] : DRAW.planeBreaks(P, rows, pbCtx))) {
       put(c.pts, P.id, {
         tone: 0.95, weight: 1.0, taper: 0.6, jitter: 0.45, phase: c.id.length * 7.7,
       });
