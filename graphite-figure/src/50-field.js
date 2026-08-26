@@ -930,11 +930,21 @@
     let lo = 0.5;
     if (f(lo) > 0) return 0;   // the station is past the end of the solid
     let hi = -1;
-    for (let r = lo, i = 0; r < hi0 && i < 64; i++) {
+    /* Sphere tracing from inside, with one honesty clamp. The step trusts
+       the field as a distance, and this field is not one — superquadrics
+       return first-order estimates and the muscle bellies are approximate —
+       so near a thin OUTSIDE gap between two bellies the value can
+       overestimate and the march leaps clean across, welding the two into
+       one solid on that ray and putting the skin on the far belly's back.
+       That is the staircase the peroneals drew down the shin. Any gap the
+       fascia union actually holds open is at least about a fascia radius
+       wide, so a step clamped to that order cannot jump one. */
+    const stepCap = Math.max(6, fascia * 1.4);
+    for (let r = lo, i = 0; r < hi0 && i < 80; i++) {
       const v = f(r);
       if (v > 0) { hi = r; break; }
       lo = r;
-      r += Math.max(1.5, -v * 0.75);
+      r += Math.max(1.5, Math.min(-v * 0.75, stepCap));
     }
     if (hi < 0) return hi0;    // solid all the way out; nothing to find
     // 14 halvings of a bracket a few millimetres wide is well under a micron

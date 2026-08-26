@@ -566,12 +566,17 @@
     // deleted, so a future radiusAlong() that blends rather than marches
     // can re-enable it by uncommenting, unchanged:
     //
-    // peroneals: {
-    //   match: /^per(long|brev)_r$/,
-    //   originBase: 'tibia_r', insertionBase: 'calcn_r',
-    //   arch: 'fusiform', primaryJoint: { key: 'ankle', bone: 'foot' },
-    //   touches: ['tibia', 'foot'],
-    // },
+    // RE-ENABLED after radiusAlong() gained a step clamp: the march used to
+    // trust the field as a distance and leap the thin gap between two
+    // comparably-sized bellies, welding them on that ray; steps are now
+    // capped near the fascia radius, so the gap cannot be jumped. If the
+    // shin staircases again, this is the block to switch off first.
+    peroneals: {
+      match: /^per(long|brev)_r$/,
+      originBase: 'tibia_r', insertionBase: 'calcn_r',
+      arch: 'fusiform', primaryJoint: { key: 'ankle', bone: 'foot' },
+      touches: ['tibia', 'foot'],
+    },
   };
   const BASE_TO_BONE = { pelvis: 'pelvis', femur_r: 'femur', tibia_r: 'tibia', calcn_r: 'foot' };
 
