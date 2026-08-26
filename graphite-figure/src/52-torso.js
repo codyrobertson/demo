@@ -304,10 +304,20 @@ for (const sgn of [1, -1]) {
    that one shallow triangle from two directions. A wide, shallow, blunt
    CUT rather than a ridge: this is an absence of tissue, not a form. No
    `f` — like the notch and the crotch cut, a fixed landmark rather than a
-   soft-tissue profile. */
+   soft-tissue profile.
+
+   Anchored the same way the notch, navel and gluteal fold ended up
+   anchored: hip CIRCUMFERENCE, fixed before the fat solve, floored under a
+   probed ratio (0.051-0.063 across a small sample at this exact point)
+   rather than the `buttockdepth`-fraction guess that put the other three
+   cuts through the skin. This one never actually failed girthcheck —
+   nothing sits at this height, so no measured ring runs through it — but
+   the failure mode is the same bug wearing a disguise, and finding it
+   after it ships in a render is worse than finding it here. */
 {
   const p = rig.bones.pelvis;
-  const C = vmad(vmad(p.A, p.frame[0], -34), p.frame[2], -m.buttockdepth * 0.30);
+  const nearEdge = g.hip * 0.045;                   // EST floor, under the probed 0.051-0.063
+  const C = vmad(vmad(p.A, p.frame[0], -34), p.frame[2], -nearEdge);
   put('trunk', (P) => sdBlobSE(P, C, ID, 62, 46, 15, 2.3), true);
 }
 

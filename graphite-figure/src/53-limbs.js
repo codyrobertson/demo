@@ -75,33 +75,37 @@ for (const side of ['L', 'R']) {
   const bm = m.bimalleolarbreadth * 0.5;
   const floor = -rig.figure.rootHeight;
 
-  /* WHY EVERY STATION'S SEMI-AXIS IS HALF ITS OWN TOP HEIGHT, NOT AN
-     INDEPENDENT NUMBER. ringAt() samples this part from an axis that runs
-     at the ANKLE's own height for its entire length — axisAt() builds it as
-     f.A + frame[0]*len*s, and the foot's frame[0] carries no height
-     component at all, so that axis sits at ankle height from heel to
-     toe, not just at the ankle. Move a station's CENTRE far enough from
-     that axis and the ray-march's very first sample (radiusAlong's
+  /* WHY EVERY STATION'S SEMI-AXIS IS STILL HALF ITS OWN TOP HEIGHT, EVEN
+     THOUGH THE CONSTRAINT THAT ORIGINALLY FORCED IT IS GONE. A station
+     centred at half its own target height, with a semi-axis of that same
+     half, lands its bottom exactly on the floor (0) and its top exactly on
+     the target — cheap, exact, and independent of whatever the target
+     height actually is. That part of the construction never depended on
+     the axis and still does not.
+
+     What DID depend on the axis was how low the target could go. ringAt()
+     samples this part from whatever axisAt() hands it, and until the
+     registration at the end of this side's loop below, that was the
+     DEFAULT: f.A + frame[0]*len*s, which runs at the ankle's own height for
+     the foot's entire length, because the foot's frame[0] carries no
+     height component at all. Move a station's target far enough below
+     that fixed height and the ray-march's very first sample (radiusAlong's
      `f(lo)`, a fraction of a millimetre off the axis) comes back outside
      the solid, and the whole ring returns null — not a thinner foot, no
      foot at all at that station. A probe against this file's own first
-     attempt confirmed it: pinning centres near the floor collapsed the
-     rendered range to a sliver behind the ankle and nothing forward of it.
+     attempt confirmed it: pinning centres near the floor while the axis
+     stayed up at ankle height collapsed the rendered range to a sliver
+     behind the ankle and nothing forward of it. That is why every target
+     below used to sit at 1.05-1.52x ankle height even at the toe tip — not
+     a foot's real profile, the sampling ray's own ceiling.
 
-     So a station centred at half its own target height, with a semi-axis
-     of that same half, is the largest a station can safely be pulled
-     toward the floor while still, by construction, containing the ankle
-     axis whenever that half is a reasonable fraction of ankle height —
-     bottom lands exactly on the floor (0) and top lands exactly on the
-     target. It is also why the target heights below floor at ~1.1-1.5x
-     ankle height rather than the ~0.2-0.8x a tape-measure profile would
-     suggest: pull them lower and the axis itself falls outside the
-     station's own reach and the ring stops resolving. A real dorsum does
-     get lower than this over the toes; this file's honest ceiling on how
-     far it can follow that down is the ankle axis itself, and the width
-     taper below (bb shrinking toward the toe) carries most of the
-     "narrowing, lowering toe box" read that the height profile alone
-     cannot risk. */
+     The registration below replaces that fixed axis with one that slopes
+     from the ankle down toward the toes, so the targets below can finally
+     taper the way a dorsum does: near ankle height at the instep, down to
+     a 25-30mm toe box. They still have to clear THAT axis — checked by
+     hand against the widest spread of ankle heights this generator
+     produces (53-97mm across 300 seeds), several millimetres to spare at
+     every station — and the render is the check that actually counts. */
   const at = (t, centreAboveFloor) => {
     const P = vmad(f.A, fr[0], t * L);
     return vmad(P, UP, (floor + centreAboveFloor) - P[0]);
@@ -127,12 +131,12 @@ for (const side of ['L', 'R']) {
     // file's to rebuild.
     [-0.30, hb * 0.58, hAnkle * 1.30, 2.2],   // the heel, behind the ankle — calcaneus
     [-0.16, hb, hAnkle * 1.48, 2.3],          // the heel's own widest point — heelbreadth's station
-    [0.00, bm * 0.94, hAnkle * 1.52, 2.2],    // the ankle waist; the malleoli ride on top of this
-    [0.11, bb * 0.80, hAnkle * 1.44, 2.3],    // filling the gap the tibia's own round flare leaves
-    [0.22, bb * 0.80, hAnkle * 1.38, 2.3],    // the instep — the peak of the dorsum, then it slopes
-    [0.68, bb, hAnkle * 1.18, 2.6],           // the ball — footbreadthhorizontal's own station
-    [0.85, bb * 0.56, hAnkle * 1.10, 2.2],    // the toes narrowing, and lower than the instep
-    [0.97, bb * 0.20, hAnkle * 1.05, 2.0],    // the toe tip
+    [0.00, bm * 0.94, hAnkle * 1.15, 2.2],    // the ankle waist; the malleoli ride on top of this
+    [0.11, bb * 0.80, hAnkle * 1.08, 2.3],    // filling the gap the tibia's own round flare leaves
+    [0.22, bb * 0.80, hAnkle * 1.00, 2.3],    // the instep — the true peak, near ankle height, then it slopes down
+    [0.68, bb, hAnkle * 0.72, 2.6],           // the ball — footbreadthhorizontal's own station
+    [0.85, bb * 0.56, Math.max(36, hAnkle * 0.46), 2.2],  // toes narrowing and dropping toward the tip
+    [0.97, bb * 0.20, 29, 2.0],               // the toe tip — a 25-30mm toe box, rounding into the floor
   ];
   for (let i = 0; i < ST.length - 1; i++) {
     const s0 = ST[i], s1 = ST[i + 1];
@@ -166,14 +170,66 @@ for (const side of ['L', 'R']) {
      where a real arch's rise begins and ends. */
   {
     const archAy = bb * 0.16;                       // EST: a subtle ridge, not a bulge
-    const AA = vmad(at(-0.02, hAnkle * 1.15), med, bm * 0.55);
-    const AB = vmad(at(0.20, hAnkle * 1.55), med, bb * 0.72);
-    const AC = vmad(at(0.50, hAnkle * 1.15), med, bb * 0.55);
+    // Rescaled alongside the dorsum heights above, by the same amount —
+    // this ridge is drawn relative to the base surface it rises from, and
+    // that surface just dropped. Chosen to keep the ridge's rise ABOVE its
+    // local base the same as before at the peak (AB), and to keep it
+    // fading at-or-just-below the base at both ends (AA near the ankle,
+    // AC near the ball) the same way it did before — the ratios matched by
+    // hand against the old numbers, not rederived from anything measured.
+    const AA = vmad(at(-0.02, hAnkle * 1.10), med, bm * 0.55);
+    const AB = vmad(at(0.20, hAnkle * 1.15), med, bb * 0.72);
+    const AC = vmad(at(0.50, hAnkle * 0.85), med, bb * 0.55);
     put('foot.' + side, (P, ff) => smin(
       sdSegSE(P, AA, AB, fr, archAy, archAy * 0.9, archAy * 1.15, archAy, 2.4, archAy * 0.7, ff),
       sdSegSE(P, AB, AC, fr, archAy * 1.15, archAy, archAy * 0.7, archAy * 0.6, 2.4, archAy * 0.5, ff),
       6));
   }
+
+  /* THE FOOT'S OWN SAMPLING AXIS — the lift on the constraint the comment
+     above the ST table describes. 50-field.js's axisAt() honours a
+     part-supplied axis instead of walking the bone when one is registered;
+     this is that registration, kept here beside the geometry it exists to
+     serve rather than in 50-field.js, because only the foot's own build
+     knows what its rings actually need to sweep around.
+
+     One straight line per side: from the ankle (f.A, its own solved
+     height) down to a point ~20mm above the floor at the toe end (s=1,
+     the same forward fraction `at()` uses above). frame[0] runs along that
+     line; frame[1] and frame[2] are frameAlong()'s own completion of it —
+     lateral and sagittal-perpendicular, respectively, the same as the
+     bone's own frame, just tipped by the slope.
+
+     Unclamped on purpose. For s<0 — the heel, behind the ankle — the SAME
+     line is simply extrapolated backward, which raises it a little rather
+     than dropping it further, because going backward along a line that
+     slopes down going forward means going up. That is not a special case
+     bolted on for the heel: it falls out of using one line for the whole
+     part, and it happens to land right — the heel stations above (left
+     unchanged, at 1.30-1.48x ankle height) were already sized on a heel
+     pad standing a little proud of the ankle, and the extrapolated axis
+     stays under that with room to spare at every ankle height this
+     generator produces.
+
+     Takes `rig` as its own argument and reads rig.bones fresh from it on
+     every call, rather than closing over this side's own `f` or `floor`
+     from the loop above. TWEAKS (50-field.js) is ONE table shared by every
+     figure a process ever builds — girthcheck.js alone solves two hundred
+     of them in a single run — so a closure that captured one figure's
+     ankle position would hand every other figure that same one. Reading
+     `rig` fresh is what makes the registration safe to make once, here,
+     rather than rebuild per figure. */
+  GK.field.tweakPart('foot.' + side, {
+    axis: (rig, s) => {
+      const bf = rig.bones['foot.' + side];
+      if (!bf) return null;
+      const fl = -rig.figure.rootHeight;
+      const A = bf.A;
+      const toe = vmad(bf.A, bf.frame[0], bf.len);
+      const B = vmad(toe, UP, (fl + 20) - toe[0]);
+      return { C: M.vlerp(A, B, s), fr: frameAlong(A, B, [0, 1, 0]) };
+    },
+  });
 }
 
 // ---- the malleoli ------------------------------------------------------
