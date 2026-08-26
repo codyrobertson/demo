@@ -106,7 +106,73 @@
    What it still lacked was a hollow for its own two heads to converge INTO;
    that is the suprasternal notch immediately below, added rather than
    pulling the straps closer, because the straps were already reading as a
-   V and the notch was what was missing at its point. */
+   V and the notch was what was missing at its point.
+
+   THAT "STEEP RIDGE" CLAIM WAS TRUE AND STILL LET 21 OF 200 SEEDS THROUGH
+   OVER THE TAPE. The mid-neck girth site (50-field.js SITES, `girth:
+   'neck'`) samples midway between the measured C7 station and the top of
+   the cervical chain; probed at that same station with soft tissue pinned
+   at f=0 (radiusAlong's own `fat` opt, so this is exactly what fitFat
+   measures before it adds anything), the BARE ring came out over the tape
+   on 14 of 200 seeds outright and left fitFat unable to converge within
+   0.5% on 21 (tools/girthcheck.js 200, "trunk @ neck"; worst seed 141 at
+   +5.5%, seed 21 at +5.2%, 11 of the 21 clamped at exactly zero fat). A
+   bare neck should sit a few PERCENT under the tape on essentially every
+   body — subcutaneous fat here is a few millimetres, not a few percent of
+   the circumference — and it already did on the other 179.
+
+   ATTRIBUTED by disabling candidate volumes in a scratch copy and
+   re-measuring the same station the site does. Bones plus 50-field.js's
+   own core neck tube (deliberately 0.72 of measured circumference, to
+   leave room for fat) sit 24-25% UNDER the tape on every seed tried,
+   failing or passing alike — never the cause. The trapezius below never
+   reaches this station at all: its own near end sits AT C7 height and runs
+   further DOWN from there to the shoulder, and disabling it changed the
+   ring by nothing, to a tenth of a millimetre, on every seed checked
+   (21, 6, 41, 1, 12345). What's left is this pair, and it is the entire
+   excess: on seed 21, bones-plus-core alone measures 267.8mm against a
+   358.9mm tape; adding just these two straps back puts it at 377.7mm — all
+   110mm of the gap from two ropes the comment above calls "~17mm across."
+
+   THE WIDTH WAS NEVER THE PROBLEM. `w` below already tracks
+   fig.girth.neck 1:1, which is fair — a wider-necked body earns a wider
+   strap. What doesn't track it is where the two ends SIT: the mastoid end
+   off head measurements (mentonsellionlength, headbreadth, headlength),
+   the notch end off suprasternaleheight and biacromialbreadth, neither
+   pair growing in step with neck circumference across the population. On
+   the worst seeds the mid-neck ring sits only 6-15mm below the mastoid —
+   barely down from the strap's still near-full-width top end, instead of
+   well below it where the taper has had room to work. Checked over a
+   200-seed sample: how far the mastoid sits above THIS body's own measured
+   neck base (cervicaleheight, i.e. C7 — `neckRun` below) scaled by neck
+   circumference and divided by headbreadth correlates -0.85 with the bare
+   ring's own error, well past headbreadth/neckcircumference alone (0.62)
+   or neckRun alone (-0.61): the failure is a body whose head-anchored
+   strap has too little of ITS OWN neck to taper through before the ring,
+   not simply a wide head or a short neck in isolation.
+
+   FIXED by scaling the strap's width by that ratio against a reference,
+   floored so it never disappears (the V still has to read) and ceilinged
+   at 1 so an ordinarily-proportioned body's strap is exactly what it was —
+   a resize against a measured ratio, the survey's own statement of this
+   body's neck relative to what already anchors the strap, not a smaller
+   version of the 0.055 constant, which would have thinned every body's
+   strap by the same fraction and done nothing for the ones whose
+   PROPORTIONS, not their overall size, put them over the tape. Calibrated
+   against tools/girthcheck.js 200: a reference of 175 cleared the bare
+   ring everywhere but left 8 seeds still failing after fitFat solved a
+   nonzero thickness for them — margin enough to stop the clamp, too thin
+   for the solver to land inside 0.5% before its own iteration budget ran
+   out, because the ring's nearest contributor switches between the core
+   tube and this pair as f grows and the girth-vs-fat curve it rides is not
+   as smooth as the solver assumes. 220, floored at 0.5, is the smallest
+   reference tried that brought the residual down to 2 (seeds 21 and 141,
+   both within 5% and neither clamped nor capped) while holding the neck's
+   own solved-fat mean at 4.8mm — up from 3.3mm now that the solve has room
+   to use, still inside the 2-6mm a real neck's subcutaneous layer runs.
+   Pushing the floor lower (0.35) did not improve seed 21 further; it made
+   it worse (3.0% against 1.5%), which is the same non-smooth curve talking
+   and not a sign that less strap is always safer. */
 {
   const sk = rig.bones.skull;
   if (sk) {
@@ -114,6 +180,15 @@
     const cy = m.headbreadth * 0.5, cz = m.headlength * 0.5;
     const notchH = m.suprasternaleheight - fig.rootHeight;
     const notchZ = m.chestdepth * 0.30;
+    // The mastoid's own height, independent of side (the lateral offset
+    // below doesn't move it materially) — how far above THIS body's own
+    // measured neck base the strap's upper end sits. See the section
+    // comment above for what this feeds and why.
+    const mastoidH = vmad(vmad(sk.A, fr[0], -m.mentonsellionlength * 0.22), fr[2], -cz * 0.24)[0];
+    const neckRun = Math.max(30, mastoidH - (m.cervicaleheight - fig.rootHeight));
+    const scmSafety = neckRun * m.neckcircumference / m.headbreadth;
+    const SCM_SAFE_REF = 220, SCM_SAFE_FLOOR = 0.5;   // EST: see the probe above
+    const scmK = Math.min(1, Math.max(SCM_SAFE_FLOOR, scmSafety / SCM_SAFE_REF));
     for (const sgn of [1, -1]) {
       // the mastoid, behind and below the ear
       const A = vmad(vmad(vmad(sk.A, fr[0], -m.mentonsellionlength * 0.22),
@@ -121,7 +196,10 @@
       // and the notch, where the two of them nearly meet
       const B = [notchH, sgn * m.biacromialbreadth * 0.055, notchZ];
       const F = frameAlong(A, B, [1, 0, 0]);
-      const w = m.neckcircumference * 0.055;      // EST: a strap ~17mm across
+      // EST: a strap ~17mm across at scmK=1 (an ordinarily-proportioned
+      // body); scaled down toward SCM_SAFE_FLOOR only on the bodies whose
+      // head-to-neck proportions put the bare ring over the tape.
+      const w = m.neckcircumference * 0.055 * scmK;
       put('trunk', (P, f) => sdSegSE(P, A, B, F,
         w * 0.9, w * 0.75, w * 1.25, w * 0.85, 2.1, w * 0.7, f));
     }
