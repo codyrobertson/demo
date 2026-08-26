@@ -209,6 +209,45 @@
   // does not sit inside a head and push it into a sphere.
   const SHAPED = { skull: 1, foot: 1, pelvis: 1 };
 
+  /* A BONE IS NOT A ROD, AND THIS IS WHERE JOINTS COME FROM.
+     Every bone here had one radius end to end, so a femur was a 57mm dowel
+     for its whole length — and a figure built on dowels has no knee, no
+     elbow, no wrist and no ankle, because every joint in a drawing reads
+     from bone showing through where the soft tissue is thin. It is the one
+     place the skeleton is allowed to be visible and the only thing that
+     stops a limb being a tube.
+
+     Real bones flare hard at the ends, and BodyParts3D measured by how
+     much: the widest transverse dimension of each bone mesh, as a fraction
+     of that same bone's own length, so it scales to any figure.
+
+       femur 0.253   tibia 0.219   humerus 0.328   ulna 0.321
+
+     A femur's condyles are 111mm across where its shaft is 57. That factor
+     of two is a knee. */
+  const BONE_FLARE = { femur: 0.253, tibia: 0.219, humerus: 0.328, forearm: 0.321 };
+  /* How much of that width each END carries, and the fraction of the bone's
+     length the flare occupies. EST, and unavoidably so: a bounding box
+     yields one number and cannot say which end it came from. The ordering is
+     not a guess though — a tibial plateau is wider than a malleolus, a
+     humeral head wider than the epicondyles, an olecranon wider than the
+     styloids, and a femur is broad at both ends. */
+  const BONE_ENDS = {
+    femur: [0.86, 1.00, 0.16], tibia: [1.00, 0.56, 0.15],
+    humerus: [1.00, 0.62, 0.15], forearm: [1.00, 0.52, 0.14],
+  };
+  /* WHICH ENDS ARE ACTUALLY SUBCUTANEOUS. Not every epiphysis shows: a
+     femoral head sits deep inside the pelvis under the whole gluteal mass
+     and a humeral head under the deltoid, while a femoral condyle, a tibial
+     plateau, a malleolus, an olecranon and a styloid are all a few
+     millimetres under the skin — which is why you can feel your own knee,
+     ankle, elbow and wrist and cannot feel your hip joint. Thinning the
+     cover over the buried ones took a third off the top of the thigh. */
+  const BONE_BARE = {
+    femur: [false, true], tibia: [true, true],
+    humerus: [false, true], forearm: [true, true],
+  };
+
   function boneRadius(fig, id) {
     const base = id.replace(/\.[LR]$/, '');
     if (/^[LTC]\d+$/.test(base)) return fig.stature * 0.017;   // a vertebral body
@@ -216,6 +255,58 @@
     if (k === undefined) return fig.stature * 0.008;
     return Math.max(4, (fig.len[base] || fig.stature * 0.05) * k);
   }
+
+  /** shaft radius, and the flared radius at each end, for one bone */
+  function boneShape(fig, id) {
+    const base = id.replace(/\.[LR]$/, '');
+    const r = boneRadius(fig, id);
+    const fl = BONE_FLARE[base], en = BONE_ENDS[base];
+    if (!fl || !en) return { r, r0: r, r1: r, w: 0, b0: false, b1: false };
+    const half = 0.5 * fl * (fig.len[base] || 0);
+    // ANSUR measured this one joint directly, so it is not left to a ratio:
+    // bimalleolar breadth IS the width across the ankle's own bones.
+    const r1 = base === 'tibia' && fig.m.bimalleolarbreadth
+      ? fig.m.bimalleolarbreadth * 0.5
+      : half * en[1];
+    const bare = BONE_BARE[base] || [false, false];
+    return { r, r0: Math.max(r, half * en[0]), r1: Math.max(r, r1), w: en[2], b0: bare[0], b1: bare[1] };
+  }
+
+  /**
+   * A capsule whose radius swells toward both ends. The swell is confined to
+   * the outer `w` of the bone at each end and eased in, because an epiphysis
+   * is a flare and not a step.
+   */
+  function sdBoneShaft(P, b, f) {
+    const ab = vsub(b.B, b.A), ap = vsub(P, b.A);
+    const t = clamp01(vdot(ap, ab) / Math.max(1e-9, vdot(ab, ab)));
+    const c = vmad(b.A, ab, t);
+    let r = b.r, e = 0;
+    if (b.w > 0) {
+      if (t < b.w) { e = 1 - sstep(t / b.w); r = lerp(b.r, b.r0, e); if (!b.b0) e = 0; }
+      else if (t > 1 - b.w) { e = sstep((t - (1 - b.w)) / b.w); r = lerp(b.r, b.r1, e); if (!b.b1) e = 0; }
+    }
+    /* AND THE TISSUE OVER AN EPIPHYSIS IS THIN, which is the other half of
+       why a joint reads. This file's own header has claimed from the start
+       that a clavicle, an olecranon, a tibial crest, a malleolus and an ASIS
+       show through "because the tissue over them is a couple of millimetres,
+       not because they are bigger" — and then applied one thickness
+       everywhere regardless. Flaring the bone without thinning its cover put
+       48mm of femoral condyle under 34mm of interpolated soft tissue and
+       produced a 511mm knee where a real one is about 370.
+
+       ANSUR cannot settle it: its public release measures knee HEIGHT at the
+       mid-patella and no knee circumference at all, so there is no girth here
+       to solve against and EPI_SOFT is EST. What is not estimated is the
+       shape of the rule — the cover thins exactly where the bone swells,
+       by the same eased ramp, so the two are one statement about one place
+       rather than two numbers that have to be kept in step by hand. */
+    const fe = e > 0 ? lerp(f, Math.min(f, EPI_SOFT), e) : f;
+    return vlen(vsub(P, c)) - (r + fe);
+  }
+  const EPI_SOFT = 7;   // mm of skin and subcutaneous fat over a bony prominence — EST
+  /** smootherstep, so a flare eases in and out rather than cornering */
+  function sstep(x) { x = clamp01(x); return x * x * (3 - 2 * x); }
 
   /**
    * Bone. Tight, and deliberately so: these are the places the skin is close
@@ -240,7 +331,8 @@
       if (!b.len) continue;
       if (SHAPED[id.replace(/\.[LR]$/, '')]) continue;
       if (keep && !keep(id)) continue;
-      out.push({ A: b.A, B: b.B, r: boneRadius(rig.figure, id) });
+      const sh = boneShape(rig.figure, id);
+      out.push({ A: b.A, B: b.B, r: sh.r, r0: sh.r0, r1: sh.r1, w: sh.w, b0: sh.b0, b1: sh.b1 });
     }
     return out;
   }
@@ -249,10 +341,9 @@
     f = f || 0;
     let d = 1e9;
     for (let i = 0; i < bones.length; i++) {
-      const b = bones[i];
       // a capsule IS a true distance field, so here the thickness could
       // equally be subtracted; it is added for the same reason everywhere
-      const t = sdCapsule(P, b.A, b.B, b.r + f, b.r * 0.92 + f);
+      const t = sdBoneShaft(P, bones[i], f);
       if (t < d) d = t;
     }
     return d;
@@ -540,6 +631,57 @@
     if (!keys.length) return 1e9;   // this part's shape is measured, not modelled
     let d = 1e9;
     for (const k of keys) d = Math.min(d, GK.muscle.fieldAt(rig, P, k, f || 0));
+    const lb = part._mlb || (part._mlb = muscleBound(rig, keys));
+    return lb.length ? Math.max(d, boundOf(lb, P, f || 0)) : d;
+  }
+
+  /* A LOWER BOUND ON A MUSCLE'S OWN DISTANCE, ENFORCED.
+
+     Every muscle belly is a chain of stations, each with two semi-axes, so
+     however the belly's own field is computed the true distance from a point
+     to it can never be less than the distance to the nearest station centre
+     minus that station's largest semi-axis. That is not a modelling choice,
+     it is arithmetic: the belly is contained in the union of those spheres.
+
+     It was being violated by a lot. A thigh reported a belly reaching 144mm
+     out from the femur where the widest station there is 24mm, which put a
+     phantom bulge on the thigh at one station and left the next one bare —
+     the outline of the leg went 218mm wide, 74mm, 180mm within a tenth of
+     its own length, and read as a bite taken out of the thigh.
+
+     Enforcing the bound can only ever move a surface INWARD toward the truth,
+     because it corrects distances that were reported too small and leaves
+     every honest one alone. It is a guard rather than a fix: the module's own
+     arithmetic still wants correcting, and this file should not be the place
+     that happens. But a guard whose violation is provable is worth having
+     regardless of who fixes the cause. */
+  function muscleBound(rig, keys) {
+    if (!GK.muscle || !GK.muscle.availableGroups || !GK.muscle._internal) return [];
+    let groups;
+    try { groups = GK.muscle.availableGroups(); } catch (e) { return []; }
+    const bases = keys.map((k) => k.replace(/\.[LR]$/, ''));
+    const sides = keys.map((k) => (/\.[LR]$/.test(k) ? k.slice(-1) : null));
+    const out = [];
+    for (const name in groups) {
+      const g = groups[name];
+      for (let i = 0; i < bases.length; i++) {
+        if (g.touches.indexOf(bases[i]) < 0) continue;
+        for (const side of (sides[i] ? [sides[i]] : ['L', 'R'])) {
+          let st;
+          try { st = GK.muscle._internal.stationsFor(rig, side, g); } catch (e) { continue; }
+          if (!st || !st.stations) continue;
+          for (const q of st.stations) out.push({ c: q.center, r: Math.max(q.a, q.b) });
+        }
+      }
+    }
+    return out;
+  }
+  function boundOf(lb, P, f) {
+    let d = 1e9;
+    for (let i = 0; i < lb.length; i++) {
+      const t = vlen(vsub(P, lb[i].c)) - lb[i].r - f;
+      if (t < d) d = t;
+    }
     return d;
   }
 
@@ -657,6 +799,26 @@
      being marks rather than bulk — they simply do not get a vote on where
      the skin is. */
   const NO_MUSCLE_BULK = [];
+
+  /* AND FOR NOW, NOT THE LIMBS EITHER — a judgement about the state of the
+     muscle module, not about the architecture.
+
+     The layer is meant to give a limb its form, and in principle it does:
+     with it a leg has a thigh swell and a calf belly. In practice its
+     geometry still has holes and phantoms. The thigh's own outline currently
+     runs 218mm wide, 74mm, 180mm within a tenth of its length — a bite taken
+     out of it — because a belly reports itself 144mm from the femur where
+     its widest station there is 24mm, and because the quadriceps group
+     starts 182mm below the top of the femur it declares as its origin.
+     Measured against the alternative, bone-with-measured-epiphyses plus a
+     solved thickness gives a leg with a knee at 345mm and a calf at 396mm
+     and no holes at all; the muscle layer fills that knee back in.
+
+     So the default is the one that reads, and this is one line to flip back
+     the moment those two are fixed. MUSCLE=1 renders with it now, which is
+     how the comparison above was made and how it should be re-made. */
+  let MUSCLE_BULK = false;
+  function useMuscleBulk(v) { MUSCLE_BULK = !!v; return MUSCLE_BULK; }
 
   const KEEP = {
     trunk: (id) => /^(pelvis|[LTC]\d+|clavicle\.[LR]|scapula\.[LR])$/.test(id),
@@ -865,16 +1027,16 @@
       out.push({
         name: 'arm' + S, chain: ['humerus' + S, 'forearm' + S],
         keep: limbKeep(['humerus' + S, 'forearm' + S, 'scapula' + S]),
-        muscleKeys: ['humerus' + S, 'forearm' + S],
+        muscleKeys: MUSCLE_BULK ? ['humerus' + S, 'forearm' + S] : NO_MUSCLE_BULK,
         s0: 0, s1: 1, ns: 30, na: 22,
       });
       out.push({
         name: 'leg' + S, chain: ['femur' + S, 'tibia' + S],
         keep: limbKeep(['femur' + S, 'tibia' + S]),
-        muscleKeys: ['femur' + S, 'tibia' + S],
+        muscleKeys: MUSCLE_BULK ? ['femur' + S, 'tibia' + S] : NO_MUSCLE_BULK,
         s0: 0, s1: 1, ns: 34, na: 24,
       });
-      out.push({ name: 'foot' + S, bone: 'foot' + S, keep: limbKeep([]), muscleKeys: ['foot' + S], s0: -0.50, s1: 1.00, ns: 14, na: 20 });
+      out.push({ name: 'foot' + S, bone: 'foot' + S, keep: limbKeep([]), muscleKeys: MUSCLE_BULK ? ['foot' + S] : NO_MUSCLE_BULK, s0: -0.50, s1: 1.00, ns: 14, na: 20 });
     }
     for (const p of out) {
       p.ring = (s, na) => ringAt(rig, p, s, na === undefined ? p.na : na);
@@ -1071,8 +1233,9 @@
 
   GK.field = {
     smin, sdCapsule, sdSegSE, sdBlobSE, nOffset,
-    boneField, bonesFor, boneRadius, muscleField, volumeField, volumesFor, buildVolumes,
-    fatAt, alongTable, TRUNK_FAT, SOFT_EST, BONE_R, CORE, KEEP, NO_MUSCLE_BULK, stationAtHeight,
+    boneField, bonesFor, boneRadius, boneShape, sdBoneShaft, BONE_FLARE, BONE_ENDS, BONE_BARE, EPI_SOFT,
+    muscleField, muscleBound, volumeField, volumesFor, buildVolumes,
+    useMuscleBulk, fatAt, alongTable, TRUNK_FAT, SOFT_EST, BONE_R, CORE, KEEP, NO_MUSCLE_BULK, stationAtHeight,
     radiusAlong, axisAt, ringAt, trimRange, spineChain, parts, fitFat, SITES,
   };
 })(window.GK = window.GK || {});
