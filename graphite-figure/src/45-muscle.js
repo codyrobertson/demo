@@ -485,13 +485,27 @@
       match: /^PECM[123]$/,
       originBase: 'ground', insertionBase: 'humerus',
       arch: 'convergent', primaryJoint: null, // origin (chest wall) and insertion (humerus) are several joints apart
-      touches: ['trunk', 'humerus'],
+      // 'humerus' deliberately absent — see the note where 'touches' is
+      // read (fieldAt()'s own header) and this file's musclefit report.
+      // A belly running diagonally from the trunk's own axis to the
+      // limb's is real anatomy (pec/lat genuinely bridge the two), but
+      // src/50-field.js's arm ring casts its rays from the ARM's own
+      // straight axis, and a ray from THAT axis can pass close to this
+      // belly's far (trunk) end at a large, direction-dependent radius
+      // completely unrelated to how wide the shoulder actually is —
+      // this project's own rendered test caught it as a bar reaching
+      // far outside the body's own silhouette. Scoped to 'trunk' only,
+      // where the belly's own near (trunk) end is what the ring casts
+      // against, and the far (humeral) end simply is not drawn — a real
+      // loss of a small visible bulge at the armpit, kept small
+      // deliberately rather than risk it again the other direction.
+      touches: ['trunk'],
     },
     latissimus: {
       match: /^LAT[123]$/,
       originBase: 'ground', insertionBase: 'humerus',
       arch: 'convergent', primaryJoint: null,
-      touches: ['trunk', 'humerus'],
+      touches: ['trunk'], // see pectoralis' own comment just above — same reason
     },
     bicepsBrachii: {
       match: /^BIC(long|short)$/,
@@ -673,15 +687,34 @@
       const axis = clavicleAxisRaw(model);
       const alongMm = vdot(rawPoint, axis);
       const perp = vsub(rawPoint, vmul(axis, alongMm));
-      // the perpendicular remainder's own raw x/y/z is what is left once
+      // The perpendicular remainder's own raw x/y/z is what is left once
       // the along-the-bone direction is removed — mapped onto width/depth
       // the same way the vertical bones are (raw z-ish -> width, raw x-ish
-      // -> depth), which for a roughly-horizontal bone is a pragmatic
-      // carry-over rather than a re-derived, independently-checked
-      // correspondence the way restFrame()'s bones are; kept small by
-      // construction (it is a perpendicular residual, not the bone's own
-      // 137mm length), which is what actually matters for a proxy offset.
-      return { kind: 'fraction', along: alongMm / L, width: vdot(perp, [0, 0, 1]) / L, depth: vdot(perp, [1, 0, 0]) / L };
+      // -> depth), a pragmatic carry-over rather than a re-derived,
+      // independently-checked correspondence the way restFrame()'s bones
+      // are. NOT small by construction, and it matters which: deltoid's
+      // clavicle point is genuinely close to the clavicle, and this
+      // formula places it correctly. Pectoralis' and latissimus' points
+      // arrive here via groundToClavicle() — 'ground' is this arm-only
+      // model's fixed-world frame, and a real latissimus origin is on the
+      // LUMBAR spine, hundreds of millimetres from the clavicle in that
+      // frame; the perpendicular residual for it is genuinely that large,
+      // not an error to be trusted at face value the way deltoid's is.
+      // Clamped rather than trusted raw: this project's own testing
+      // caught the unclamped version as a belly extending far outside the
+      // body's own silhouette (a lumpy horizontal bar off the shoulder).
+      // The honest fix is a dedicated spine-level anchor for pectoralis
+      // and latissimus' own broad, distant origin, matching how trapezius
+      // and the abdominal mass are already anchored (UPPER_EST /
+      // groupsTable()'s own abdominal entry) — not implemented here for
+      // lack of time; this clamp is the stopgap that keeps the belly from
+      // leaving its own body while that is still true.
+      const FRAC_CAP = 0.55;
+      return {
+        kind: 'fraction', along: clamp(alongMm / L, -0.15, 1.15),
+        width: clamp(vdot(perp, [0, 0, 1]) / L, -FRAC_CAP, FRAC_CAP),
+        depth: clamp(vdot(perp, [1, 0, 0]) / L, -FRAC_CAP, FRAC_CAP),
+      };
     }
     const anat = [rawPoint[1], -rawPoint[2], rawPoint[0]]; // (superior, left, anterior)
     return { kind: 'local', vecR: unapply(restFrame(boneBase + '.R'), anat) };
@@ -976,12 +1009,46 @@
   const GROUP_NAMES = ['deltoid', 'pectoralis', 'latissimus', 'trapezius', 'abdominal',
     'gluteal', 'quadriceps', 'hamstrings', 'tricepsSurae', 'bicepsBrachii', 'tricepsBrachii', 'forearmMass'];
 
+  /**
+   * pectoralis' and latissimus' origins are re-based from MoBL-ARMS's
+   * 'ground' body (see groundToClavicle()'s own comment: this is an arm-
+   * only model, so a chest-wall or lumbar-spine origin is fixed straight
+   * to its world frame rather than to any body on the arm). Treating that
+   * as a small offset from the clavicle — which localVectorFor()'s
+   * FRACTION_BONES path does for every OTHER clavicle/scapula anchor —
+   * is wrong specifically here: a real latissimus origin is on the LUMBAR
+   * spine, hundreds of millimetres from the clavicle, and even clamped
+   * (see localVectorFor()'s own comment) that measured-but-misapplied
+   * point still read as a belly reaching out past the shoulder — this
+   * project's own rendered test caught it as a lumpy bar outside the
+   * body's own silhouette. So the origin is overridden here to a plain
+   * skeletal-landmark offset, same discipline and same shape as
+   * trapezius/the abdominal mass just below: EST, one line of anatomical
+   * reasoning each, not a measurement. Only the ORIGIN changes — the
+   * INSERTION (on the humerus) and the VOLUME (bodyparts3d) stay exactly
+   * as measured, and are most of what shapes the swept belly anyway.
+   */
+  function fixChestBackOrigins(upper) {
+    upper.pectoralis.origin = {
+      // EST: mid-sternum, T3-ish — pec major's clavicular and upper
+      // sternocostal fibres both converge roughly here.
+      frameBone: 'T3', refBone: 'T3', refIsB: false, localMm: () => [0, 0, 95],
+    };
+    upper.latissimus.origin = {
+      // EST: T9-ish, at the back — the real origin (thoracolumbar fascia,
+      // T7 down to the iliac crest) has no single point; this is the
+      // least-arbitrary one-vertebra stand-in for that span's own centroid.
+      frameBone: 'T9', refBone: 'T9', refIsB: false, localMm: () => [0, 0, -55],
+    };
+  }
+
   let TABLE = null;
   function groupsTable() {
     if (TABLE) return TABLE;
     const lower = deriveLower();
     fixPelvisOrigins(lower, GK.osim.model);
     const upper = deriveUpper();
+    fixChestBackOrigins(upper);
     const out = Object.assign({}, lower, upper);
 
     // abdominal has no separate anchor topology above (its own origin and
