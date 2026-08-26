@@ -19,18 +19,7 @@
    ten millimetres on a lean adult. Everything far above that is the muscle
    the model does not have yet, stated in millimetres. */
 'use strict';
-global.window = {};
-const path = require('path');
-const HAND = '/home/user/demo/graphite-kinematics';
-const HERE = path.join(__dirname, '..');
-['00-math', '10-anatomy', '20-rig', '30-pose'].forEach(f => require(path.join(HAND, 'src', f + '.js')));
-for (const f of ['00-refdata', '00-anthro', '10-skeleton', '30-limits', '20-build', '40-surface', '45-muscle', '50-field']) {
-  try { require(path.join(HERE, 'src', f + '.js')); } catch (e) {
-    if (e.code !== 'MODULE_NOT_FOUND' || e.message.indexOf(f) < 0) throw e;
-  }
-}
-const G = window.GK;
-G.anthro.useModel(require(path.join(HERE, 'data', 'ansur-model.json')));
+const G = require('./load.js')();
 
 const N = parseInt(process.argv[2] || '200');
 const SEED0 = parseInt(process.argv[3] || '1');

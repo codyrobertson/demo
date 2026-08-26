@@ -11,26 +11,10 @@
    src/50-field.js rather than here, because the parts of a body and the
    scope of each part's field are facts about the body, not about this tool. */
 'use strict';
-global.window = {};
+const G = require('./load.js')();
 const path = require('path');
-const HAND = '/home/user/demo/graphite-kinematics';
-const HERE = path.join(__dirname, '..');
-['00-math', '10-anatomy', '20-rig', '30-pose', '40-pencil', '50-features', '55-dorsal', '60-render']
-  .forEach(f => require(path.join(HAND, 'src', f + '.js')));
-// 45-muscle is optional and loaded if it is there: the field asks GK.muscle
-// for its layer and gets 1e9 when nobody answers, so a body with no muscle
-// module draws as skeleton plus fat and looks like it.
-const FIG = ['00-refdata', '00-anthro', '05-trace', '10-skeleton', '30-limits', '20-build', '40-surface', '45-muscle', '50-field'];
-for (const f of FIG) {
-  const p = path.join(HERE, 'src', f + '.js');
-  try { require(p); } catch (e) {
-    if (e.code !== 'MODULE_NOT_FOUND' || e.message.indexOf(f) < 0) throw e;
-  }
-}
-const writePNG = require(path.join(HAND, 'tools', 'png.js'));
-
-const G = window.GK, M = G.math, DEG = M.DEG, RE = G.render, PEN = G.pencil;
-G.anthro.useModel(require(path.join(HERE, 'data', 'ansur-model.json')));
+const M = G.math, DEG = M.DEG, RE = G.render, PEN = G.pencil;
+const writePNG = require('/home/user/demo/graphite-kinematics/tools/png.js');
 
 const a = process.argv.slice(2);
 const seed = parseInt(a[0] || '12345');

@@ -9,21 +9,9 @@
    limb pointing the wrong way, a chain rotating about the wrong axis, or a
    joint sitting somewhere no joint goes. */
 'use strict';
-global.window = {};
-const path = require('path');
-const HAND = '/home/user/demo/graphite-kinematics';
-const HERE = path.join(__dirname, '..');
-// Order matters: each of these captures the namespaces below it at load
-// time, so 20-rig.js reaching for GK.anatomy before 10-anatomy.js has run
-// leaves it holding undefined and the failure surfaces much later, inside
-// solve(), as a missing constant.
-['00-math', '10-anatomy', '20-rig', '30-pose']
-  .forEach(f => require(path.join(HAND, 'src', f + '.js')));
-['00-refdata', '00-anthro', '10-skeleton', '30-limits', '20-build'].forEach(f => require(path.join(HERE, 'src', f + '.js')));
-window.GK.anthro.useModel(require(path.join(HERE, 'data', 'ansur-model.json')));
-const writePNG = require(path.join(HAND, 'tools', 'png.js'));
-
-const G = window.GK, M = G.math, DEG = M.DEG;
+const G = require('./load.js')();
+const writePNG = require('/home/user/demo/graphite-kinematics/tools/png.js');
+const M = G.math, DEG = M.DEG;
 const a = process.argv.slice(2);
 const seed = parseInt(a[0] || '12345');
 const az = parseFloat(a[1] || '0') * DEG;

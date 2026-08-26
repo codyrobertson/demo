@@ -13,16 +13,7 @@
    than a filter — the residuals it finds are systematic, not per-sample, so
    rejecting samples would hide a modelling error instead of fixing it. */
 'use strict';
-global.window = {};
-const path = require('path');
-const HAND = '/home/user/demo/graphite-kinematics';
-const HERE = path.join(__dirname, '..');
-['00-math', '10-anatomy', '20-rig', '30-pose']
-  .forEach(f => require(path.join(HAND, 'src', f + '.js')));
-['00-refdata', '00-anthro', '10-skeleton', '30-limits', '20-build']
-  .forEach(f => require(path.join(HERE, 'src', f + '.js')));
-const G = window.GK;
-G.anthro.useModel(require(path.join(HERE, 'data', 'ansur-model.json')));
+const G = require('./load.js')();
 
 const N = parseInt(process.argv[2] || '400');
 
