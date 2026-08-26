@@ -15,63 +15,97 @@
 'use strict';
 (function (GK) {
   const M = GK.math;
-  const { vadd, vsub, vmul, vmad, vnorm, lerp, clamp01 } = M;
+  const { vadd, vsub, vmul, vmad, vdot, vnorm, lerp, clamp01 } = M;
 
   GK.field.registerVolumes('head', (ctx) => {
     const { rig, fig, m, g, put, vertR, smin, smax, sdSegSE, sdBlobSE,
       frameAlong, exponentFor, CORE } = ctx;
 // ---- the head --------------------------------------------------------
-/* A HEAD IS ONE SECTION CHANGING, NOT TWO SOLIDS MEETING.
-   Two earlier versions got this wrong in opposite directions. The first
-   was a single superellipsoid on head length, breadth and height: the
-   right size and a featureless egg, because a head does not read as a
-   head by being the right size. The second was a braincase plus a
-   separate jaw, which read as two balls on a stalk however much fascia
-   was thrown at the join — a step in depth of thirty millimetres between
-   two closed forms is a step, and smoothing it only rounds the corner.
+/* A HEAD IS A SET OF PLANES, NOT A SECTION CHANGING. FOURTH PASS.
+   Three earlier versions, three different failures.
 
-   What a head actually is, going down: a vault that is nearly spherical,
-   widest at the brow, narrowing below the cheekbone, and leaning FORWARD
-   the whole way, so the chin ends up well anterior of the ear and a
-   little behind the brow. That is one section changing along one axis,
-   which is the same construction the ribcage uses, and it gives a jaw
-   without ever building one.
+   The first was a single superellipsoid on head length, breadth and
+   height: the right size and a featureless egg. The second was a
+   braincase plus a separate jaw, which read as two balls on a stalk
+   however much fascia was thrown at the join. The third — the one this
+   replaces — fixed both of those the same way, by making the head ONE
+   section changing along one axis: a vault leaning forward the whole
+   way down to a chin, the same construction the ribcage uses. Against a
+   silhouette it worked. Against the review sheet it did not: "scuffed,"
+   and the direction given was "more planar like Asaro." A render of
+   that version, head only, three-quarter, showed exactly why — the
+   brow ridge and the cheekbone were each a separate rounded capsule
+   glued onto a smooth stack, and at portrait scale a glued-on capsule
+   reads as a cap brim, not as bone. Every added feature had its own
+   silhouette edge, so the underlying mass itself was still a melon and
+   the features were lumps on it. Smooth curvature has no edge for a
+   shadow to stop at — it oozes from light to dark across the whole
+   form — and that is what "scuffed" was a verdict on.
 
-   Every width and depth here is a fraction of a measured number — head
-   breadth, head length, bizygomatic breadth — and every height is a
-   fraction of a measured one, tragion-to-vertex above and menton-to-
-   sellion below. The fractions themselves are EST: they are the shape of
-   a head, and no tape measures those.
+   The Asaro planes-of-the-head construction fixes this at the root
+   because it does not add features to a round mass, it builds the mass
+   FROM flat planes: forehead, brow shelf, temple, cheek, jaw, occiput,
+   crown, each one a half-space, and the head is where they all
+   intersect. A shadow terminates where two planes meet — a plane edge,
+   not a gradient — because the normal is piecewise-near-constant on
+   each facet and jumps at the boundary between them. That is the one
+   property a smooth section stack cannot have at any exponent: raising
+   a superellipse's n flattens a facet's MIDDLE but the curvature has to
+   go somewhere, and it piles up at the facet's edge instead of
+   vanishing, which is a rounded-off corner, not a break.
 
-   THIRD PASS, against a review sheet rather than a silhouette. The stack
-   above rendered a believable SIZE from every angle and a caricature from
-   every one of them too: a hooded egg, not a skull. Three things were
-   wrong with the numbers rather than the idea.
+   THE CONSTRUCTION: every plane is a half-space, dot(P-A, n) for a
+   point A on the plane and an outward unit normal n. The planes combine
+   by smooth intersection (smax, k = 4-5mm — crisp enough to read as an
+   edge, soft enough not to alias at pencil scale) into one convex-ish
+   polytope, which is then smax'd against a single bounding ellipsoid
+   sized from the SAME measured numbers the old stack used. That last
+   step is not decoration: two planes meeting at a shallow corner can
+   reach further from the axis along their shared diagonal than either
+   one does along its own normal — a cube's corner is out at its
+   half-width times root 3, not root 1 — and nothing about a chain of
+   smax operations stops that on its own. The ellipsoid is what stops
+   it, on every diagonal at once, without having to reason about which
+   pair of planes might be the offending one.
 
-   First, the width table narrowed almost a third by the time it was a
-   third of the way up from the brow (0.93 of full breadth, then 0.78),
-   which is what a narrowing cone does and not what a cranium does. A
-   parietal stays close to its own widest breadth for most of the vault's
-   height and only gives it up in the top quarter. Second, the forward-
-   offset table was positive at every single station, brow to vertex —
-   the whole vault leaning the SAME way the face does — so there was
-   nowhere for the skull to be wider behind the ear than in front of it,
-   which is the entire definition of an occiput. And third, the two end
-   stations were given a fixed fraction of the measured span (0.93 of
-   tragion-to-vertex, 0.90 of menton-to-sellion) and then a rounding cap
-   ON TOP of that, so the actual vertex came out 7-10% past the measured
-   one — a figure quietly taller in the skull than its own stature said.
+   THIS IS ALSO WHY THE OLD FAILURES DO NOT COME BACK, structurally
+   rather than by discipline. The two-balls failure (construction #2)
+   was two closed solids meeting across a step; this is one solid, the
+   intersection of everything at once, so there is no second solid to
+   meet. The end-cap pinch (construction #3, see the archived stack
+   logic this replaces) was two free ends of a chain each needing an
+   explicit axial cap or the smin between neighbouring segments bulged;
+   a polytope has no free ends — every direction is already bounded by
+   SOME plane or by the envelope ellipsoid, so the vertex and the chin
+   are just two more facets, not special cases.
 
-   All three are fixed the same way: by computing rather than guessing
-   the quantity that was wrong. The width table now stays above 0.9 of
-   full breadth for four of its seven above-brow stations. The offset
-   table is DRAWN, not signed uniformly — it rises through the face,
-   peaks near the brow, and is negative for the whole upper vault, which
-   is what puts the most-posterior point of the skull at ear height
-   rather than at the crown and gives the crown itself room to recede
-   into a forehead. And the two end stations solve for their own height
-   given their own cap, so tragion-to-vertex and menton-to-sellion are
-   hit on the nose rather than overshot. */
+   THE THREE BREAKS THAT MATTER MOST, in the order they matter: the
+   zygomatic ridge (front cheek plane meets side cheek plane, running
+   from the outer orbit back toward the ear — this is the edge a
+   drawing lives or dies on in three-quarter light); the brow-to-temple
+   corner (forehead/brow meets the temple's near-vertical side); the
+   jaw line (ramus meets the underside). All three are CONVEX edges —
+   the surface pokes outward along them, both adjoining planes receding
+   away — which is exactly the case smax-of-half-spaces produces for
+   free at every plane-to-plane join. Concavities are a different
+   problem and stay a different technique: the eye sockets and the
+   nose-root notch are still cuts (smax against a negative blob), the
+   same mechanism as before and proven safe already.
+
+   THE STAR-SHAPE CONSTRAINT, and why this construction respects it
+   without having to be told to. radiusAlong root-finds outward from
+   the head's own axis, one straight ray per (station, angle) — so
+   every surface point has to be reachable by walking out from the axis
+   without the field going outside-inside-outside along the way. A
+   half-space is trivially star-shaped from any point on its inner
+   side. An intersection of half-spaces is star-shaped from any point
+   in the intersection, because the whole region is convex. Smax
+   softens the corners but does not introduce concavity at the scale
+   k=4-5mm sits against a head sized in centimetres. So the entire core
+   mass is safe by construction, and the only places that need the same
+   "small negative breaks are fine" reasoning the eye sockets already
+   relied on are the handful of actual cuts — there are no more of them
+   than there were before. */
 {
   const sk = rig.bones.skull;
   if (sk) {
@@ -87,7 +121,6 @@
     const cy = CORE.head * m.headbreadth * 0.5;
     const cz = CORE.head * m.headlength * 0.5;
     const zy = CORE.head * m.bizygomaticbreadth * 0.5;
-    const n = exponentFor(cz, cy, CORE.head * m.headcircumference);
 
     /* THE CANON. Four numbers a life-drawing manual states as fact and
        ANSUR has no landmark for, because they are ratios between OTHER
@@ -98,259 +131,427 @@
        "thirds"); the ears run from the brow line to the nose base; the
        mouth sits a third of the way up from the chin to the nose base.
        Encoding them as formulas rather than as separately-tuned station
-       heights is what makes them checkable — the self-test recomputes the
-       same four ratios from the rendered geometry and they either hold or
-       they don't, on every seed, rather than being a claim about the
-       numbers below that nobody re-derives.
+       heights is what makes them checkable, and it is also what let this
+       whole rebuild swap the mass underneath them for a different
+       construction without touching a single one of these four lines —
+       they are ratios between OTHER canon heights and the two measured
+       spans, not positions on the old stack, so they carried over intact.
 
        browH is NOT put at 0.16 * up, tempting as that is — SITES has
        head circumference sampled at exactly s=0.16 of tragion-to-vertex
        (50-field.js, read-only here), and putting the brow there too
        looked like one fewer place for two numbers to silently disagree.
        It is the opposite: the ear's canon span runs from browH down to
-       noseBaseH, so browH is also the ear's own top, and sdSegSE's
-       t = project(P, A, B) means a horizontal ring exactly AT that
-       height cuts through the ear near its full cross-section rather
-       than its tapered tip — the tilt means the ear is still close to
-       full width at points that project to t=1, not just beyond it.
-       With the two heights equal, fitFat measured the ear's girth
-       instead of the skull's at every seed alike (not a one-off
-       coincidence — the two numbers are both fixed fractions of up, so
-       either they always collide or never do) and solved for far too
-       little soft tissue: 5 of 6 seeds failed girthcheck against 1
-       before this file was touched. Keeping the two heights apart by
-       more than the ear's own cap radius (cy*0.10, about a centimetre)
-       is the right idea, and how far apart took three tries to find
-       empirically rather than by computing it, because the collision is
-       through a projection (sdSegSE's t = project(P, A, B) on the ear's
-       TILTED axis) rather than a plain distance: 0.16 * up (equal, the
-       original idea) failed 5 of 6 seeds; 0.10 * up (6-9mm of headroom)
-       still failed 2; 0.05 * up (11-13mm) cleared girthcheck but sits
-       at or below eyeH on some bodies, which is a brow below the eye it
-       sits over. 0.08 * up is the value that both passes girthcheck (1
-       of 6, matching the count before this file was touched — see
-       tools/girthcheck.js) and stays visibly above eyeH on all three
-       test seeds. */
+       noseBaseH, so browH is also the ear's own top. With the two
+       heights equal, fitFat measured the ear's girth instead of the
+       skull's at every seed alike and solved for far too little soft
+       tissue: 5 of 6 seeds failed girthcheck against 1 before this file
+       was touched. 0.08 * up is the value that both passes girthcheck (1
+       of 6, matching the count before this file was touched) and stays
+       visibly above eyeH on all three test seeds — found empirically
+       across three tries because the collision is through sdSegSE's own
+       t = project(P, A, B) on the ear's tilted axis, not a plain
+       distance, and this rebuild changes nothing about the ear's axis or
+       the sampling site it was tuned against, so the number did not need
+       re-deriving. */
     const browH = up * 0.08;
     const eyeH = (up - dn) * 0.5;                    // canon: mid vertex-to-chin
     const noseBaseH = (browH - dn) * 0.5;            // canon: halfway brow-to-chin
     const mouthH = -dn + (noseBaseH + dn) / 3;        // canon: a third up from chin
 
-    /* height above the tragion | half-breadth | half-depth | how far the
-       section's own centre sits forward of the ear (negative: behind it).
+    /* THE SIZE BUDGET, and this is the one place the numbers here were
+       genuinely SOLVED rather than reasoned to, because two effects push
+       against each other in a way hand arithmetic kept getting wrong by
+       a factor of two or three.
 
-       The two end stations solve their own height so the CAP lands on the
-       measured number instead of past it — see the note above. Interior
-       heights are plain fractions of up/dn, which is what they always
-       were; only the fractions changed. */
-    const capTop = () => Math.min(cy * 0.34, cz * 0.30) * 0.9;
-    // NOT *0.9 here — see the note below on why the chin needs the looser
-    // of the two.
-    const capBot = () => Math.min(zy * 0.50, cz * 0.44);
-    const ST = [
-      [up - capTop(), cy * 0.34, cz * 0.30, -cz * 0.06],  // vertex
-      [up * 0.68, cy * 0.62, cz * 0.52, -cz * 0.05],
-      [up * 0.52, cy * 0.86, cz * 0.74, -cz * 0.02],
-      [up * 0.34, cy * 0.99, cz * 1.00, cz * 0.05],   // occiput: widest AND deepest
-      [browH, cy * 0.97, cz * 0.92, cz * 0.14],       // brow: widest at face height
-      [-dn * 0.14, zy * 1.00, cz * 0.86, cz * 0.20],  // cheekbone, at its own measure
-      [-dn * 0.58, zy * 0.76, cz * 0.62, cz * 0.30],  // the angle of the jaw
-      /* chin. A first cut here narrowed hard (zy*0.42, against the jaw's
-         0.76) AND pushed forward hard (offset cz*0.42) in the same short
-         segment, which is a cone by construction — a shape that shrinks
-         in cross-section and reaches further along its axis at the same
-         end is a point, whatever it's called. It rendered as one, in
-         profile, on every seed. Narrowing less (0.50) and reaching less
-         (0.36 — the rest of the forward reach a real chin has comes from
-         the boss below, which can be round about it in a way one more
-         tapering stack station cannot) keeps this station a plausible
-         jaw cross-section rather than a nose cast in the wrong place. */
-      [-(dn - capBot()), zy * 0.50, cz * 0.44, cz * 0.36],  // chin
-    ];
-    const at = (st) => vmad(vmad(sk.A, fr[0], st[0]), fr[2], st[3]);
-    for (let i = 0; i < ST.length - 1; i++) {
-      const a0 = ST[i], a1 = ST[i + 1];
-      const A = at(a0), B = at(a1);
-      // Caps only at the two ends of the whole stack; in between the
-      // segments overlap and a cap would show as a bulge inside the head.
-      const cap = i === 0 ? Math.min(a0[1], a0[2]) * 0.9
-        : i === ST.length - 2 ? Math.min(a1[1], a1[2]) * 0.9 : undefined;
-      put('head', (P, f) => sdSegSE(P, A, B, fr, a0[1], a0[2], a1[1], a1[2], n, cap, f));
+       The first effect is the one the brief for this rebuild predicted:
+       every plane is grown outward by `f`, the solved scalp thickness,
+       and the vertex and chin are each capped by a plane whose normal
+       has a vertical component, so a core that exactly spans measured
+       vertex-to-chin comes out taller once the scalp is added — pulling
+       the top and bottom stations in by roughly `f` before the scalp
+       goes back on is the right shape of fix.
+
+       The second effect is not one a smooth section stack has at all,
+       and it is BIGGER than the first: a faceted polytope's cross-section
+       at any one height has less perimeter than a smooth superellipse
+       covering the same reach (that is the whole point of facets — a
+       hexagon inscribed in a circle is shorter around than the circle),
+       so fitFat's bisection has to solve for a THICKER scalp to hit the
+       same measured circumference than the old smooth stack ever needed
+       — 15-20mm on the first working version of this file, not the ~7mm
+       the smooth stack (and this rebuild's own header) expected. Most of
+       that gap turned out to be a bug, not a property of planar
+       construction: the chin bevels (below) had no height falloff at
+       all and were quietly clipping a corner out of the ring at the
+       girth-check site, up near the temple. Fixing that brought the
+       solved scalp down to 7-13mm, close to what a smooth head needs —
+       but not all the way, and the residual is the honest cost of facets
+       having less perimeter per unit reach than curves do.
+
+       Both effects together are why TOP_MARGIN and BOT_MARGIN below are
+       NEGATIVE: the core is told to overshoot the measured vertex and
+       chin by a few millimetres before the scalp is added, not undershoot
+       them. Solved empirically against tools/proportions.js across eight
+       bodies, because the two effects above do not move in step across
+       different heads (a body with a longer face needed a different
+       balance than a shorter one) and no single clean formula in up, dn,
+       cy or cz reproduced the right answer for both the tallest and the
+       shortest body in the sample at once — the value below is the
+       compromise that clears the most checks across all eight, not a
+       number with a closed-form derivation behind it. */
+    const TOP_MARGIN = -3.5, BOT_MARGIN = -3.5;   // EST, solved against tools/proportions.js — see above
+    const vertexH = up - TOP_MARGIN;
+    const chinH = -dn + BOT_MARGIN;
+    const parietalH = up * 0.50;             // EST: where the skull is at its true widest
+    const zygoH = lerp(noseBaseH, eyeH, 0.40);  // EST: cheekbone height, below the orbit
+    const jawH = lerp(chinH, mouthH, 0.50);     // EST: the angle of the jaw
+    // the ear's own canon span is browH to noseBaseH (see above), so its
+    // mid-height is the "ear height" the occiput's most-posterior ridge is
+    // specified against
+    const occiputH = (browH + noseBaseH) * 0.5;
+
+    const U = fr[0], L = fr[1], F = fr[2];
+    const Un = vmul(U, -1), Fn = vmul(F, -1);
+    const RAD = Math.PI / 180;
+    // A normal built by leaning a cardinal direction toward a second one,
+    // by an angle in degrees. base and toward must be unit and mutually
+    // perpendicular (true of every U/L/F combination here), which is what
+    // lets `base + toward*tan(deg)` normalise into an exact-angle tilt
+    // without carrying sin/cos through every call site.
+    const tilt = (base, toward, deg) => vnorm(vadd(base, vmul(toward, Math.tan(deg * RAD))));
+    // two-way lean: a plane whose primary direction gets pulled toward TWO
+    // neighbours at once (a diagonal facet, like a chin bevel, that also
+    // has to fade out with height rather than reaching all the way up the
+    // face at full strength — see the note by PLANES below on why every
+    // paired side plane needs at least one U-leaning component)
+    const tilt2 = (base, t1, d1, t2, d2) =>
+      vnorm(vadd(vadd(base, vmul(t1, Math.tan(d1 * RAD))), vmul(t2, Math.tan(d2 * RAD))));
+    const pt = (h, y, z) => vmad(vmad(vmad(sk.A, U, h), L, y), F, z);
+    const pdist = (P, A, n, f) => vdot(vsub(P, A), n) - (f || 0);
+
+    /* THE PLANES. Each is one half-space: a point on the plane (a canon
+       height, a lateral offset as a fraction of the measured half-
+       breadths, a forward or backward offset as a fraction of the
+       measured half-depth) and an outward normal, built by tilting a
+       cardinal direction toward a neighbour by an EST angle. The angle
+       is what a life-drawing plane reference gives that facet; nothing
+       in ANSUR measures a facet's own tilt, the same honesty the ear's
+       15° already had.
+
+       Heights and offsets share the SAME variables the old stack used
+       (cy, cz, zy, browH, eyeH, noseBaseH, mouthH) for the same reason:
+       they are the measured numbers, and a construction that used
+       different ones would be re-guessing a body this file already
+       knows precisely. */
+    const K = 5;       // EST: plane-to-plane smax radius — crisp break, no alias
+    const K_ENV = 6;    // EST: slightly softer where the envelope ellipsoid catches a corner
+
+    const PLANES = [];
+    const addPlane = (h, y, z, base, toward, deg) =>
+      PLANES.push({ A: pt(h, y, z), n: tilt(base, toward, deg) });
+    const addPlane2 = (h, y, z, base, t1, d1, t2, d2) =>
+      PLANES.push({ A: pt(h, y, z), n: tilt2(base, t1, d1, t2, d2) });
+
+    // ---- front group, midline -----------------------------------------
+    // forehead: tilted back so it recedes toward the crown — EST 12°, the
+    // shallow end of the 10-15° a planes-of-the-head reference gives it
+    addPlane(browH, 0, cz * 0.93, F, U, 12);
+    // brow shelf: the underside, receding DOWN into the socket — the
+    // opposite tilt direction from the forehead sharing almost the same
+    // anchor is what puts a projecting ridge exactly at browH, which is
+    // the supraorbital ridge a life-drawing reference calls out by name
+    addPlane(browH, 0, cz * 0.95, F, Un, 20);
+    // muzzle/mouth plane: sets back a little from the cheek toward the
+    // mouth ring, EST 6° — shallow, because the lips themselves (below)
+    // are what supplies the mouth's own local projection, not this plane
+    addPlane(mouthH, 0, cz * 0.78, F, Un, 6);
+    // chin front pad: forward of the muzzle plane again (a real profile's
+    // brow-nose-lips-chin undulation), nearly vertical
+    addPlane(chinH, 0, cz * 0.90, F, Un, 6);
+    // the crown's flat top facet — pure +U, no tilt: this single line is
+    // what used to be the vault's own explicit end cap (capTop()) in the
+    // old stack. A polytope needs no special case for a free end because
+    // every direction is already some plane's inside, so this facet is
+    // just one more entry rather than a different code path
+    addPlane(vertexH, 0, 0, U, F, 0);
+    // upper + lower occiput, meeting at the most-posterior ridge — the
+    // instruction is "at ear height, as now", and the ear's own canon
+    // span is centred at occiputH, so that is where the ridge is put
+    addPlane(occiputH, 0, -cz * 0.83, Fn, U, 22);
+    addPlane(occiputH, 0, -cz * 0.83, Fn, Un, 16);
+    // jaw underside, from under the chin back toward the throat: the
+    // floor rises going backward, which both caps the chin's own bottom
+    // (replacing the old stack's capBot()) and gives the underside its
+    // slope toward the neck
+    addPlane(chinH, 0, cz * 0.50, Un, Fn, 24);
+
+    // ---- paired: side group + the paired front/crown facets -----------
+    for (const sgn of [1, -1]) {
+      const side = vmul(L, sgn);
+      // crown side facets, doming over from the flat top — 2 of the "2-3
+      // crown facets": the flat top above plus these two account for all
+      // three without needing a fourth, since the top facet already
+      // supplies the third
+      addPlane(vertexH, sgn * cy * 0.30, 0, U, side, 27);
+      // parietal: the skull's true widest point, nearly vertical, easing
+      // inward toward the crown above it
+      addPlane(parietalH, sgn * cy * 1.10, cz * 0.30, side, U, 6);
+      // temple: flat, near-vertical, easing in toward the crown the same
+      // way the parietal does, at a narrower base offset than it
+      addPlane(browH, sgn * cy * 1.06, cz * 0.45, side, U, 3);
+      // front cheek: below the orbit, tilting back down toward the mouth
+      // ring — meets the side cheek plane below at the zygomatic ridge,
+      // the single most important break this file draws
+      addPlane(zygoH, sgn * cy * 0.36, cz * 0.85, F, Un, 9);
+      // side of the cheek, below the zygomatic arch, easing inward toward
+      // the jaw
+      addPlane(zygoH, sgn * zy * 0.82, cz * 0.40, side, Un, 11);
+      // jaw ramus
+      addPlane(jawH, sgn * zy * 0.68, cz * 0.35, side, Un, 8);
+      // the two chin bevels: the front pad's own corners, turned to face
+      // diagonally forward-and-out rather than left unrounded. Also leaned
+      // toward -U (fades out going up) — without that second lean this
+      // plane has no height component AT ALL (pure F/L blend), so it does
+      // not stay confined near the chin the way its anchor implies: left
+      // as a single tilt it reached all the way up to the temple/forehead
+      // ring at full strength and clipped a corner out of it, which is
+      // what the girth solve read as ~78mm of missing bare circumference
+      // at the head's own fitFat site and answered with a 15-20mm scalp
+      // instead of the ~7mm a properly local bevel needs. Every OTHER
+      // paired side plane already leans toward U or away from it for
+      // exactly this reason (see parietal, temple, side cheek, ramus); the
+      // chin bevel was the one built without checking that it did too.
+      addPlane2(chinH, sgn * zy * 0.20, cz * 0.80, F, side, 38, Un, 26);
     }
+
+    /* THE ENVELOPE. A single ellipsoid, meant to catch the diagonal
+       corners a chain of half-space intersections leaves unbounded (a
+       cube's corner is out at its half-width times root 3, not root 1)
+       without having to reason about which pair of planes is the
+       offending one — see the header note. That is a smaller job than it
+       first looks: this rebuild's actual tuning found the ellipsoid
+       matters far less than the planes themselves for where the drawn
+       surface ends up, and sized tight it actively works AGAINST the
+       planes rather than only backstopping them. An ellipsoid's own
+       reach falls off away from each of its three pure axes (an ellipse
+       gives up width to gain height, off-axis, by the shape of its own
+       equation), and the head's own girth site sits well off the polar
+       axis — high enough to be past the chin, off-centre enough to be
+       most of the way to the temple. A tight ellipsoid intersected there
+       quietly ate width the individual planes were never asked to give
+       up, which is what a bare (unscalped) ring at that site measuring
+       80mm short of CORE.head's own target circumference turned out to
+       be — not the planes being too narrow, the ellipsoid choking the
+       ring between them. Sized generously instead (comfortably over
+       every paired plane's own offset, on every axis), it does the one
+       job it is for — the true diagonal corners, mostly near the crown
+       and the chin-bevel corners — without competing with the planes for
+       the ordinary width and depth of the head. n=2, a true ellipsoid
+       rather than a superellipse, so what corner-rounding it does add is
+       predictable. */
+    const envAx = (vertexH - chinH) * 0.5 * 1.10;
+    const envAy = cy * 1.22;
+    const envAz = cz * 1.22;
+    const envC = pt((vertexH + chinH) * 0.5, 0, -cz * 0.02);
+
+    const coreSdf = (P, f) => {
+      let d = pdist(P, PLANES[0].A, PLANES[0].n, f);
+      for (let i = 1; i < PLANES.length; i++) d = smax(d, pdist(P, PLANES[i].A, PLANES[i].n, f), K);
+      return smax(d, sdBlobSE(P, envC, fr, envAx, envAy, envAz, 2, f), K_ENV);
+    };
+    put('head', coreSdf);
 
     /* THE NOSE. In profile it is the most identifying thing on a head,
        and it is the one part of a face that is a FORM rather than a mark:
-       no amount of line work on a smooth face plane produces it, because
+       no amount of line work on a flat face plane produces it, because
        what a nose does is break the silhouette. ANSUR measures nothing
        about it — menton-to-sellion reaches its root and stops — so every
        number here is EST, anchored to the head depth that IS measured.
 
-       A WEDGE, NOT A BUMP — which failed twice. First as a symmetric
-       capsule bulging most at its own midpoint: it receded at both ends,
-       and a real nose does not recede at the tip. Fixed by making the
-       three points a RAMP instead of an arch: root, tip and base project
-       further forward in that order so the surface keeps climbing until
-       the tip and only turns back after it, with a flatter exponent
-       (2.6, against the 2.2 everything round elsewhere uses) so it reads
-       as two faces meeting at a ridge rather than a rounded pipe.
+       Still a WEDGE built from the same root/tip/base ramp the smooth
+       stack used (root, tip and base project further forward in that
+       order, uncapped in the middle, for the reasons the two paragraphs
+       below record) — that structure is proven and this rebuild does not
+       reopen it. What changes is the cross-section: SHARPENED, with two
+       explicit bevel planes smax'd onto each ramp segment so the bridge
+       reads as a top ridge and two side facets meeting it, the same
+       technique as the head's own planes rather than a rounded capsule.
 
-       Second, more subtly, as a BEAK: root-to-tip and tip-to-base were
-       each given their own explicit cap, which is the right call at a
-       stack's two true free ends (see the vault above) and the wrong one
-       here, because the tip where they meet is not a free end, it is an
-       interior joint — exactly the case the vault's own comment warns
-       about. A cap forces ONE axial thickness across its whole segment,
-       and root and tip are not close to the same size, so root's own
-       small cap, forced onto the tip end too, pinched the bridge to a
-       point and tip's own cap, forced back onto the same point from the
-       other side, pinched it again — two capsule ends rounding toward
-       each other instead of one continuous ridge passing through. Left
-       uncapped, both segments take their axial thickness from their own
-       local width at every point instead of one borrowed value, and the
-       ridge runs through the tip rather than closing on it. */
+       The forward reach also came down hard, from the smooth stack's
+       1.19cz to 1.03cz, as part of the same depth budget the head's own
+       planes are on. Depth is not one proportions.js checks, but the
+       brief's own targets are (drawn depth, nose tip to occiput, <=1.06
+       of headlength), and the nose tip is what a bare-bones budget of
+       "occiput reach plus nose reach plus twice the scalp" spends most
+       of its overshoot on — a faceted core's own bare circumference
+       already needs more solved scalp than a smooth one (see THE SIZE
+       BUDGET above), which eats into the same depth allowance from the
+       other side. Pulling BOTH ends in — the occiput from cz*1.00 to
+       cz*0.83, the nose tip from cz*1.19 to cz*1.03 — is what clears
+       1.06 on every one of seeds 12345/777/4242 without flattening the
+       nose to nothing, which a cut at the tip alone would have done;
+       0.03cz of forward reach beyond the root and base is not a large
+       nose, but it is still visibly one in every render checked.
+
+       THE ROOT/TIP/BASE RAMP, NOT A BUMP — which failed twice, in the
+       stack this replaces. First as a symmetric capsule bulging most at
+       its own midpoint: it receded at both ends, and a real nose does
+       not recede at the tip. Second, more subtly, as a BEAK: root-to-tip
+       and tip-to-base each given their own explicit cap, which pinched
+       the bridge to a point from both sides because the tip where they
+       meet is an interior joint, not a free end. Left uncapped, both
+       segments take their axial thickness from their own local width at
+       every point instead of one borrowed value, and the ridge runs
+       through the tip rather than closing on it. Nothing about
+       sharpening the cross-section touches either of those two facts, so
+       both fixes carry over unchanged. */
     {
       const tipH = lerp(noseBaseH, eyeH, 0.32);
-      const P0 = vmad(vmad(sk.A, fr[0], eyeH), fr[2], cz * 1.00);        // root, at sellion height
-      const P1 = vmad(vmad(sk.A, fr[0], tipH), fr[2], cz * 1.19);        // tip: the most forward point on the head
-      const P2 = vmad(vmad(sk.A, fr[0], noseBaseH), fr[2], cz * 1.06);   // base, at the measured nose-base
-      const f1 = along(P0, P1, fr[1]), f2 = along(P1, P2, fr[1]);
+      const P0 = vmad(vmad(sk.A, U, eyeH), F, cz * 0.96);        // root, at sellion height
+      const P1 = vmad(vmad(sk.A, U, tipH), F, cz * 1.03);        // tip: the most forward point on the head
+      const P2 = vmad(vmad(sk.A, U, noseBaseH), F, cz * 0.98);   // base, at the measured nose-base
+      const f1 = along(P0, P1, L), f2 = along(P1, P2, L);
       const wR = cy * 0.075, wT = cy * 0.15, wB = cy * 0.17;   // EST: root narrow, base flared at the alae
-      put('head', (P, f) => sdSegSE(P, P0, P1, f1, wR, wR * 1.3, wT, wT * 1.05, 2.6, undefined, f));
-      put('head', (P, f) => sdSegSE(P, P1, P2, f2, wT, wT * 1.05, wB, wB * 1.25, 2.6, undefined, f));
+      const NK = 4;    // EST: tighter than the head's own K — a nose bridge is a small form
+      const bevel = (P, A, fseg, half, deg, f) => {
+        const core = sdSegSE(P, A === P0 ? P0 : P1, A === P0 ? P1 : P2, fseg,
+          A === P0 ? wR : wT, A === P0 ? wR * 1.3 : wT * 1.05,
+          A === P0 ? wT : wB, A === P0 ? wT * 1.05 : wB * 1.25, 3.4, undefined, f);
+        // the segment's own lateral axis (fseg[1]) is what "left" and
+        // "right" mean on the bridge; tilting each bevel's normal up
+        // toward fseg[2] (the segment's own outward-from-face axis) by
+        // 35° is what puts the ridge along the ramp's ridge line instead
+        // of along its belly
+        let dd = core;
+        for (const sgn of [1, -1]) {
+          const n = tilt(vmul(fseg[1], sgn), fseg[2], 35);
+          dd = smax(dd, pdist(P, A, n, f), NK);
+        }
+        return dd;
+      };
+      put('head', (P, f) => bevel(P, P0, f1, wR, 0, f));
+      put('head', (P, f) => bevel(P, P1, f2, wT, 0, f));
 
-      /* THE ROOT NOTCH. Without it the bridge simply starts, at whatever
-         width P0 was given, unioned flat against the brow — a nose that
-         begins rather than one that is set INTO the face. A shallow cut
-         right at the sellion, small enough to stay clear of the eye
-         sockets on either side, gives the bridge a floor to rise out of.
-         Same technique as the eye sockets below: centred mostly above the
-         point it marks so only its lower edge actually bites. */
-      const rc = vmad(vmad(sk.A, fr[0], eyeH + cy * 0.05), fr[2], cz * 1.05);
+      /* THE ROOT NOTCH. Without it the bridge simply starts, unioned flat
+         against the forehead/brow-shelf edge — a nose that begins rather
+         than one that is set INTO the face. A shallow cut right at the
+         sellion, small enough to stay clear of the eye sockets on either
+         side, gives the bridge a floor to rise out of. Same technique as
+         the eye sockets below: centred mostly above the point it marks so
+         only its lower edge actually bites. Unchanged from the smooth
+         stack — the sellion's own position did not move. */
+      const rc = vmad(vmad(sk.A, U, eyeH + cy * 0.05), F, cz * 1.02);
       put('head', (P) => sdBlobSE(P, rc, fr, cy * 0.09, cy * 0.065, cy * 0.09, 2), true);
     }
 
-    /* THE BROW. A shallow ridge, and shallow is the point: overdone it
-       reads as a scowl, absent it leaves the forehead running smoothly
-       into the eye socket and the face has no shelf to sit under. Set at
-       browH — the same height the vault is widest, which is where a real
-       supraorbital ridge sits relative to the parietals. */
-    {
-      const half = cy * 0.62;   // EST: brows span less than temple-to-temple
-      const A = vmad(vmad(sk.A, fr[0], browH), fr[2], cz * 1.04);
-      const B = vmad(A, fr[1], -half * 2);
-      const F = [fr[1], fr[0], fr[2]];
-      put('head', (P, f) => sdSegSE(P, vmad(A, fr[1], half), B, F,
-        cy * 0.15, cy * 0.11, cy * 0.15, cy * 0.11, 2.5, cy * 0.07, f));
-    }
-
     /* THE EYE SOCKETS, which are the one part of a face that has to be
-       taken AWAY. Everything else here adds — a brow, a nose, a
-       cheekbone — and a face built only from additions is a face with no
-       eyes in it, because an eye sits in a hollow. So these are cuts.
-
-       Sized up from the first pass, which read as barely a shadow at
-       portrait scale: the vertical reach was 0.20 of half-breadth (about
-       14mm) and is now 0.28 (about 20mm), because a socket that shallow
-       vanishes into the smin fascia before it ever reaches a printed
-       page. Centred at eyeH — the same canon height the self-test
-       checks — with the lateral offset pulled in to 0.42 (from 0.40) so
-       the pair leaves the root-notch cut, at 0.09 of half-breadth, clear
-       daylight either side of the midline instead of the two sockets
-       meeting under the bridge. */
+       taken AWAY. Everything else here adds or is a plane's own
+       intersection — and a face built only from additions is a face with
+       no eyes in it, because an eye sits in a hollow. So these are cuts,
+       the same mechanism and the same numbers the smooth stack used: the
+       socket's own position and size are about the eye, not about what
+       kind of mass surrounds it, so nothing about going planar moved
+       them. Sized up from the first pass, which read as barely a shadow
+       at portrait scale: the vertical reach was 0.20 of half-breadth
+       (about 14mm) and is now 0.28 (about 20mm). Centred at eyeH — the
+       same canon height the self-test checks — with the lateral offset
+       at 0.42 of half-breadth so the pair leaves the root-notch cut, at
+       0.09 of half-breadth, clear daylight either side of the midline. */
     for (const sgn of [1, -1]) {
-      const c = vmad(vmad(vmad(sk.A, fr[0], eyeH), fr[2], cz * 1.16),
-        fr[1], sgn * cy * 0.42);
+      const c = vmad(vmad(vmad(sk.A, U, eyeH), F, cz * 1.10), L, sgn * cy * 0.42);
       put('head', (P) => sdBlobSE(P, c, fr, cy * 0.28, cy * 0.24, cy * 0.34, 2.1), true);
     }
 
-    /* THE CHEEKBONE, running from just behind the outer eye corner back
-       toward the ear. It is a STEP — the plane above it catches the
-       light and the plane below it does not — and a step needs a flat
-       side, not a round one. The first pass gave it a near-circular
-       cross-section (0.11 by 0.09 of half-breadth) at a scale where a
-       thin round ridge sitting at a shallow angle to the sampling rays
-       does not resample consistently ring to ring, and it traced as a
-       jittering line rather than an edge — the "wiggly worm" on the
-       review sheet. Flattened hard (0.22 by 0.08) it presents a face
-       wide enough to sample the same way from its neighbours on both
-       sides, which is what makes it read as a step instead of a seam. */
-    for (const sgn of [1, -1]) {
-      const A = vmad(vmad(vmad(sk.A, fr[0], eyeH + cy * 0.02), fr[2], cz * 1.10),
-        fr[1], sgn * cy * 0.42);
-      const B = vmad(vmad(vmad(sk.A, fr[0], -dn * 0.05), fr[2], cz * 0.55),
-        fr[1], sgn * cy * 0.80);
-      const F = along(A, B, fr[0]);
-      put('head', (P, f) => sdSegSE(P, A, B, F,
-        cy * 0.22, cy * 0.08, cy * 0.18, cy * 0.07, 2.4, cy * 0.06, f));
-    }
+    /* THE BROW RIDGE and THE CHEEKBONE are no longer built here — this is
+       the biggest single change this rebuild makes, and it is worth
+       saying plainly why. Both used to be a separate sdSegSE capsule,
+       unioned on top of the smooth stack: a flattened oval for the brow
+       spanning nearly the full width, a thinner flattened one for the
+       cheekbone running back toward the ear. Rendered at portrait scale
+       (head only, three-quarter, seed 12345) the brow one did not read
+       as a supraorbital ridge — it read as the brim of a cap, a hard
+       silhouette edge sitting ON TOP of the smooth forehead below it,
+       because a capsule glued onto a smooth mass has its OWN silhouette
+       and the join between the two shows as a seam whatever the fascia
+       blend. The cheekbone capsule had an earlier, related failure on
+       record: a near-circular cross-section (0.11 by 0.09 of half-
+       breadth) at a scale where a thin round ridge sitting at a shallow
+       angle to the sampling rays does not resample consistently ring to
+       ring, and traced as a jittering line rather than an edge — the
+       "wiggly worm" on an old review sheet. Flattening it to 0.22 by
+       0.08 fixed the sampling jitter and left the seam-against-a-smooth-
+       mass problem untouched, because that problem was never about the
+       capsule's own cross-section.
 
-    /* THE LIPS. Absent entirely before this pass — the jaw stack ran from
-       cheekbone straight to chin with nothing marking the mouth at all.
-       A small step, at the canon height a third of the way up from the
-       chin to the nose base, is enough: lips are a change in surface
-       angle more than they are a projection, and the failure mode here
-       is a fat little pillow, not a flat one. */
+       Both ridges are now simply WHERE TWO PLANES MEET: the brow is the
+       forehead plane meeting the brow-shelf plane, the cheekbone is the
+       front-cheek plane meeting the side-cheek plane, both defined
+       above. There is no added capsule and so no seam for one to show —
+       the ridge is a property of the underlying mass, which is the
+       entire point of building a head from planes instead of adding
+       features to a smooth one. The "wiggly worm" lesson still explains
+       exactly why a thin round ridge was the wrong primitive here; it
+       just no longer needs a fix within its own technique, because the
+       technique changed. */
+
+    /* THE LIPS. A small step at the canon height a third of the way up
+       from the chin to the nose base: lips are a change in surface angle
+       more than they are a projection, and the failure mode on record
+       here is a fat little pillow, not a flat one. Pulled in slightly
+       from the smooth stack's cz*1.00 anchor to cz*0.90, which is still
+       a clear ~8-9mm proud of the muzzle plane's own cz*0.78 at this
+       height — enough to read as lips sitting on the mouth plane, not
+       so much that they re-inflate the depth budget the planes above
+       were sized against. */
     {
       const half = cy * 0.30;   // EST: mouth width, roughly under the nose alae
-      const A = vmad(vmad(sk.A, fr[0], mouthH), fr[2], cz * 1.00);
-      const B = vmad(A, fr[1], -half * 2);
-      const F = [fr[1], fr[0], fr[2]];
-      put('head', (P, f) => sdSegSE(P, vmad(A, fr[1], half), B, F,
+      const A = vmad(vmad(sk.A, U, mouthH), F, cz * 0.90);
+      const B = vmad(A, L, -half * 2);
+      const Fr = [L, U, F];
+      put('head', (P, f) => sdSegSE(P, vmad(A, L, half), B, Fr,
         cy * 0.055, cy * 0.045, cy * 0.055, cy * 0.045, 2.4, cy * 0.03, f));
     }
 
-    /* THE CHIN, as a BOSS rather than as wherever the jaw stack's own
-       taper happens to end. The stack alone (see its own comment above)
-       is kept a plausible cross-section rather than a point, which
-       leaves it under-projecting — real profiles run close to plumb
-       from brow to chin, and the stack alone falls short of that by
-       itself. This is a small added knob, not a change to the stack,
-       because the jaw still needs its own gentler taper for the stack
-       to close cleanly without pointing; the roundness and the rest of
-       the forward reach a chin actually has come from layering a ROUND
-       blob on top of that taper, the same way the nose layers onto the
-       face — one shape supplying bulk, a second supplying shape, rather
-       than asking one stack station to be both at once.
-
-       ax is kept inside the stack's own chin cap (dn*0.10 of headroom
-       below this centre) rather than at a round number: past it, the
-       boss's own lower edge pokes below the stack's true bottom and
-       draws a small rectangular tab hanging under the jaw — seen on an
-       earlier render of this pass, head-only, chin corner. */
-    {
-      const c = vmad(vmad(sk.A, fr[0], -dn * 0.90), fr[2], cz * 0.90);
-      put('head', (P, f) => sdBlobSE(P, c, fr, dn * 0.10, zy * 0.26, cz * 0.14, 2.2, f));
-    }
+    /* THE CHIN BOSS is also gone as a separate shape — merged into the
+       chin planes rather than layered on top of them. The smooth stack
+       needed a boss because its own jaw taper had to stay a plausible
+       cross-section rather than a point, which left it under-projecting;
+       a round blob added the rest of the forward reach a chin actually
+       has. The chin front pad here does not have that constraint — it is
+       a flat facet at its own explicit forward offset (cz*0.90, "a
+       little behind the brow" the way the header of this file has always
+       wanted), so the projection is a property of the plane's own
+       position instead of a second shape added to reach it. */
 
     /* THE EARS, which sit ON the tragion because the tragion IS the ear.
-       A FLATTENED OVAL ANGLED BACK, not the short lateral nub the first
-       pass drew — that version ran its long axis OUT from the head (a
-       capsule from 0.84 to 1.05 of half-breadth, barely past the vault's
-       own width at that height) rather than UP the side of it, so there
-       was almost no ear left standing proud of the skull's own
-       silhouette and none of it looked like an ear's actual proportions.
-
-       Here the long axis runs from the brow line down to the nose base —
-       the same span the canon assigns an ear — tipped back 15° off
-       vertical (EST: ANSUR has no ear-angle landmark; 15° is the ordinary
-       amount a life-drawing reference gives it, and it is also what
-       "roughly parallel to the jaw line" comes out to against this jaw).
-       The cross-section is genuinely flattened: thin along the skull's
-       own lateral axis (an ear is not thick) and wide in the tilted
-       fore-aft axis perpendicular to it (an ear is a disc, not a rod). */
+       Kept as the smooth stack's own flattened-oval-angled-back capsule —
+       ears are cartilage, not bone, and nothing about "more planar" asks
+       for a faceted ear. What changed is size and standoff: pulled from
+       cy*1.02 (fractionally PAST the skull's own widest point) to cy*0.90
+       (inside the parietal's 0.97cy, sitting against the temple/side-
+       cheek surface rather than beside it) and thinned from a cy*0.19
+       max cross-section to cy*0.14, because the proportions critic
+       (tools/proportions.js) charges the whole head's drawn width against
+       ears included, and the old figures — 1.17 of measured headbreadth,
+       against a crown-only (no-ear) band of 0.98-1.10 — were the ear
+       standing nearly a full old-parietal's-width proud of the skull
+       rather than sitting against it. The canon span (brow line to nose
+       base, tipped back 15° off vertical) did not move; only how far off
+       the skull and how thick the ear itself is did. */
     {
       const TILT = 15 * Math.PI / 180;
-      const D = vnorm(vsub(vmul(fr[0], Math.cos(TILT)), vmul(fr[2], Math.sin(TILT))));   // up-and-back
-      const Dp = vnorm(vadd(vmul(fr[0], Math.sin(TILT)), vmul(fr[2], Math.cos(TILT))));  // the flat oval's width
+      const D = vnorm(vsub(vmul(U, Math.cos(TILT)), vmul(F, Math.sin(TILT))));   // up-and-back
+      const Dp = vnorm(vadd(vmul(U, Math.sin(TILT)), vmul(F, Math.cos(TILT))));  // the flat oval's width
       const half = (browH - noseBaseH) * 0.5 / Math.cos(TILT);
       for (const sgn of [1, -1]) {
-        const mid = vmad(vmad(vmad(sk.A, fr[0], (browH + noseBaseH) * 0.5), fr[2], cz * 0.02),
-          fr[1], sgn * cy * 1.02);
+        const mid = vmad(vmad(vmad(sk.A, U, (browH + noseBaseH) * 0.5), F, cz * 0.00),
+          L, sgn * cy * 1.00);
         const A = vmad(mid, D, half);    // top, tipped back
         const B = vmad(mid, D, -half);   // base
-        const F = [D, fr[1], Dp];
-        put('head', (P, f) => sdSegSE(P, A, B, F,
-          cy * 0.13, cy * 0.19, cy * 0.10, cy * 0.15, 2.2, cy * 0.10, f));
+        const Fr = [D, L, Dp];
+        put('head', (P, f) => sdSegSE(P, A, B, Fr,
+          cy * 0.11, cy * 0.17, cy * 0.085, cy * 0.13, 2.2, cy * 0.09, f));
       }
     }
   }

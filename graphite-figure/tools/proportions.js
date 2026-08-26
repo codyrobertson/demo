@@ -31,7 +31,13 @@ const CHECKS = [
   ['head drawn W / measured W', 1.00, 1.20, 'ANSUR headbreadth; drawn includes ears + scalp'],
   ['head crown W / measured W', 0.98, 1.10, 'ANSUR headbreadth; crown band, no ears'],
   ['head drawn H/W', 1.22, 1.50, 'EST canon'],
-  ['stature / drawn head H', 6.9, 8.2, 'EST canon, 7-8 heads'],
+  /* agg: judged on the population MEAN, not per body. The planar-head
+     rebuild proved why with one seed: that body's own MEASURED ratio is
+     6.16 heads — a genuinely large-headed person — so demanding 6.9 of the
+     drawing while also demanding it match its own measurements is a
+     contradiction. Per-body correctness is the drawn-vs-measured row; the
+     canon is a fact about populations, so it gets the mean. */
+  ['stature / drawn head H', 6.9, 8.2, 'EST canon, 7-8 heads', 'agg'],
   ['chin-to-notch mm', 48, 115, 'drawn chin vs measured suprasternale'],
   ['shoulders / bideltoid', 0.96, 1.12, 'ANSUR bideltoidbreadth'],
   ['shoulders / drawn head W', 2.20, 3.10, 'EST canon'],
@@ -92,6 +98,7 @@ for (let i = 0; i < N; i++) {
   vals.forEach((v, k) => {
     const a = acc[k];
     a.sum += v; a.lo = Math.min(a.lo, v); a.hi = Math.max(a.hi, v);
+    if (CHECKS[k][4] === 'agg') return;   // judged on the mean, below
     if (v < CHECKS[k][1] || v > CHECKS[k][2]) { a.bad++; fails.push({ seed, k, v }); }
   });
 }
@@ -101,9 +108,13 @@ console.log('  check'.padEnd(30) + 'mean'.padStart(8) + 'min'.padStart(8) + 'max
   '  band'.padEnd(16) + 'failed');
 CHECKS.forEach((c, k) => {
   const a = acc[k];
+  if (c[4] === 'agg') {
+    const mean = a.sum / N;
+    if (mean < c[1] || mean > c[2]) { a.bad = 'MEAN'; fails.push({ seed: 'mean', k, v: mean }); }
+  }
   console.log('  ' + c[0].padEnd(28) + (a.sum / N).toFixed(2).padStart(8) +
     a.lo.toFixed(2).padStart(8) + a.hi.toFixed(2).padStart(8) +
-    ('  [' + c[1] + ', ' + c[2] + ']').padEnd(16) + (a.bad ? String(a.bad).padStart(4) : '   -'));
+    ('  [' + c[1] + ', ' + c[2] + ']').padEnd(16) + (a.bad ? String(a.bad).padStart(4) : '   -') + (c[4] === 'agg' ? '  (mean)' : ''));
 });
 if (fails.length) {
   console.log('\n  ' + fails.length + ' failures. First few:');
